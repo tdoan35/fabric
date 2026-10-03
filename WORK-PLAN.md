@@ -329,7 +329,7 @@ These follow ARCH §12's numbering, plus S0 and S-LAB. Each one ends with pass o
 | S2 | Sprites from Node | TOOLS | The integrator already created `fabric-coder` and `fabric-validator` (org `ty-thanh-doan`) and confirmed the token through the REST API. Use the `@fly/sprites` SDK to attach to them, stream `exec` output, use its filesystem, and have the egress policy block a fetch. Cold start measured | Sprite CLI over `child_process` |
 | S3 | Mastra workflow | TEAM | Parallel steps, a rework loop, cancel, and `.stream()` events mapped onto run events | Plain async orchestration (`Promise.all` plus a loop), which is fine for the demo |
 | S4 | Chat stream ↔ assistant-ui | UI-CHAT with DANA | The NDJSON adapter renders the cards, and a human result round-trip creates rows | Scripted Dana for the card turns |
-| S5 | AgentMail | TOOLS | Create an inbox and send mail | Send-only, or off (P1) |
+| S5 | AgentMail | TOOLS | Create an inbox and send mail. Needs an organization-wide key, because the onboarding key only covers one inbox; see TOOLS step 5 | Send-only from `ty-8132`, or off (P1) |
 | S6 | Executor | TOOLS | Allow, approve and block one tool, per agent | Our own allowlist, labelled "behavioral scoping" (ARCH §1.3) |
 | S7 | Exa | TOOLS | `type: "fast"` search with `contents: {highlights: true}` returns in under 2 s (request shape from the `build-with-exa` skill). **Key checked by the integrator, Oct 3:** `fast` 0.37–0.56 s, `auto` 1.8 s, $0.007 per search, and the demo queries return the Engram paper and NAND-inference papers. What's left for TOOLS is the tool wrapper and the narration lines | Cached results |
 | S8 | Live tail | DATA with UI-WORK | An event appended on the server shows in the loop view within 1 s over SSE, in the browser and from `app://fabric` | Poll every second |
@@ -468,7 +468,11 @@ Each section can be pasted into an agent as its brief.
    - `exec` streams stdout as line-buffered, throttled `tool.result {line, kind: "term"}` events.
    - The egress policy allows only the package index and model host. Verify it with a blocked fetch that emits `tool.denied`.
 4. **Exa:** follow the installed `build-with-exa` skill (`.claude/skills/build-with-exa`) and use the `exa-js` SDK. Megan's tool calls `/search` with `contents: {highlights: true}` and nothing else. The one exception is `type: "fast"` on the live-start path, where latency matters; elsewhere leave the default `auto`. No `category`, domain filters, `numResults` or freshness settings unless a task needs them (the skill's main pitfall). Use `fast` search with narration lines like the mock's ("exa.search “…” · fast", "8 results · 3 highlights kept"). Cache the last results.
-5. **AgentMail:** `createInbox` on specialist approval (one address format) [CARD-3], and `sendReportEmail` to `OWNER_EMAIL` at finalize (P1-1).
+5. **AgentMail:** `createInbox` on specialist approval (one address format) [CARD-3], and `sendReportEmail` to `OWNER_EMAIL` at finalize (P1-1). Constraints, checked by the integrator on Oct 3:
+   - **The free plan allows 3 inboxes and 10 sent emails a day.** The owner's inbox `ty-8132@agentmail.to` is already one of the 3.
+   - **`createInbox` must be idempotent.** Use a fixed username per persona (e.g. `sana-fabric`) and look it up before creating, or every demo reset uses up another inbox.
+   - **Keep `FEATURE_AGENTMAIL=off`** during development and smoke tests. Turn it on only for rehearsals and the demo, so the 10-a-day limit lasts.
+   - **Creating inboxes needs an organization-wide API key.** The key from onboarding only covers `ty-8132`, so the org endpoints return 403.
 6. **Artifacts** are stored through `RunWriter.saveArtifact` (small files go into the DB).
 
 **Done when:** spikes are reported; Jonah's terminal streams into the loop view; a blocked `network.fetch` appears in the Tools tab; Exa lines appear in Megan's lane within 10 s of the start; inbox creation and the report email work or are flagged off.
