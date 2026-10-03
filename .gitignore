@@ -1,0 +1,23 @@
+# dependencies
+node_modules/
+
+# builds
+dist/
+release/
+*.AppImage
+*.tsbuildinfo
+coverage/
+
+# env and secrets
+.env
+.env.*
+!.env.example
+*.pem
+
+# local tooling
+chrome-profile/
+.DS_Store
+npm-debug.log*
+
+# exported git history, if any
+*.bundle
