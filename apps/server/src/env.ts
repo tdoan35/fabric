@@ -17,9 +17,14 @@ export const env = z.object({
   VITE_PORT: z.coerce.number().int().default(3000),
   /** Comma-separated. Defaults to the local web origin plus Electron's app://fabric. */
   CORS_ORIGINS: z.string().optional(),
+  /** Pooled. `neon link` / `neon checkout` write these three for the linked branch. */
   DATABASE_URL: z.string().optional(),
-  AI_GATEWAY_URL: z.string().optional(),
-  AI_GATEWAY_KEY: z.string().optional(),
+  /** Direct (unpooled): use for migrations. */
+  DATABASE_URL_UNPOOLED: z.string().optional(),
+  NEON_BRANCH: z.string().optional(),
+  /** Neon's own names, so Mastra `neon/<model>` and @neon/ai-sdk-provider read them with no config. Paid plan only. */
+  NEON_AI_GATEWAY_BASE_URL: z.string().optional(),
+  NEON_AI_GATEWAY_TOKEN: z.string().optional(),
   LLM_FALLBACK_PROVIDER: z.string().optional(),
   LLM_FALLBACK_KEY: z.string().optional(),
   SPRITES_TOKEN: z.string().optional(),

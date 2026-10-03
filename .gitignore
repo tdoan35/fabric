@@ -21,3 +21,5 @@ npm-debug.log*
 
 # exported git history, if any
 *.bundle
+.neon
+.claude/settings.local.json

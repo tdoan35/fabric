@@ -97,7 +97,7 @@ apps/server  (Hono)
        │                      │                        │
 packages/agents          packages/integrations      packages/db  (Drizzle)
   llm        (Gateway)     tool registry + policy     Neon Postgres, branches:
-  assistant  (Dana)        sprites · exa              main · demo · recording · ws-*
+  assistant  (Dana)        sprites · exa              production · demo · recording · ws-*
   team       (workflow)    agentmail · executor
   context    (brief, assemble, snapshots)
        │
@@ -290,10 +290,10 @@ sendReportEmail(report: Report, to: string): Promise<void>;
 
 ### 4.9 Env, flags and ports
 
-- **Server** (our own names): `DATABASE_URL`, `AI_GATEWAY_URL`, `AI_GATEWAY_KEY`, `LLM_FALLBACK_PROVIDER`, `LLM_FALLBACK_KEY`, `SPRITES_TOKEN`, `EXA_API_KEY`, `AGENTMAIL_API_KEY`, `EXECUTOR_URL`, `EXECUTOR_KEY`, `PORT`, `CORS_ORIGINS`, `DANA_MODE=live|fixture`, `FEATURE_AGENTMAIL`, `FEATURE_EXECUTOR`, `DEMO_RECORDING_KEY=ngram-135m`, `OWNER_EMAIL`.
+- **Server:** `DATABASE_URL`, `DATABASE_URL_UNPOOLED` (for migrations) and `NEON_BRANCH`, which `neon link` writes. `NEON_AI_GATEWAY_BASE_URL` and `NEON_AI_GATEWAY_TOKEN`, using Neon's names so Mastra's `neon/<model>` and `@neon/ai-sdk-provider` read them with no config. Our own names: `LLM_FALLBACK_PROVIDER`, `LLM_FALLBACK_KEY`, `SPRITES_TOKEN`, `EXA_API_KEY`, `AGENTMAIL_API_KEY`, `EXECUTOR_URL`, `EXECUTOR_KEY`, `PORT`, `CORS_ORIGINS`, `DANA_MODE=live|fixture`, `FEATURE_AGENTMAIL`, `FEATURE_EXECUTOR`, `DEMO_RECORDING_KEY=ngram-135m`, `OWNER_EMAIL`.
 - **Web:** `VITE_API_MODE=mock|http`, `VITE_API_URL`, `VITE_DEMO=0|1`, `VITE_PORT`.
 - **Ports per worktree:** with index `n` (FND/main 0, DATA 1, DANA 2, TEAM 3, CTX 4, TOOLS 5, LAB 6, UI-CHAT 7, UI-WORK 8, OPS 9), the web runs on `3000+10n`, the server on `8787+10n` and headless Chrome debugging on `9333+n`.
-- **Neon:** each agent that writes data works on its own branch (`ws-<code>`). Recording uses `recording`; the demo uses `demo`, which `npm run demo:reset` restores.
+- **Neon:** project `fabric` (`solitary-meadow-39146227`, aws-us-east-2); the default branch is **`production`** (Neon's name; git's integration branch is still `main`). DATA, DANA and TEAM each get a branch (`ws-data`, `ws-dana`, `ws-team`). Recording uses `recording`; the demo uses `demo`, which `npm run demo:reset` restores. The UI agents use mock or fixture data and need no branch. Until DATA creates the branches, everyone shares `production`.
 
 ---
 
@@ -320,7 +320,7 @@ These follow ARCH §12's numbering, plus S0 and S-LAB. Each one ends with pass o
 | # | Spike | Owner | Pass | If it fails |
 |---|---|---|---|---|
 | S0 | Neon Postgres, Drizzle migrations, branches | DATA | Migrate and seed a fresh branch in under a minute | — (must pass) |
-| S1 | Neon AI Gateway from Mastra | DANA | Tool calling, streaming and `usage` all work. Serves models for Dana and the specialists (the mock assigns Sonnet 5.5, Haiku 4.5 and Opus 5.5). Credit is active | `@neon/ai-sdk-provider`. Otherwise a direct provider for tool-calling agents (`LLM_FALLBACK_*`) and the Gateway for the rest, counting tokens ourselves |
+| S1 | Neon AI Gateway from Mastra | DANA | **Needs a paid Neon plan** (the free plan can't provision it). Once enabled, check `GET /v1/models`: a new account's list can be trimmed, so request any missing model (e.g. Opus) on the branch's AI Gateway page. Tool calling, streaming and `usage` all work. Serves models for Dana and the specialists (the mock assigns Sonnet 5.5, Haiku 4.5 and Opus 5.5). Credit is active | `@neon/ai-sdk-provider`. Otherwise a direct provider for tool-calling agents (`LLM_FALLBACK_*`) and the Gateway for the rest, counting tokens ourselves |
 | S2 | Sprites from Node | TOOLS | Create or attach a Sprite, stream `exec` output, use its filesystem, and have the egress policy block a fetch. Cold start measured | Sprite CLI over `child_process` |
 | S3 | Mastra workflow | TEAM | Parallel steps, a rework loop, cancel, and `.stream()` events mapped onto run events | Plain async orchestration (`Promise.all` plus a loop), which is fine for the demo |
 | S4 | Chat stream ↔ assistant-ui | UI-CHAT with DANA | The NDJSON adapter renders the cards, and a human result round-trip creates rows | Scripted Dana for the card turns |
@@ -363,7 +363,7 @@ Each section can be pasted into an agent as its brief.
 **Reads:** ARCH §4, §8; PRD §7; §4.2–§4.8 here.
 **Spikes:** S0, S8.
 
-1. Neon project and branches (§4.9); Drizzle schema for §4.7; migrations.
+1. The Neon project exists: `fabric` (`solitary-meadow-39146227`, aws-us-east-2, Postgres 18), default branch `production`. Write the Drizzle schema for §4.7 and run migrations on `production` with `DATABASE_URL_UNPOOLED`, then create the branches in §4.9 (`neon branches create …`). The free plan allows 10.
 2. `npm run seed -- --profile demo|lived-in --branch <name>`: an idempotent reset built from the fixture profiles (§4.8). Seed Dana's tool list without an approval on `handoff_to_team` [CARD-8].
 3. **RunWriter** (§4.6). The next loop number per task; `seq` and `t` stamping; an in-process pub/sub hub feeding SSE; cost accumulated from `budget.update`.
 4. **Read models** for every GET in §4.2, validated against the contracts in tests. **Derive `segments`** from step events [RUN-7], with a unit test that the 135M fixture's derived segments equal its precomputed ones.
@@ -611,6 +611,13 @@ Worktrees need a repo, so wait for FND step 1 (`git init` and the baseline commi
 git worktree add ../fabric-ws-data -b ws/data
 cd ../fabric-ws-data && cp ../fabric/.env . && npm i
 # per §4.9: VITE_PORT=3010 PORT=8797, Neon branch ws-data
+```
+
+Once DATA has created the branches, point a worktree at its own branch. `neon link` writes the connection strings into that worktree's `.env`, but it won't overwrite values that are already there, so delete the copied ones first:
+
+```bash
+sed -i '/^DATABASE_URL/d;/^NEON_BRANCH=/d' .env
+neon link --project-id solitary-meadow-39146227 --branch ws-data -y
 ```
 
 ### 7.2 Launch prompt (fill in the code)
