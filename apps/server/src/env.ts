@@ -25,8 +25,14 @@ export const env = z.object({
   /** Neon's own names, so Mastra `neon/<model>` and @neon/ai-sdk-provider read them with no config. Paid plan only. */
   NEON_AI_GATEWAY_BASE_URL: z.string().optional(),
   NEON_AI_GATEWAY_TOKEN: z.string().optional(),
-  LLM_FALLBACK_PROVIDER: z.string().optional(),
-  LLM_FALLBACK_KEY: z.string().optional(),
+  /** Which model provider every agent uses (WORK-PLAN §4.9): spark for dev, neon at the venue, openrouter as backup. */
+  LLM_PROVIDER: z.enum(["spark", "openrouter", "neon"]).default("spark"),
+  /** OpenAI-compatible vLLM lane on the DGX Spark, reached over the tailnet. The server doesn't enforce the key. */
+  SPARK_BASE_URL: z.string().optional(),
+  SPARK_API_KEY: z.string().optional(),
+  SPARK_MODEL: z.string().default("qwen3.8-flash-next"),
+  /** The name Mastra's openrouter/<model> and @openrouter/ai-sdk-provider read by default. */
+  OPENROUTER_API_KEY: z.string().optional(),
   SPRITES_TOKEN: z.string().optional(),
   EXA_API_KEY: z.string().optional(),
   AGENTMAIL_API_KEY: z.string().optional(),
