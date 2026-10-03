@@ -4,7 +4,15 @@
   "private": true,
   "type": "module",
   "description": "Mock world data: the web's mock mode and the server's seed profiles. profiles/ and recordings/ are DATA's.",
-  "exports": { "./*": "./src/*.ts" },
-  "scripts": { "typecheck": "tsc -p tsconfig.json" },
-  "dependencies": { "@fabric/contracts": "*" }
+  "exports": {
+    "./recordings": "./src/recordings/index.ts",
+    "./profiles": "./src/profiles/index.ts",
+    "./*": "./src/*.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "@fabric/contracts": "*"
+  }
 }
