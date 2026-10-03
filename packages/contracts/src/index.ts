@@ -6,4 +6,5 @@ export * from "./weave";
 export * from "./tools";
 export * from "./events";
 export * from "./api";
+export * from "./read-models";
 export * from "./errors";
