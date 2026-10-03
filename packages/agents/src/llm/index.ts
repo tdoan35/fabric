@@ -23,6 +23,9 @@ export interface Usage {
   costUsd?: number;
   /** Cost is computed from a price table, not reported by the provider. */
   estimated?: boolean;
+  /** Where the call happened (from the meter context). */
+  agentId?: string;
+  step?: string;
 }
 export interface UsageSink {
   record(u: Usage): void;
@@ -120,6 +123,7 @@ function sparkModel(level: ThinkingLevel): LanguageModel {
     name: "spark",
     baseURL,
     apiKey: process.env.SPARK_API_KEY ?? "",
+    includeUsage: true, // vLLM then reports usage on the stream's final chunk
     supportsStructuredOutputs: true, // vLLM guided json (response_format json_schema)
     transformRequestBody: (body) => sparkThinkingBody(body as Record<string, unknown>, level),
   });
@@ -187,10 +191,11 @@ export function meter(ctx: MeterContext): UsageSink {
       return usages;
     },
     record(u) {
-      usages.push(u);
+      const tagged: Usage = { agentId: ctx.agentId, step: ctx.step, ...u };
+      usages.push(tagged);
       if (ctx.runId) {
         runCosts.set(ctx.runId, (runCosts.get(ctx.runId) ?? 0) + (u.costUsd ?? 0));
-        runRecords.set(ctx.runId, [...(runRecords.get(ctx.runId) ?? []), u]);
+        runRecords.set(ctx.runId, [...(runRecords.get(ctx.runId) ?? []), tagged]);
       }
     },
   };

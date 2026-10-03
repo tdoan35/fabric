@@ -160,6 +160,6 @@ describe("meter", () => {
     stubFetch(() => sse);
     const result = streamText({ model: model("Sonnet 5.5", { thinking: "off", meter: { runId: "run-st", agentId: "elliot", step: "Plan" } }), prompt: "hi" });
     expect(await result.text).toBe("He");
-    expect(runUsages("run-st")).toEqual([{ model: "spark:qwen3.8-flash-next", inputTokens: 7, outputTokens: 5, costUsd: 0 }]);
+    expect(runUsages("run-st")).toEqual([{ agentId: "elliot", step: "Plan", model: "spark:qwen3.8-flash-next", inputTokens: 7, outputTokens: 5, costUsd: 0 }]);
   });
 });

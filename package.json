@@ -16,7 +16,7 @@
     "lint": "npm run lint -w web",
     "seed": "npm run seed -w @fabric/db --",
     "smoke": "node scripts/smoke.mjs",
-    "sim": "tsx scripts/sim-run.ts",
+    "llm:check": "tsx scripts/llm-check.ts",
     "export-recording": "tsx scripts/export-recording.ts",
     "check:data": "node scripts/check-data.mjs"
   },
