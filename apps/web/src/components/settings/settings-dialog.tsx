@@ -7,7 +7,7 @@ import { Switch } from "@/components/ui/switch";
 import { useTheme } from "@/hooks/use-theme";
 import { desktop, type FabricDesktop } from "@/lib/desktop";
 import { MONO_FONTS, SANS_FONTS, readFonts, writeFonts, type FontChoice, type FontOption, type FontRole } from "@/lib/fonts";
-import { chatAgents } from "@/lib/mock/assistant";
+import { chatAgents } from "@/lib/registry";
 import { APPROVALS, CONNECTORS, EFFORTS, MODELS, TARGETS, type TargetId } from "@/lib/mock/options";
 import { cn } from "@/lib/utils";
 
@@ -68,7 +68,7 @@ function General({ d, set }: { d: Defaults; set: (p: Partial<Defaults>) => void 
       <p className="mb-2 text-xs text-muted-foreground">Defaults for new sessions. You can still change them per session.</p>
       <div className="divide-y">
         <Row label="Default agent" hint="Who greets you on a new session">
-          <Select label="Default agent" value={d.agent} options={chatAgents.map((a) => ({ id: a.id, name: a.name, note: a.role }))} onChange={(agent) => set({ agent })} />
+          <Select label="Default agent" value={d.agent} options={chatAgents().map((a) => ({ id: a.id, name: a.name, note: a.role }))} onChange={(agent) => set({ agent })} />
         </Row>
         <Row label="Model">
           <Select label="Model" value={d.model} options={MODELS} onChange={(model) => set({ model })} />

@@ -1,8 +1,9 @@
-import { inboxSeed, WEAVE_NOW, WEAVE_TZ, type InboxItem } from "./mock/weave";
-import { runs as allRuns, tasks as allTasks } from "./mock/work";
-import { studioTeams, type StudioTeam } from "./mock/teams";
+import { WEAVE_NOW, WEAVE_TZ, type InboxItem } from "./mock/weave";
+import { studioTeams, workRuns, workTasks } from "./registry";
+import { httpMode } from "./api";
+import type { StudioTeam } from "@fabric/contracts";
 import { isActive, stagesAt, type StageState } from "./run-state";
-import { isAsk, type WeaveState } from "./weave-store";
+import { isAsk, weaveItems, type WeaveState } from "./weave-store";
 import type { Run, Task } from "./types";
 
 /**
@@ -69,7 +70,7 @@ const DECISIONS: Record<string, Record<string, Override>> = {
 };
 
 export const addSeconds = (iso: string, s: number) => new Date(new Date(iso).getTime() + s * 1000).toISOString();
-export const teamById = (id: string) => studioTeams.find((t) => t.id === id)!;
+export const teamById = (id: string) => studioTeams().find((t) => t.id === id)!;
 export const leadOf = (team: StudioTeam) => team.members.find((m) => m.lead)!.agentId;
 export const reworkOf = (run: Run) => run.segments.filter((s) => s.kind === "bounce").length;
 
@@ -77,7 +78,7 @@ export function summarize(task: Task, runs: Run[], weave: WeaveState): TaskSumma
   const team = teamById(task.teamId);
   const loops = task.runIds.map((id) => runs.find((r) => r.id === id)).filter((r): r is Run => !!r);
   const latest = loops[loops.length - 1];
-  const items = inboxSeed.filter((i) => i.taskId === task.id);
+  const items = weaveItems().filter((i) => i.taskId === task.id);
   const open = (i: InboxItem) => weave.status[i.id]?.status === "open";
   const proposal = task.proposal && items.find((i) => i.id === task.proposal!.itemId && open(i));
 
@@ -168,22 +169,22 @@ const timeFmt = new Intl.DateTimeFormat("en-US", { timeZone: WEAVE_TZ, hour: "nu
 const dateFmt = new Intl.DateTimeFormat("en-US", { timeZone: WEAVE_TZ, month: "short", day: "numeric" });
 const dayFmt = new Intl.DateTimeFormat("en-CA", { timeZone: WEAVE_TZ, year: "numeric", month: "2-digit", day: "2-digit" });
 
-/** "9:05 AM" today, "Sep 29" otherwise, by the same mock clock as Weave. */
+/** "9:05 AM" today, "Sep 29" otherwise. HTTP uses the real clock for new results. */
 export function when(iso: string) {
   const d = new Date(iso);
-  return dayFmt.format(d) === dayFmt.format(WEAVE_NOW) ? timeFmt.format(d) : dateFmt.format(d);
+  return dayFmt.format(d) === dayFmt.format(httpMode ? new Date() : WEAVE_NOW) ? timeFmt.format(d) : dateFmt.format(d);
 }
 /** "Sep 29, 1:04 PM" or "today, 9:05 AM". */
 export function whenFull(iso: string) {
   const d = new Date(iso);
-  return `${dayFmt.format(d) === dayFmt.format(WEAVE_NOW) ? "today" : dateFmt.format(d)}, ${timeFmt.format(d)}`;
+  return `${dayFmt.format(d) === dayFmt.format(httpMode ? new Date() : WEAVE_NOW) ? "today" : dateFmt.format(d)}, ${timeFmt.format(d)}`;
 }
 
 /** Loops across a team's tasks. Studio holds the definition; the instances live in Work. */
-export const teamLoopCount = (teamId: string) => allTasks.filter((t) => t.teamId === teamId).reduce((n, t) => n + t.runIds.length, 0);
+export const teamLoopCount = (teamId: string) => workTasks().filter((t) => t.teamId === teamId).reduce((n, t) => n + t.runIds.length, 0);
 
 export function lastLoopAt(teamId: string) {
-  const ids = new Set(allTasks.filter((t) => t.teamId === teamId).flatMap((t) => t.runIds));
-  const last = allRuns.filter((r) => ids.has(r.id)).sort((a, b) => b.startedAt.localeCompare(a.startedAt))[0];
+  const ids = new Set(workTasks().filter((t) => t.teamId === teamId).flatMap((t) => t.runIds));
+  const last = workRuns().filter((r) => ids.has(r.id)).sort((a, b) => b.startedAt.localeCompare(a.startedAt))[0];
   return last && when(last.startedAt);
 }

@@ -6,8 +6,8 @@ import { Button } from "@/components/ui/button";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Group, panel, pill } from "@/components/studio/studio-ui";
-import { dana, type ChatAgent } from "@/lib/mock/assistant";
-import { profileById } from "@/lib/mock/studio";
+import type { ChatAgent } from "@fabric/contracts";
+import { profileById } from "@/lib/registry";
 import type { StudioTeam } from "@/lib/mock/teams";
 import { cn } from "@/lib/utils";
 import { TeamLoops } from "@/components/work/team-loops";
@@ -43,7 +43,7 @@ export function TeamHero({ teams, index, onIndexChange, onProfileToggle, classNa
 }) {
   const total = teams.length + 1;
   const team: StudioTeam | undefined = teams[index];
-  const agent = team ? teamLead(team) : dana;
+  const agent = team ? teamLead(team) : profileById("dana").agent;
   const [dir, setDir] = useState<1 | -1>(1);
 
   const jump = (i: number) => { setDir(i > index ? 1 : -1); onIndexChange(i); };

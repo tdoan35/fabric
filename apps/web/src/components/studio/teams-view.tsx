@@ -7,8 +7,9 @@ import { Portrait, ring } from "@/components/chat/assistant-hero";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { profileById } from "@/lib/mock/studio";
-import { communityTeams, organizations, studioTeams, type Organization, type StudioTeam } from "@/lib/mock/teams";
+import { profileById, useRegistry } from "@/lib/registry";
+import { httpMode } from "@/lib/api";
+import type { Organization, StudioTeam } from "@fabric/contracts";
 import { TeamLoops } from "@/components/work/team-loops";
 import { lastLoopAt, teamLoopCount } from "@/lib/work";
 import { EASE, Group, SectionHead, panel, pill, surface } from "./studio-ui";
@@ -20,16 +21,18 @@ const formatInstalls = (n: number) => (n >= 1000 ? `${(n / 1000).toFixed(1).repl
 
 /** The Teams and Organizations panes of the studio page. The page owns the header and the view switch. */
 export function TeamsStudio({ view, onViewChange }: { view: TeamsView; onViewChange: (v: TeamsView) => void }) {
-  const [mine, setMine] = useState(studioTeams);
-  const [community, setCommunity] = useState(communityTeams);
+  const registry = useRegistry();
+  const [localAdds, setLocalAdds] = useState<string[]>([]);
+  const mine = [...registry.teams, ...registry.communityTeams.filter((t) => localAdds.includes(t.id)).map((t) => ({ ...t, origin: `From ${t.author}` }))];
+  const community = registry.communityTeams.filter((t) => !localAdds.includes(t.id));
   const [sel, setSel] = useState<{ id: string; from: Section } | null>(null);
-  const [orgs, setOrgs] = useState(organizations);
+  const [slotEdits, setSlotEdits] = useState<Record<string, Organization["slots"]>>({});
+  const orgs = registry.organizations.map((org) => slotEdits[org.id] ? { ...org, slots: slotEdits[org.id] } : org);
 
   const add = (id: string) => {
     const t = community.find((c) => c.id === id);
     if (!t) return;
-    setCommunity((c) => c.filter((x) => x.id !== id));
-    setMine((m) => [...m, { ...t, origin: `From ${t.author}` }]);
+    setLocalAdds((ids) => [...ids, t.id]);
     setSel(null);
   };
 
@@ -37,10 +40,10 @@ export function TeamsStudio({ view, onViewChange }: { view: TeamsView; onViewCha
   const addToOrg = (orgId: string, teamId: string) => {
     if (community.some((c) => c.id === teamId)) add(teamId);
     const key = `${teamId}-${Date.now().toString(36)}`;
-    setOrgs((os) => os.map((o) => (o.id === orgId ? { ...o, slots: [...o.slots, { key, teamId }] } : o)));
+    setSlotEdits((edits) => ({ ...edits, [orgId]: [...(edits[orgId] ?? registry.organizations.find((o) => o.id === orgId)?.slots ?? []), { key, teamId }] }));
   };
   const removeFromOrg = (orgId: string, key: string) =>
-    setOrgs((os) => os.map((o) => (o.id === orgId ? { ...o, slots: o.slots.filter((x) => x.key !== key) } : o)));
+    setSlotEdits((edits) => ({ ...edits, [orgId]: (edits[orgId] ?? registry.organizations.find((o) => o.id === orgId)?.slots ?? []).filter((x) => x.key !== key) }));
 
   return (
     <AnimatePresence mode="wait" initial={false}>
@@ -421,6 +424,18 @@ function OrgFolder({ org, teams, community, editing, onToggle, onOpen, onAddTeam
             </AnimatePresence>
           </ul>
         </div>
+
+        {httpMode && org.handoffs.filter((edge) => orgTeams.some((slot) => slot.team.id === edge.from) && orgTeams.some((slot) => slot.team.id === edge.to)).map((edge) => (
+          <div key={`${edge.from}-${edge.to}`} className="mx-auto mt-5 flex max-w-[510px] items-center gap-3 text-xs text-muted-foreground">
+            <span className="min-w-0 flex-1 border-t border-dashed border-foreground/35" aria-hidden />
+            <div className="rounded-lg border border-dashed border-foreground/25 bg-background/65 px-3 py-2 text-center">
+              <span className="font-medium text-foreground">{teams.find((t) => t.id === edge.from)?.name} → {teams.find((t) => t.id === edge.to)?.name}</span>
+              <span className="mt-0.5 block">{edge.question}</span>
+              {edge.preview && <span className="mt-1 inline-block rounded-full bg-foreground/5 px-2 py-0.5 text-[10px] font-medium">Preview — not built</span>}
+            </div>
+            <span className="min-w-0 flex-1 border-t border-dashed border-foreground/35" aria-hidden />
+          </div>
+        ))}
 
         <AnimatePresence initial={false}>
           {editing && (

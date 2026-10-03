@@ -11,7 +11,8 @@ import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/component
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
-import { projects, sessions, type Project, type Session, type SessionStatus } from "@/lib/mock/sessions";
+import type { Project, Session, SessionStatus } from "@fabric/contracts";
+import { projects, sessions, studioTeams, profileById, useRegistry } from "@/lib/registry";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { useTheme } from "@/hooks/use-theme";
 import { desktop } from "@/lib/desktop";
@@ -20,8 +21,6 @@ import { useNeedsYouCount } from "@/lib/weave-store";
 import { Portrait } from "@/components/chat/assistant-hero";
 import { teamLead } from "@/components/chat/team-hero";
 import type { ChatAgent } from "@/lib/mock/assistant";
-import { profileById } from "@/lib/mock/studio";
-import { studioTeams } from "@/lib/mock/teams";
 import { TabsProvider } from "./tabs";
 import { TitleBar } from "./title-bar";
 
@@ -206,7 +205,7 @@ function SessionRow({ session, pinned, onPin, onRemove, onOpen }: {
   session: Session; pinned: boolean; onPin: () => void; onRemove: () => void; onOpen: () => void;
 }) {
   const [menuOpen, setMenuOpen] = useState(false);
-  const team = session.teamId ? studioTeams.find((t) => t.id === session.teamId) : undefined;
+  const team = session.teamId ? studioTeams().find((t) => t.id === session.teamId) : undefined;
   const agent = team ? teamLead(team) : profileById(session.agentId).agent;
   const sub = threadSubtitle(session, team?.name ?? agent.name);
   return (
@@ -254,7 +253,7 @@ function SessionRow({ session, pinned, onPin, onRemove, onOpen }: {
 
 function ProjectFolder({ project }: { project: Project }) {
   const [open, setOpen] = useState(project.id === "engram");
-  const items = sessions.filter((x) => x.projectId === project.id);
+  const items = sessions().filter((x) => x.projectId === project.id);
   return (
     <Collapsible open={open} onOpenChange={setOpen} asChild>
       <SidebarMenuItem>
@@ -320,11 +319,14 @@ function SidebarResizeHandle({ width, onWidth, onDragging }: { width: number; on
 }
 
 export function AppShell({ children }: { children: React.ReactNode }) {
+  const registry = useRegistry();
   const { pathname } = useLocation();
   const [sidebarWidth, setSidebarWidth] = useState(256);
   const [resizing, setResizing] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const [items, setItems] = useState(() => sessions.filter((x) => !x.projectId));
+  const [removed, setRemoved] = useState<Set<string>>(new Set());
+  const [read, setRead] = useState<Set<string>>(new Set());
+  const items = registry.sessions.filter((x) => !x.projectId && !removed.has(x.id)).map((x) => read.has(x.id) && x.status === "unread" ? { ...x, status: "idle" as const } : x);
   const [pinned, setPinned] = useState<Set<string>>(new Set());
   const togglePin = (id: string) => setPinned((p) => { const n = new Set(p); if (n.has(id)) n.delete(id); else n.add(id); return n; });
   const ordered = [...items.filter((x) => pinned.has(x.id)), ...items.filter((x) => !pinned.has(x.id))];
@@ -354,11 +356,11 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             </SidebarMenu>
           </SidebarGroup>
           <CollapsibleSection title="Projects" scroll="capped">
-            {projects.filter((p) => !p.archived).map((p) => <ProjectFolder key={p.id} project={p} />)}
+            {projects().filter((p) => !p.archived).map((p) => <ProjectFolder key={p.id} project={p} />)}
           </CollapsibleSection>
           <CollapsibleSection title="Threads" scroll="fill">
             {ordered.map((x) => (
-              <SessionRow key={x.id} session={x} pinned={pinned.has(x.id)} onPin={() => togglePin(x.id)} onRemove={() => setItems((l) => l.filter((y) => y.id !== x.id))} onOpen={() => setItems((l) => l.map((y) => (y.id === x.id && y.status === "unread" ? { ...y, status: "idle" } : y)))} />
+              <SessionRow key={x.id} session={x} pinned={pinned.has(x.id)} onPin={() => togglePin(x.id)} onRemove={() => setRemoved((old) => new Set(old).add(x.id))} onOpen={() => setRead((old) => new Set(old).add(x.id))} />
             ))}
           </CollapsibleSection>
         </SidebarContent>

@@ -1,9 +1,12 @@
 import { useLoaderData, type ShouldRevalidateFunctionArgs } from "react-router";
 import { WorkBoard } from "@/components/work/board";
 import { api } from "@/lib/api";
+import { setWorkData, setProjects } from "@/lib/registry";
 
 export async function workLoader() {
   const [projects, tasks, runs] = await Promise.all([api.listProjects(), api.listTasks(), api.listRuns()]);
+  setProjects(projects);
+  setWorkData(tasks, runs);
   return { projects, tasks, runs };
 }
 

@@ -7,7 +7,8 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { communityProfiles, myProfiles, type StudioProfile } from "@/lib/mock/studio";
+import { useRegistry } from "@/lib/registry";
+import type { StudioProfile } from "@fabric/contracts";
 import { EASE, Group, SectionHead, panel, pill, surface } from "./studio-ui";
 
 type Section = "mine" | "community";
@@ -19,12 +20,14 @@ const portraitId = (id: string) => `studio-portrait-${id}`;
  * Opening a card expands it in place and fades the other section out.
  */
 export function AgentStudio({ initialId }: { initialId?: string }) {
-  const [mine, setMine] = useState(myProfiles);
-  const [community, setCommunity] = useState(communityProfiles);
+  const registry = useRegistry();
+  const [localAdds, setLocalAdds] = useState<string[]>([]);
+  const mine = [...registry.agents, ...registry.communityAgents.filter((p) => localAdds.includes(p.agent.id))];
+  const community = registry.communityAgents.filter((p) => !localAdds.includes(p.agent.id));
   const [sel, setSel] = useState<{ id: string; from: Section } | null>(() => {
     if (!initialId) return null;
-    if (myProfiles.some((p) => p.agent.id === initialId)) return { id: initialId, from: "mine" };
-    if (communityProfiles.some((p) => p.agent.id === initialId)) return { id: initialId, from: "community" };
+    if (registry.agents.some((p) => p.agent.id === initialId)) return { id: initialId, from: "mine" };
+    if (registry.communityAgents.some((p) => p.agent.id === initialId)) return { id: initialId, from: "community" };
     return null;
   });
   const [added, setAdded] = useState<string>();
@@ -43,8 +46,7 @@ export function AgentStudio({ initialId }: { initialId?: string }) {
   const add = (id: string) => {
     const p = community.find((c) => c.agent.id === id);
     if (!p) return;
-    setCommunity((c) => c.filter((x) => x.agent.id !== id));
-    setMine((m) => [...m, p]);
+    setLocalAdds((ids) => [...ids, p.agent.id]);
     setAdded(id);
     setSel(null);
   };

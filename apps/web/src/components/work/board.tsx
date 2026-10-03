@@ -11,7 +11,8 @@ import { Input } from "@/components/ui/input";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { quietScroll } from "@/components/weave/use-edge-fade";
 import { Face, agentOf } from "@/components/weave/parts";
-import { studioTeams, type StudioTeam } from "@/lib/mock/teams";
+import { studioTeams, useRegistry } from "@/lib/registry";
+import type { StudioTeam } from "@fabric/contracts";
 import type { Project } from "@/lib/mock/sessions";
 import { api } from "@/lib/api";
 import { isActive } from "@/lib/run-state";
@@ -27,7 +28,6 @@ type Lens = "projects" | "teams";
 const LENSES = [{ value: "projects", label: "Projects" }, { value: "teams", label: "Teams" }] as const;
 type ProjectTab = "board" | "history";
 const PROJECT_TABS = [{ value: "board", label: "Board" }, { value: "history", label: "History" }] as const;
-const YOUR_TEAMS = studioTeams.map((t) => ({ value: t.id, label: t.name }));
 
 /**
  * Work: every task as a card, current and previous loops.
@@ -36,11 +36,12 @@ const YOUR_TEAMS = studioTeams.map((t) => ({ value: t.id, label: t.name }));
  * workflow steps as columns. Weave pushes what needs you; this is where you look.
  */
 export function WorkBoard({ projects, tasks, runs }: { projects: Project[]; tasks: Task[]; runs: Run[] }) {
+  useRegistry();
   const weave = useWeave();
   const [params, setParams] = useSearchParams();
   const lens: Lens = params.get("view") === "teams" ? "teams" : "projects";
   const focus = projects.find((p) => p.id === params.get("project"));
-  const team = studioTeams.find((t) => t.id === params.get("team")) ?? studioTeams[0];
+  const team = studioTeams().find((t) => t.id === params.get("team")) ?? studioTeams()[0];
   const summaries = useMemo(() => tasks.map((t) => summarize(t, runs, weave)), [tasks, runs, weave]);
 
   const set = (patch: Record<string, string | null>) => setParams((p) => {
@@ -378,6 +379,7 @@ function ProjectBoard({ project, summaries, tab, onTab }: { project: Project; su
 const OCCUPIED_W = 220, EMPTY_W = 120;
 
 function TeamsLens({ team, projects, summaries, onTeam }: { team: StudioTeam; projects: Project[]; summaries: TaskSummary[]; onTeam: (id: string) => void }) {
+  const YOUR_TEAMS = studioTeams().map((t) => ({ value: t.id, label: t.name }));
   const mine = summaries.filter((s) => s.task.teamId === team.id);
   // Proposed and Done bracket the team's own steps; Proposed only shows when something is proposed.
   const proposed = mine.filter((s) => s.column === "proposed");
@@ -431,7 +433,7 @@ function TeamMembers({ team, summaries }: { team: StudioTeam; summaries: TaskSum
   const memberNow = (agentId: string) => {
     const where = (kinds: string[]) => live.filter((s) => s.latest!.segments.some((x) => x.agentId === agentId && kinds.includes(x.kind) && isActive(s.latest!, x, s.latest!.durationS)));
     const waiting = where(["wait"]), working = where(["work", "rework"]), blocked = where(["blocked"]);
-    const others = studioTeams.filter((t) => t.id !== team.id && t.members.some((m) => m.agentId === agentId));
+    const others = studioTeams().filter((t) => t.id !== team.id && t.members.some((m) => m.agentId === agentId));
     return {
       state: waiting.length ? "waiting" : working.length ? "working" : "idle",
       text: waiting.length ? "Needs you" : working.length ? "Working" : blocked.length ? "Blocked" : "Idle",
