@@ -45,16 +45,23 @@ const branchUrl = (pooled) =>
 
 const pooled = branchUrl(true);
 const startedAll = Date.now();
+// detached + group kill: npx spawns children (tsx) that outlive a bare SIGTERM to the wrapper.
 const procs = [];
 const stopAll = () => {
-  for (const p of procs) p.kill("SIGTERM");
+  for (const p of procs) {
+    try {
+      process.kill(-p.pid, "SIGTERM");
+    } catch {
+      p.kill("SIGTERM");
+    }
+  }
 };
 process.on("exit", stopAll);
 process.on("SIGINT", () => { stopAll(); process.exit(130); });
 
 const run = (cmd, args, env = {}) =>
   new Promise((resolve, reject) => {
-    const p = spawn(cmd, args, { env: { ...process.env, ...env }, stdio: ["ignore", "pipe", "pipe"] });
+    const p = spawn(cmd, args, { env: { ...process.env, ...env }, stdio: ["ignore", "pipe", "pipe"], detached: true });
     procs.push(p);
     const out = [];
     p.stdout.on("data", (c) => out.push(c.toString()));
@@ -75,6 +82,7 @@ if (await fetch(`${base}/api/health`).then((r) => r.ok).catch(() => false)) {
 const server = spawn("npx", ["tsx", "apps/server/src/index.ts"], {
   env: { ...process.env, DATABASE_URL: pooled, PORT: String(port), NEON_BRANCH: branch },
   stdio: ["ignore", "pipe", "inherit"],
+  detached: true,
 });
 procs.push(server);
 let serverLogs = "";
