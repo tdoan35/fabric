@@ -6,7 +6,11 @@ import { createRunWriterWith } from "./writer";
 /** The only way anything writes to a run (WORK-PLAN §4.6). Stamps seq and t; validates payloads. */
 export interface RunWriter {
   createTask(i: { projectId: string; teamId: string; title: string; sessionId?: string; recordingKey?: string }): Promise<Task>;
-  startRun(taskId: string, brief: Brief, budget: { costUsd: number; timeS: number; rework: number }): Promise<Run>;
+  /**
+   * Dana's own base context (P1-3), from CTX's measureAssistantContext. When given it is stored in
+   * runs.assistant_tokens instead of brief.tokens. Additive option.
+   */
+  startRun(taskId: string, brief: Brief, budget: { costUsd: number; timeS: number; rework: number }, opts?: { assistantTokens?: number }): Promise<Run>;
   emit<T extends RunEventType>(runId: string, type: T, actor: string | undefined, payload: RunEventPayloads[T]): Promise<RunEvent>;
   /** Also emits context.snapshot. Call it before the model call that uses the context. */
   saveSnapshot(s: Omit<ContextSnapshot, "id">): Promise<ContextSnapshot>;
