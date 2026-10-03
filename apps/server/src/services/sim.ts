@@ -50,6 +50,12 @@ export async function startSim(db: Db, writer: RunWriter, options: SimOptions = 
       await db.db.execute(sql`
         insert into team_members (team_id, agent_id, ord, duty, lead) values ('research', ${m.agentId}, ${mi}, ${m.duty}, ${m.lead ?? false})`);
     }
+    // The clean demo org starts with Product Team. Materialize the planned edge with the team.
+    await db.db.execute(sql`insert into org_slots (org_id, key, ord, team_id) values ('ty-lab', 'research-1', 0, 'research') on conflict do nothing`);
+    await db.db.execute(sql`
+      insert into org_handoffs (org_id, from_team_id, to_team_id, ord, question, preview)
+      values ('ty-lab', 'research', 'product', 0, 'Can these results drive a real, value-driven product?', true)
+      on conflict do nothing`);
     options.onRegistryChanged?.();
   }
 
