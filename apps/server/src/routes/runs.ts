@@ -1,10 +1,9 @@
 // DATA owns this file. Run read models, the SSE tail, splice and finalize-splice (§4.2, D5).
 import { Hono } from "hono";
 import { streamSSE } from "hono/streaming";
-import { sql } from "drizzle-orm";
 import { SpliceRequestSchema } from "@fabric/contracts";
 import type { RunEvent } from "@fabric/contracts";
-import { getRunRow, listSnapshots, mergedEvents, readRun } from "@fabric/db";
+import { getRunRow, listSnapshots, mergedEvents, readRun, sql } from "@fabric/db";
 import { hub } from "../services/hub";
 import { runtime } from "../services/runtime";
 import { finalizeRun } from "../services/finalize";

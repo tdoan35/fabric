@@ -4,8 +4,7 @@
 // carries `recording`. The WHERE guard makes a double splice a 409, even under races.
 import { NotImplementedError } from "@fabric/contracts";
 import type { SpliceResponse } from "@fabric/contracts";
-import { getRunRow, latestRecordingRun, mergedEvents, readRun, readTask, rowToRun } from "@fabric/db";
-import { sql } from "drizzle-orm";
+import { getRunRow, latestRecordingRun, mergedEvents, readRun, readTask, rowToRun, sql } from "@fabric/db";
 import { hub } from "./hub";
 import { runtime } from "./runtime";
 

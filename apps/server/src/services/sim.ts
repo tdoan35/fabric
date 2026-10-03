@@ -1,6 +1,5 @@
-import { sql } from "drizzle-orm";
 import type { RunEvent } from "@fabric/contracts";
-import { RunClosedError, type Db, type RunWriter } from "@fabric/db";
+import { RunClosedError, sql, type Db, type RunWriter } from "@fabric/db";
 import { recordings } from "@fabric/fixtures/recordings";
 import { myProfiles } from "@fabric/fixtures/studio";
 import { studioTeams } from "@fabric/fixtures/teams";

@@ -27,6 +27,7 @@ export function createRunWriter(hooks: RunWriterHooks = {}): RunWriter {
 
 export { createDb, loadRootEnv } from "./db";
 export type { Db } from "./db";
+export { sql } from "drizzle-orm";
 export { createRunWriterWith, emitAt, slugId, rowToRun } from "./writer";
 export { deriveSegments } from "./derive";
 export { importRecording, exportRecording } from "./recordings";

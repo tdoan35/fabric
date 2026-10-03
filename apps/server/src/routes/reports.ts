@@ -1,7 +1,6 @@
 // DATA owns this file. Reports and artifact downloads (§4.2).
 import { Hono } from "hono";
-import { readArtifact, readReport, getRunRow } from "@fabric/db";
-import { sql } from "drizzle-orm";
+import { readArtifact, readReport, getRunRow, sql } from "@fabric/db";
 import { runtime } from "../services/runtime";
 
 export const reports = new Hono()

@@ -7,9 +7,8 @@
 import { NotImplementedError } from "@fabric/contracts";
 import type { Report, ResultItem, RunEvent } from "@fabric/contracts";
 import { sendReportEmail } from "@fabric/integrations";
-import { emitAt, getRunRow, listProjects, mergedEvents, readReport, readTask } from "@fabric/db";
+import { emitAt, getRunRow, listProjects, mergedEvents, readReport, readTask, sql } from "@fabric/db";
 import type { Db, RunRowLike } from "@fabric/db";
-import { sql } from "drizzle-orm";
 import { env } from "../env";
 import { hub } from "./hub";
 import { runtime } from "./runtime";
