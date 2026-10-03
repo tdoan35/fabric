@@ -36,7 +36,7 @@ const bundle = {
     brief: run.brief,
     outcome: run.outcome,
   },
-  events: runEvents.map(({ runId, seq, ...event }) => event),
+  events: runEvents.map(({ runId, seq, ...event }) => ({ ...event, seqHint: seq })),
   snapshots: snapshots.map(({ id, runId, ...snapshot }) => ({ ...snapshot, idHint: id })),
   artifacts: runEvents
     .filter((e) => e.type === "artifact.created")

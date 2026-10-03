@@ -33,15 +33,16 @@ export async function importRecording(db: Db, bundle: RecordingBundle, opts: { t
 
   await db.db.execute(sql`
     insert into runs (id, task_id, team_id, n, objective, status, brief, budget, rework_budget, assistant_tokens,
-                      outcome, report_id, cost_usd, duration_s, recorded, recording_key, recording_kind, started_at, ended_at)
+                      outcome, report_id, cost_usd, duration_s, recorded, recording_key, recording_kind,
+                      started_at, started_at_text, ended_at)
     values (${runId}, ${opts.taskId ?? null}, 'research', ${n}, ${bundle.run.objective}, ${bundle.run.status},
             ${JSON.stringify(bundle.run.brief)}::jsonb, ${JSON.stringify(bundle.run.budget)}::jsonb, ${bundle.run.reworkBudget},
             ${bundle.run.assistantTokens}, ${bundle.run.outcome ?? null}, ${reportId}, ${bundle.run.costUsd},
-            ${bundle.run.durationS}, true, ${bundle.key}, ${bundle.kind}, ${bundle.run.startedAt}, ${endedAt.toISOString()})`);
+            ${bundle.run.durationS}, true, ${bundle.key}, ${bundle.kind}, ${bundle.run.startedAt}, ${bundle.run.startedAt}, ${endedAt.toISOString()})`);
 
-  let seq = 0;
-  for (const e of bundle.events) {
-    seq += 1;
+  const usedSeqs = new Set<number>();
+  for (const [i, e] of bundle.events.entries()) {
+    const seq = !usedSeqs.has(e.seqHint) ? (usedSeqs.add(e.seqHint), e.seqHint) : i + 1;
     const payload = parseRunEventPayload(e.type, e.payload) as Record<string, unknown>;
     await db.db.execute(sql`
       insert into run_events (run_id, seq, t, type, actor_agent_id, payload)
@@ -98,7 +99,7 @@ export async function exportRecording(db: Db, runId: string, meta: { key: string
       costUsd: Number(run.cost_usd), budget: run.budget, reworkBudget: run.rework_budget,
       assistantTokens: run.assistant_tokens, brief: run.brief, outcome: run.outcome ?? undefined,
     },
-    events: events.map(({ runId: _r, seq: _s, ...e }) => e),
+    events: events.map(({ runId: _r, seq, ...e }) => ({ ...e, seqHint: seq })),
     snapshots: snapshots.map(({ id, runId: _rr2, ...s }) => ({ ...s, idHint: id })),
     artifacts,
     report: { ...report, idHint: reportRow.id },

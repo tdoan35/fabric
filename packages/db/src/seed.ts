@@ -121,11 +121,11 @@ for (const { run, events, snapshots } of world.runs) {
     assistantTokens: run.assistantTokens, outcome: run.outcome ?? null, reportId: run.reportId ?? null,
     costUsd: String(run.costUsd), etaS: run.etaS != null ? String(run.etaS) : null,
     durationS: run.status === "running" ? null : String(run.durationS),
-    recorded: run.recorded, startedAt: new Date(run.startedAt), endedAt,
+    recorded: run.recorded, startedAt: new Date(run.startedAt), startedAtText: run.startedAt, endedAt,
   });
   if (events.length) {
-    await db.db.insert(schema.runEvents).values(events.map((e, i) => ({
-      runId: run.id, seq: i + 1, t: String(e.t), type: e.type, actorAgentId: e.actorAgentId ?? null, payload: e.payload,
+    await db.db.insert(schema.runEvents).values(events.map((e) => ({
+      runId: run.id, seq: e.seq, t: String(e.t), type: e.type, actorAgentId: e.actorAgentId ?? null, payload: e.payload,
     })));
   }
   if (snapshots.length) {

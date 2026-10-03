@@ -152,6 +152,8 @@ export const runs = pgTable("runs", {
   spliceT: numeric("splice_t"),
   finalizedAt: ts("finalized_at"),
   startedAt: ts("started_at").notNull().defaultNow(),
+  /** The source string when seeded/imported ("2026-09-29T13:04:00-07:00"), for mock parity. */
+  startedAtText: text("started_at_text"),
   endedAt: ts("ended_at"),
 }, (t) => [index("runs_task_idx").on(t.taskId), index("runs_recording_idx").on(t.recordingKey)]);
 
