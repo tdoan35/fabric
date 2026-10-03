@@ -4,6 +4,7 @@ import { Badge } from "@/components/ui/badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Face, agentOf } from "@/components/weave/parts";
 import type { Report } from "@/lib/types";
+import { streamUrl } from "@/lib/api";
 
 export function ReportView({ report, loopHref }: { report: Report; loopHref?: string }) {
   return (
@@ -11,8 +12,17 @@ export function ReportView({ report, loopHref }: { report: Report; loopHref?: st
       <article className="max-w-[680px] space-y-6">
         <div>
           <h1 className="text-xl font-semibold tracking-tight">{report.title}</h1>
+          {report.kind === "illustrative" && <span className="mt-1 inline-block rounded-full bg-replay-soft px-2 py-0.5 text-xs font-medium text-replay">Illustrative</span>}
           <p className="mt-1 text-sm text-muted-foreground">{report.intro}</p>
         </div>
+        {report.setup && report.setup.length > 0 && (
+          <section>
+            <h2 className="mb-2 text-sm font-semibold">Setup</h2>
+            <dl className="grid gap-2 rounded-xl border p-3 text-sm sm:grid-cols-2">
+              {report.setup.map((row) => <div key={row.label}><dt className="text-xs text-muted-foreground">{row.label}</dt><dd>{row.value}</dd></div>)}
+            </dl>
+          </section>
+        )}
         <section>
           <h2 className="mb-2 text-sm font-semibold">Summary</h2>
           <p className="text-sm leading-relaxed">{report.summary}</p>
@@ -68,7 +78,7 @@ export function ReportView({ report, loopHref }: { report: Report; loopHref?: st
             {report.artifacts.map((a) => (
               <li key={a.name} className="flex items-center gap-2 rounded-md border px-3 py-2">
                 <Download className="size-3.5 text-muted-foreground" />
-                <div><div className="font-mono text-xs">{a.name}</div><div className="text-[11px] text-muted-foreground">{a.from}</div></div>
+                <div>{a.id ? <a href={streamUrl(`/artifacts/${encodeURIComponent(a.id)}`)} target="_blank" rel="noreferrer" className="font-mono text-xs underline underline-offset-2">{a.name}</a> : <div className="font-mono text-xs">{a.name}</div>}<div className="text-[11px] text-muted-foreground">{a.from}</div></div>
               </li>
             ))}
           </ul>

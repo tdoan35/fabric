@@ -3,10 +3,12 @@ import { Link } from "react-router";
 import { AnimatePresence, motion } from "motion/react";
 import { ArrowRight, Brain, CornerDownLeft, MessageSquare, ShieldCheck, ThumbsUp, Undo2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { calendarEvents, WEAVE_NOW, type EventEntry, type MemoryEntry, type PolicyEntry, type PulseEntry, type UpdateEntry } from "@/lib/mock/weave";
-import { inboxGroups, itemById, weave, type WeaveState } from "@/lib/weave-store";
+import { type EventEntry, type MemoryEntry, type PolicyEntry, type PulseEntry, type UpdateEntry } from "@/lib/mock/weave";
+import { inboxGroups, itemById, weave, weaveCalendar, type WeaveState } from "@/lib/weave-store";
+import { httpMode } from "@/lib/api";
+import { useRegistry, workRuns, workTasks } from "@/lib/registry";
 import { cn } from "@/lib/utils";
-import { dayKey, dayLabel, fmtTime, TODAY } from "./format";
+import { dayKey, dayLabel, fmtTime, TODAY, weaveNow } from "./format";
 import { ArtifactChip, Face, HealthPill, NameRole, ProjectChip, agentOf } from "./parts";
 
 export type PulseFilter = "highlights" | "everything";
@@ -21,9 +23,16 @@ function joinNodes(nodes: React.ReactNode[]) {
 
 /** Dana's written summary of what needs you. It rewrites itself as you clear asks. */
 function DanaBrief({ state, onSelectItem }: { state: WeaveState; onSelectItem: (id: string) => void }) {
+  useRegistry();
   const g = inboxGroups(state);
-  const next = calendarEvents
-    .filter((e) => dayKey(e.start) === TODAY && new Date(e.start) > WEAVE_NOW)
+  const currentRuns = workRuns();
+  const taskNames = new Map(workTasks().map((task) => [task.id, task.title]));
+  const active = currentRuns.find((run) => run.status === "running");
+  const completed = currentRuns.find((run) => run.status === "accepted");
+  const liveLine = active ? `${taskNames.get(active.taskId) ?? "A team loop"} is underway.` : "No team loops are running yet.";
+  const resultsLine = completed ? ` ${taskNames.get(completed.taskId) ?? "A team"} has results ready.` : "";
+  const next = weaveCalendar()
+    .filter((e) => dayKey(e.start) === TODAY && new Date(e.start) > weaveNow())
     .sort((a, b) => a.start.localeCompare(b.start))[0];
   const link = (id: string) => (
     <button type="button" onClick={() => onSelectItem(id)} className="font-medium underline decoration-foreground/25 underline-offset-2 hover:decoration-foreground">
@@ -36,12 +45,12 @@ function DanaBrief({ state, onSelectItem }: { state: WeaveState; onSelectItem: (
         <Face id="dana" size="size-10" />
         <div className="min-w-0 flex-1 text-xs">
           <NameRole id="dana" className="block text-sm" />
-          <span className="text-muted-foreground">{fmtTime(WEAVE_NOW.toISOString())}</span>
+          <span className="text-muted-foreground">{fmtTime(weaveNow().toISOString())}</span>
         </div>
         <Button size="sm" variant="ghost" asChild className="text-muted-foreground"><Link to="/">Talk to Dana<ArrowRight /></Link></Button>
       </div>
       <div className="mt-3 space-y-1.5 text-sm leading-relaxed">
-        <p>The 360M run is in Implement, and the 135M results are written up.</p>
+        <p>{httpMode ? `${liveLine}${resultsLine}` : "The 360M run is in Implement, and the 135M results are written up."}</p>
         <p>
           {g.needs.length === 0
             ? "Nothing is waiting on you right now. I'll ask here when that changes."

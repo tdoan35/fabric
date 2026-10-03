@@ -2,10 +2,10 @@ import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router";
 import { CalendarDays, ChevronLeft, ChevronRight, EyeOff } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { calendarEvents, dayMarkers, WEAVE_NOW, type Presence, type PresenceState } from "@/lib/mock/weave";
-import type { WeaveState } from "@/lib/weave-store";
+import { type Presence, type PresenceState } from "@/lib/mock/weave";
+import { weaveCalendar, weaveDayMarkers, type WeaveState } from "@/lib/weave-store";
 import { cn } from "@/lib/utils";
-import { clockMinutes, dayKey, dayLabel, fmtTime, fromKey, fullDayLabel, toKey, TODAY } from "./format";
+import { clockMinutes, dayKey, dayLabel, fmtTime, fromKey, fullDayLabel, toKey, TODAY, weaveNow } from "./format";
 import { ColumnLabel, Face, agentOf } from "./parts";
 
 const STATE: Record<PresenceState, { label: string; ring: string; dot: string; text: string }> = {
@@ -166,7 +166,7 @@ function MiniCalendar({ selected, onPick }: { selected: string; onPick: (day: st
       <div className="grid grid-cols-7 gap-y-0.5 text-center">
         {cells.map((key) => {
           const inMonth = key.slice(0, 7) === month;
-          const marks = dayMarkers.filter((d) => d.day === key);
+          const marks = weaveDayMarkers().filter((d) => d.day === key);
           const isSel = key === selected;
           return (
             <button
@@ -203,12 +203,12 @@ const EVENT_STYLE = {
 } as const;
 
 function Timebox({ day, onPickDay }: { day: string; onPickDay: (day: string) => void }) {
-  const events = calendarEvents.filter((e) => dayKey(e.start) === day);
-  const upcoming = dayMarkers
+  const events = weaveCalendar().filter((e) => dayKey(e.start) === day);
+  const upcoming = weaveDayMarkers()
     .filter((d) => d.kind === "deadline" && d.day >= day)
     .map((d) => ({ ...d, inDays: Math.round((fromKey(d.day).getTime() - fromKey(day).getTime()) / 86400000) }))
     .filter((d) => d.inDays <= 7);
-  const now = clockMinutes(WEAVE_NOW);
+  const now = clockMinutes(weaveNow());
   return (
     <section>
       <ColumnLabel right={day !== TODAY && (
@@ -251,7 +251,7 @@ function Timebox({ day, onPickDay }: { day: string; onPickDay: (day: string) => 
           );
         })}
         {day === TODAY && now >= START && now <= END && (
-          <div className="pointer-events-none absolute left-9 right-0 flex items-center" style={{ top: (now - START) * PX }} aria-label={`Now, ${fmtTime(WEAVE_NOW.toISOString())}`}>
+          <div className="pointer-events-none absolute left-9 right-0 flex items-center" style={{ top: (now - START) * PX }} aria-label={`Now, ${fmtTime(weaveNow().toISOString())}`}>
             <span className="size-2 -translate-x-1 rounded-full bg-warn" />
             <span className="h-px flex-1 bg-warn" />
           </div>
