@@ -1,17 +1,255 @@
 // DANA owns this folder: model access through the Neon AI Gateway, and per-call usage metering (ARCH §10).
-import { NotImplementedError } from "@fabric/contracts";
+//
+// One factory over three providers, chosen by LLM_PROVIDER (WORK-PLAN §2.1 item 5):
+//   spark      — the DGX Spark lane (vLLM, OpenAI-compatible). Every display model maps to SPARK_MODEL.
+//   openrouter — anthropic/claude-* ids, usage accounting on (usage.cost comes back).
+//   neon       — the Neon AI Gateway at the venue (@neon/ai-sdk-provider, NEON_AI_GATEWAY_* env).
+import { wrapLanguageModel, type LanguageModelMiddleware } from "ai";
+import type { LanguageModelV3, LanguageModelV4, LanguageModelV4StreamPart, SharedV4ProviderMetadata } from "@ai-sdk/provider";
+import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
+import { createOpenRouter } from "@openrouter/ai-sdk-provider";
+import { createNeon } from "@neon/ai-sdk-provider";
 
-/** Placeholder until S1 settles the SDK; expected to become an AI SDK language model. */
-export type LanguageModel = unknown;
+/** A model instance (AI SDK spec v4), as returned by model(). */
+export type LanguageModel = LanguageModelV4;
+export type Provider = "spark" | "openrouter" | "neon";
+export type ThinkingLevel = "off" | "low" | "medium" | "high";
 
-export interface Usage { model: string; inputTokens: number; outputTokens: number; costUsd?: number; estimated?: boolean }
-export interface UsageSink { record(u: Usage): void }
-
-export function model(_modelId: string): LanguageModel {
-  throw new NotImplementedError("DANA", "llm.model");
+export interface Usage {
+  /** The model that actually ran, `provider:modelId` — not the intended display model (ARCH §10). */
+  model: string;
+  inputTokens: number;
+  outputTokens: number;
+  costUsd?: number;
+  /** Cost is computed from a price table, not reported by the provider. */
+  estimated?: boolean;
+}
+export interface UsageSink {
+  record(u: Usage): void;
+  /** What this sink has recorded so far (read-only). */
+  readonly usages: readonly Usage[];
+}
+export interface MeterContext {
+  runId?: string;
+  agentId: string;
+  step?: string;
 }
 
+export interface ModelOptions {
+  thinking?: ThinkingLevel;
+  /** Given: every generate/stream call through the returned model is recorded. */
+  meter?: MeterContext;
+}
+
+export const DANA = "dana";
+
+/** Thinking defaults (WORK-PLAN DANA 1): Dana off for latency, everyone else medium. */
+export function defaultThinking(agentId: string | undefined): ThinkingLevel {
+  return agentId === DANA ? "off" : "medium";
+}
+
+/** The active provider from LLM_PROVIDER (spark unless told otherwise). */
+export function providerName(): Provider {
+  const p = (process.env.LLM_PROVIDER ?? "spark").trim().toLowerCase();
+  if (p !== "spark" && p !== "openrouter" && p !== "neon") {
+    throw new Error(`LLM_PROVIDER must be spark | openrouter | neon (got "${p}")`);
+  }
+  return p;
+}
+
+// ---- Display model → provider model id ----
+
+export type ModelFamily = "sonnet" | "haiku" | "opus";
+
+/** The agent row's display model ("Sonnet 5.5", "Haiku 4.5", "Opus 5.5"; "" means Sonnet 5.5). */
+export function modelFamily(displayModelId: string): ModelFamily {
+  const id = displayModelId.trim().toLowerCase();
+  if (id.includes("haiku")) return "haiku";
+  if (id.includes("opus")) return "opus";
+  return "sonnet";
+}
+
+/** The model id the current provider actually serves for a display model. */
+export function providerModelId(family: ModelFamily, provider: Provider = providerName()): string {
+  switch (provider) {
+    case "spark":
+      return requireSparkModel();
+    case "openrouter":
+      return {
+        sonnet: "anthropic/claude-sonnet-5.5",
+        haiku: "anthropic/claude-haiku-4.5",
+        opus: "anthropic/claude-opus-5.5",
+      }[family];
+    case "neon":
+      // Gateway catalog ids (claude-<tier>-<major>-<minor>); verify against GET /v1/models at the venue.
+      return {
+        sonnet: "claude-sonnet-5-5",
+        haiku: "claude-haiku-4-5",
+        opus: "claude-opus-5-5",
+      }[family];
+  }
+}
+
+function requireSparkModel(): string {
+  const m = process.env.SPARK_MODEL?.trim();
+  if (!m) throw new Error("SPARK_MODEL is not set (the Spark lane needs it in .env)");
+  return m;
+}
+
+// ---- Spark thinking controls (probed Oct 3; never send "none" anywhere) ----
+
+/**
+ * Spark/vLLM thinking knobs, applied to the request body:
+ * - "off":    chat_template_kwargs.enable_thinking = false (the only way to get zero reasoning tokens)
+ * - "low"/"medium": top-level reasoning_effort
+ * - "high":   nothing — the template's xhigh default
+ */
+export function sparkThinkingBody(body: Record<string, unknown>, level: ThinkingLevel): Record<string, unknown> {
+  if (level === "off") {
+    const kwargs = (body.chat_template_kwargs as Record<string, unknown> | undefined) ?? {};
+    return { ...body, chat_template_kwargs: { ...kwargs, enable_thinking: false } };
+  }
+  if (level === "low" || level === "medium") return { ...body, reasoning_effort: level };
+  return body;
+}
+
+function sparkModel(level: ThinkingLevel): LanguageModel {
+  const baseURL = process.env.SPARK_BASE_URL?.trim();
+  if (!baseURL) throw new Error("SPARK_BASE_URL is not set (the Spark lane is required for LLM_PROVIDER=spark)");
+  const p = createOpenAICompatible({
+    name: "spark",
+    baseURL,
+    apiKey: process.env.SPARK_API_KEY ?? "",
+    supportsStructuredOutputs: true, // vLLM guided json (response_format json_schema)
+    transformRequestBody: (body) => sparkThinkingBody(body as Record<string, unknown>, level),
+  });
+  return p(requireSparkModel());
+}
+
+function openrouterModel(level: ThinkingLevel, id: string): LanguageModel {
+  if (!process.env.OPENROUTER_API_KEY) throw new Error("OPENROUTER_API_KEY is not set (required for LLM_PROVIDER=openrouter)");
+  const p = createOpenRouter({ apiKey: process.env.OPENROUTER_API_KEY });
+  // Claude thinking is opt-in: "off" sends nothing. Effort levels map to OpenRouter's reasoning effort.
+  const reasoning = level === "off" ? undefined : { effort: level };
+  return p.chat(id, { usage: { include: true }, ...(reasoning ? { reasoning } : {}) });
+}
+
+function neonModel(id: string): LanguageModelV3 {
+  const baseURL = process.env.NEON_AI_GATEWAY_BASE_URL?.trim();
+  const apiKey = process.env.NEON_AI_GATEWAY_TOKEN?.trim();
+  if (!baseURL || !apiKey) {
+    throw new Error(
+      "Neon AI Gateway is not configured: set NEON_AI_GATEWAY_BASE_URL and NEON_AI_GATEWAY_TOKEN " +
+        "(neon env pull / neon deploy writes them once the gateway is enabled on a paid plan). " +
+        "Until the venue, use LLM_PROVIDER=spark or openrouter.",
+    );
+  }
+  return createNeon({ baseURL, apiKey })(id);
+}
+
+// ---- Cost (ARCH §10): Spark is free, OpenRouter reports usage.cost, Neon comes from a table in code ----
+
+export const NEON_PRICES: Record<string, { inputPerMtok: number; outputPerMtok: number }> = {
+  // Placeholder list prices (DANA re-checks against GET /v1/models pricing at the venue); metered costs are flagged estimated.
+  "claude-sonnet-5-5": { inputPerMtok: 3, outputPerMtok: 15 },
+  "claude-haiku-4-5": { inputPerMtok: 1, outputPerMtok: 5 },
+  "claude-opus-5-5": { inputPerMtok: 5, outputPerMtok: 25 },
+};
+
+function costOf(
+  provider: Provider,
+  modelId: string,
+  inputTokens: number,
+  outputTokens: number,
+  meta: SharedV4ProviderMetadata | undefined,
+): { costUsd?: number; estimated?: boolean } {
+  if (provider === "spark") return { costUsd: 0 };
+  if (provider === "openrouter") {
+    const usage = meta && "openrouter" in meta ? (meta as { openrouter?: { usage?: { cost?: unknown } } }).openrouter?.usage : undefined;
+    const cost = typeof usage?.cost === "number" ? usage.cost : undefined;
+    return cost != null ? { costUsd: cost } : {};
+  }
+  const price = NEON_PRICES[modelId];
+  if (!price) return { estimated: true };
+  return { costUsd: (inputTokens / 1e6) * price.inputPerMtok + (outputTokens / 1e6) * price.outputPerMtok, estimated: true };
+}
+
+// ---- Metering ----
+
+const runCosts = new Map<string, number>();
+const runRecords = new Map<string, Usage[]>();
+
 /** Tags every call with where it happened; TEAM turns the totals into budget.update events. */
-export function meter(_ctx: { runId?: string; agentId: string; step?: string }): UsageSink {
-  throw new NotImplementedError("DANA", "llm.meter");
+export function meter(ctx: MeterContext): UsageSink {
+  const usages: Usage[] = [];
+  return {
+    get usages() {
+      return usages;
+    },
+    record(u) {
+      usages.push(u);
+      if (ctx.runId) {
+        runCosts.set(ctx.runId, (runCosts.get(ctx.runId) ?? 0) + (u.costUsd ?? 0));
+        runRecords.set(ctx.runId, [...(runRecords.get(ctx.runId) ?? []), u]);
+      }
+    },
+  };
+}
+
+/** Everything metered under a run so far — the model that ran, tokens and cost per call. */
+export function runUsages(runId: string): readonly Usage[] {
+  return runRecords.get(runId) ?? [];
+}
+
+/**
+ * The run's in-process running total, so TEAM can emit budget.update {costUsd: <running total>}.
+ * DATA accumulates budget.update monotonically and treats costUsd as the run's total, not a delta.
+ */
+export function runCostUsd(runId: string): number {
+  return runCosts.get(runId) ?? 0;
+}
+
+function meteringMiddleware(sink: UsageSink, provider: Provider, modelId: string): LanguageModelMiddleware {
+  const tag = `${provider}:${modelId}`;
+  const record = (usage: { inputTokens: { total: number | undefined }; outputTokens: { total: number | undefined } }, meta?: SharedV4ProviderMetadata) => {
+    const inputTokens = usage.inputTokens.total ?? 0;
+    const outputTokens = usage.outputTokens.total ?? 0;
+    sink.record({ model: tag, inputTokens, outputTokens, ...costOf(provider, modelId, inputTokens, outputTokens, meta) });
+  };
+  return {
+    specificationVersion: "v4",
+    wrapGenerate: async ({ doGenerate }) => {
+      const result = await doGenerate();
+      record(result.usage, result.providerMetadata);
+      return result;
+    },
+    wrapStream: async ({ doStream }) => {
+      const { stream, ...rest } = await doStream();
+      const observed = stream.pipeThrough(
+        new TransformStream<LanguageModelV4StreamPart, LanguageModelV4StreamPart>({
+          transform(part, controller) {
+            if (part.type === "finish") record(part.usage, part.providerMetadata);
+            controller.enqueue(part);
+          },
+        }),
+      );
+      return { ...rest, stream: observed };
+    },
+  };
+}
+
+// ---- The factory ----
+
+/** An AI SDK language model for an agent row's display model, on the current provider. */
+export function model(modelId: string, opts: ModelOptions = {}): LanguageModel {
+  const provider = providerName();
+  const family = modelFamily(modelId);
+  const id = providerModelId(family, provider);
+  const level = opts.thinking ?? defaultThinking(opts.meter?.agentId);
+  const base: LanguageModelV4 | LanguageModelV3 =
+    provider === "spark" ? sparkModel(level)
+    : provider === "openrouter" ? openrouterModel(level, id)
+    : neonModel(id); // the neon provider is spec v3; wrapLanguageModel normalizes it to v4
+  const middleware: LanguageModelMiddleware[] = opts.meter ? [meteringMiddleware(meter(opts.meter), provider, id)] : [];
+  return wrapLanguageModel({ model: base, middleware });
 }
