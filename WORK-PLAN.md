@@ -331,7 +331,7 @@ These follow ARCH §12's numbering, plus S0 and S-LAB. Each one ends with pass o
 | S4 | Chat stream ↔ assistant-ui | UI-CHAT with DANA | The NDJSON adapter renders the cards, and a human result round-trip creates rows | Scripted Dana for the card turns |
 | S5 | AgentMail | TOOLS | Create an inbox and send mail | Send-only, or off (P1) |
 | S6 | Executor | TOOLS | Allow, approve and block one tool, per agent | Our own allowlist, labelled "behavioral scoping" (ARCH §1.3) |
-| S7 | Exa | TOOLS | `fast` search with highlights in under 2 s | Cached results |
+| S7 | Exa | TOOLS | `type: "fast"` search with `contents: {highlights: true}` returns in under 2 s (request shape from the `build-with-exa` skill) | Cached results |
 | S8 | Live tail | DATA with UI-WORK | An event appended on the server shows in the loop view within 1 s over SSE, in the browser and from `app://fabric` | Poll every second |
 | S-LAB | The experiment in a Sprite | LAB | Baseline and fused perplexity for the ~135M model, computed end to end in under 10 min. The overlap check works | Smaller eval set or table; failing that, the illustrative bundle (L2) |
 
@@ -467,7 +467,7 @@ Each section can be pasted into an agent as its brief.
    - Attach to the two existing Sprites, `SPRITE_CODER` (Jonah) and `SPRITE_VALIDATOR` (Sana). Each has 8 CPUs, 8 GiB RAM, 99 GB disk, no GPU, and Python 3.13, Node 24 and `uv`. LAB fills them with the environment. Checkpoint before risky changes; restoring is destructive (ARCH §3).
    - `exec` streams stdout as line-buffered, throttled `tool.result {line, kind: "term"}` events.
    - The egress policy allows only the package index and model host. Verify it with a blocked fetch that emits `tool.denied`.
-4. **Exa:** `fast` search with narration lines like the mock's ("exa.search “…” · fast", "8 results · 3 highlights kept"). Cache the last results.
+4. **Exa:** follow the installed `build-with-exa` skill (`.claude/skills/build-with-exa`) and use the `exa-js` SDK. Megan's tool calls `/search` with `contents: {highlights: true}` and nothing else. The one exception is `type: "fast"` on the live-start path, where latency matters; elsewhere leave the default `auto`. No `category`, domain filters, `numResults` or freshness settings unless a task needs them (the skill's main pitfall). Use `fast` search with narration lines like the mock's ("exa.search “…” · fast", "8 results · 3 highlights kept"). Cache the last results.
 5. **AgentMail:** `createInbox` on specialist approval (one address format) [CARD-3], and `sendReportEmail` to `OWNER_EMAIL` at finalize (P1-1).
 6. **Artifacts** are stored through `RunWriter.saveArtifact` (small files go into the DB).
 
