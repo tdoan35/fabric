@@ -22,10 +22,7 @@ export function loadRootEnv(): void {
 
 export function createDb(databaseUrl = process.env.DATABASE_URL): Db {
   if (!databaseUrl) throw new Error("DATABASE_URL is not set (seed/sim: load the root .env or pass --branch)");
-  const pool = new pg.Pool({
-    connectionString: databaseUrl,
-    ssl: { rejectUnauthorized: false },
-    max: 10,
-  });
+  // No ssl override: Neon's URLs carry sslmode=require and certificate checks stay on.
+  const pool = new pg.Pool({ connectionString: databaseUrl, max: 10 });
   return { pool, db: drizzle(pool, { schema }), async close() { await pool.end(); } };
 }
