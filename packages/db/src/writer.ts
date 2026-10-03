@@ -30,17 +30,15 @@ async function emitRow(
         // Serialize concurrent emits for the same run (TEAM's parallel steps).
         await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${runId}, 0))`);
         const next = await tx.execute(sql`
-          select coalesce(max(e.seq), 0) + 1 as seq,
-                 coalesce(round(extract(epoch from (now() - r.started_at))::numeric, 2), 0) as t
-          from runs r left join run_events e on e.run_id = r.id
-          where r.id = ${runId}`);
-        const row = next.rows[0] as { seq: string | number; t: string | number } | undefined;
-        if (!row) throw new Error(`run ${runId} not found`);
+          select (select coalesce(max(seq), 0) + 1 from run_events where run_id = ${runId}) as seq,
+                 (select round(extract(epoch from (now() - started_at))::numeric, 2) from runs where id = ${runId}) as t`);
+        const row = next.rows[0] as { seq: string | number; t: string | number | null } | undefined;
+        if (!row || row.t == null) throw new Error(`run ${runId} not found`);
         const seq = Number(row.seq);
         const t = tOverride ?? Number(row.t);
         await tx.execute(sql`
           insert into run_events (run_id, seq, t, type, actor_agent_id, payload)
-          values (${runId}, ${seq}, ${t}, ${type}, ${actorAgentId}, ${JSON.stringify(parsed)}::jsonb)`);
+          values (${runId}, ${seq}, ${t}, ${type}, ${actorAgentId ?? null}, ${JSON.stringify(parsed)}::jsonb)`);
         if (type === "budget.update" && typeof payload.costUsd === "number") {
           await tx.execute(sql`update runs set cost_usd = greatest(cost_usd, ${payload.costUsd}) where id = ${runId}`);
         }
