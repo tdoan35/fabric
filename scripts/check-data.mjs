@@ -240,7 +240,11 @@ const sim2 = await sim2Promise;
 assert(sim2.code === 0 && sim2.output.includes("sim: run spliced, stopping"), "sim exits 0 with 'run spliced, stopping' once the run closes");
 await fetch(`${base}/api/runs/${runId2}/finalize-splice`, { method: "POST", headers: { Origin: "app://fabric" } });
 const merged2 = await (await fetch(`${base}/api/runs/${runId2}/events`)).json();
-const key = (e) => `${e.t}|${e.type}|${JSON.stringify(e.payload)}`;
+// jsonb roundtrips don't preserve JSON key order; canonicalize before comparing payloads.
+const stable = (v) => (Array.isArray(v) ? v.map(stable) : v && typeof v === "object"
+  ? Object.fromEntries(Object.entries(v).map(([k, val]) => [k, stable(val)]).sort((a, b) => a[0].localeCompare(b[0])))
+  : v);
+const key = (e) => `${e.t}|${e.type}|${JSON.stringify(stable(e.payload))}`;
 const recTail = new Set(bundle.events.filter((e) => e.t > spliceT && e.type !== "run.finished").map(key));
 const after = merged2.filter((e) => e.t > spliceT);
 assert(after.every((e) => e.type === "run.finished" || recTail.has(key(e))), "no live events after splice_t other than run.finished");
