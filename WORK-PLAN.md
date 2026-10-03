@@ -331,7 +331,7 @@ These follow ARCH §12's numbering, plus S0 and S-LAB. Each one ends with pass o
 | S4 | Chat stream ↔ assistant-ui | UI-CHAT with DANA | The NDJSON adapter renders the cards, and a human result round-trip creates rows | Scripted Dana for the card turns |
 | S5 | AgentMail | TOOLS | Create an inbox and send mail | Send-only, or off (P1) |
 | S6 | Executor | TOOLS | Allow, approve and block one tool, per agent | Our own allowlist, labelled "behavioral scoping" (ARCH §1.3) |
-| S7 | Exa | TOOLS | `type: "fast"` search with `contents: {highlights: true}` returns in under 2 s (request shape from the `build-with-exa` skill) | Cached results |
+| S7 | Exa | TOOLS | `type: "fast"` search with `contents: {highlights: true}` returns in under 2 s (request shape from the `build-with-exa` skill). **Key checked by the integrator, Oct 3:** `fast` 0.37–0.56 s, `auto` 1.8 s, $0.007 per search, and the demo queries return the Engram paper and NAND-inference papers. What's left for TOOLS is the tool wrapper and the narration lines | Cached results |
 | S8 | Live tail | DATA with UI-WORK | An event appended on the server shows in the loop view within 1 s over SSE, in the browser and from `app://fabric` | Poll every second |
 | S-LAB | The experiment in a Sprite | LAB | Baseline and fused perplexity for the ~135M model, computed end to end in under 10 min. The overlap check works | Smaller eval set or table; failing that, the illustrative bundle (L2) |
 
