@@ -70,7 +70,7 @@ export function Lanes({ run, team, view, t, domain, selected, onSelect }: {
 
   const D = domain;
   const pct = (s: number) => `${(Math.min(s, D) / D) * 100}%`;
-  const ongoing = run.status === "running" || run.status === "blocked";
+  const ongoing = (run.status === "running" || run.status === "blocked") && !run.recording;
   const lead = leadOf(team);
   const rows = team.members.map((m) => m.agentId);
   const rowOf = (id: string) => rows.indexOf(id);

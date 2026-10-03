@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useSearchParams } from "react-router";
 import { AnimatePresence, motion } from "motion/react";
 import { ArrowRight, CircleCheck, FileText, Hourglass, Info, OctagonPause, Pause, Sparkles, Square } from "lucide-react";
@@ -7,13 +7,15 @@ import { PANEL_PATTERN, Segmented, headerTitle } from "@/components/studio/studi
 import { Button } from "@/components/ui/button";
 import { quietScroll } from "@/components/weave/use-edge-fade";
 import { Face, NameRole, agentOf } from "@/components/weave/parts";
-import { inboxSeed, type ProposalItem } from "@/lib/mock/weave";
+import { type ProposalItem } from "@/lib/mock/weave";
 import type { Project } from "@/lib/mock/sessions";
 import { fmtClock, fmtSpan, laneDomain, projectRun, runMarkers, teamOf, type RunView } from "@/lib/run-state";
 import type { ContextSnapshot, Report, Run, RunEvent, Task } from "@/lib/types";
 import { useRunClock, type ClockStart } from "@/lib/use-run-clock";
+import { api, httpApi, httpMode, streamUrl } from "@/lib/api";
+import { RunEventSchema } from "@fabric/contracts";
 import { addSeconds, leadOf, loopState, summarize, when, whenFull, type TaskSummary } from "@/lib/work";
-import { useWeave } from "@/lib/weave-store";
+import { useWeave, weaveItems } from "@/lib/weave-store";
 import { cn } from "@/lib/utils";
 import { BriefPanel } from "./brief-panel";
 import { Inspector } from "./inspector";
@@ -31,6 +33,7 @@ export interface TaskData {
   snapshots: ContextSnapshot[];
   report?: Report;
   start: ClockStart;
+  liveZoom?: boolean;
 }
 
 /** A task's page: its selected loop, live or replayed. Proposed tasks (no loop yet) show the proposal. */
@@ -64,31 +67,99 @@ const Panel = ({ children, className }: { children: React.ReactNode; className?:
   </div>
 );
 
-function LoopScreen({ task, project, loops, run, events, snapshots, report, start, summary }: TaskData & { run: Run; summary: TaskSummary }) {
+function LoopScreen({ task, project, loops, run: initialRun, events: initialEvents, snapshots: initialSnapshots, report: initialReport, start, liveZoom, summary }: TaskData & { run: Run; summary: TaskSummary }) {
   const [, setParams] = useSearchParams();
+  const [localRun, setRun] = useState<Run>();
+  const [localEvents, setEvents] = useState<RunEvent[]>();
+  const [localSnapshots, setSnapshots] = useState<ContextSnapshot[]>();
+  const [localReport, setReport] = useState<Report>();
+  const run = localRun?.status !== "running" && localRun ? localRun
+    : initialRun.recording || initialRun.status !== "running" ? initialRun : localRun ?? initialRun;
+  const events = run === initialRun ? initialEvents : localEvents ?? initialEvents;
+  const snapshots = localSnapshots ?? initialSnapshots;
+  const report = localReport ?? initialReport;
+  const [streaming, setStreaming] = useState(false);
+  const sourceRef = useRef<EventSource | undefined>(undefined);
+  const lastSeq = useRef(Math.max(0, ...initialEvents.map((e) => e.seq)));
+  const finalizing = useRef(false);
   const team = teamOf(run);
   const lead = leadOf(team);
   const markers = useMemo(() => runMarkers(events), [events]);
   const stops = useMemo(() => markers.filter((mk) => mk.kind === "bounce" || mk.kind === "accept").map((mk) => mk.t), [markers]);
-  const clock = useRunClock(run.durationS, start, stops);
+  const clock = useRunClock(run.durationS, start, stops, httpMode && run.status === "running" && !run.recording ? run.startedAt : undefined, !httpMode || !run.recording);
   const view = useMemo(() => projectRun(run, events, clock.t), [run, events, clock.t]);
   const [selected, setSelected] = useState<string>();
   const member = view.members.find((m) => m.agentId === selected);
   const isLatest = run.id === summary.latest?.id;
-  const domain = laneDomain(run, clock.t, start === "sim" && clock.source === "live");
+  const domain = laneDomain(run, clock.t, (start === "sim" || !!liveZoom) && clock.source === "live");
+
+  useEffect(() => {
+    if (!httpMode || run.status !== "running" || run.recording) return;
+    let closed = false;
+    let retry: ReturnType<typeof setTimeout> | undefined;
+    const connect = () => {
+      if (closed) return;
+      const source = new EventSource(streamUrl(`/runs/${encodeURIComponent(run.id)}/stream?after=${lastSeq.current}`));
+      sourceRef.current = source;
+      source.onopen = () => setStreaming(true);
+      source.addEventListener("run", (message) => {
+        const parsed = RunEventSchema.safeParse(JSON.parse((message as MessageEvent).data));
+        if (!parsed.success) { console.warn("[run stream] invalid event", parsed.error.issues); return; }
+        const event = parsed.data;
+        if (event.seq <= lastSeq.current) return;
+        lastSeq.current = event.seq;
+        setEvents((prior) => [...(prior ?? initialEvents), event]);
+        if (event.type === "step.started" || event.type === "step.finished") {
+          void api.getRun(run.id).then((next) => { if (!closed && next) setRun(next); });
+        }
+        if (event.type === "context.snapshot") {
+          void api.getSnapshots(run.id).then((next) => { if (!closed) setSnapshots(next); });
+        }
+        if (event.type === "run.finished") {
+          source.close(); setStreaming(false);
+          void api.getRun(run.id).then((next) => { if (!closed && next) setRun(next); });
+        }
+      });
+      source.onerror = () => { source.close(); setStreaming(false); if (!closed) retry = setTimeout(connect, 1000); };
+    };
+    connect();
+    return () => { closed = true; sourceRef.current?.close(); setStreaming(false); if (retry) clearTimeout(retry); };
+  }, [run.id, run.status, run.recording, initialEvents]);
+
+  const fastForward = useCallback(async () => {
+    if (httpMode && run.status === "running" && !run.recording) {
+      sourceRef.current?.close(); setStreaming(false);
+      const at = clock.t;
+      try {
+        const spliced = await httpApi.spliceRun(run.id, at);
+        setRun(spliced.run); setEvents(spliced.events);
+        lastSeq.current = Math.max(0, ...spliced.events.map((e) => e.seq));
+        clock.fastForwardFrom(at);
+      } catch (err) { console.warn("[run] splice failed", err); }
+    } else clock.fastForward();
+  }, [run.id, run.status, run.recording, clock]);
+  useEffect(() => {
+    if (!httpMode || run.recording?.spliceT === undefined || run.status !== "running" || clock.t < run.durationS || clock.playing || finalizing.current) return;
+    finalizing.current = true;
+    void httpApi.finalizeSplice(run.id).then(async ({ reportId }) => {
+      const [nextRun, nextEvents, nextReport] = await Promise.all([api.getRun(run.id), api.getRunEvents(run.id), api.getReport(reportId)]);
+      if (nextRun) setRun(nextRun);
+      setEvents(nextEvents); setReport(nextReport);
+    }).catch((err) => { finalizing.current = false; console.warn("[run] finalize failed", err); });
+  }, [run.id, run.status, run.recording, run.durationS, clock.t, clock.playing]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if ((e.target as HTMLElement).closest("input, textarea, [contenteditable='true']") || e.metaKey || e.ctrlKey) return;
-      if (e.key === "r" || e.key === "R") clock.fastForward();
+      if (e.key === "r" || e.key === "R") void fastForward();
       if (e.key === "Escape") setSelected(undefined);
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [clock]);
+  }, [fastForward]);
 
   // At the end (or at "now"), the loop's real state; anywhere earlier, the state at the playhead.
-  const atEnd = clock.t >= run.durationS;
+  const atEnd = clock.t >= clock.max;
   const final = isLatest ? loopState(summary) : run.status === "accepted" ? "accepted" : "stopped";
   const state = atEnd ? final : view.stages.find((s) => s.label === view.currentStage)?.gate ? "review" : "running";
   const loopOptions = loops.map((l) => ({ value: String(l.n), label: `Loop ${l.n}` }));
@@ -101,7 +172,7 @@ function LoopScreen({ task, project, loops, run, events, snapshots, report, star
             <Segmented value={String(run.n)} options={loopOptions}
               onChange={(n) => setParams((p) => { const x = new URLSearchParams(p); x.delete("live"); if (Number(n) === loops[loops.length - 1].n) x.delete("loop"); else x.set("loop", n); return x; })} />
           )}
-          <ClockBadge clock={clock} start={start} />
+          <ClockBadge clock={clock} start={start} liveActive={!httpMode || streaming} />
         </>}
       >
         <Crumbs project={project} task={task} />
@@ -143,7 +214,7 @@ function LoopScreen({ task, project, loops, run, events, snapshots, report, star
                 <span className="ml-auto"><LanesLegend /></span>
               </div>
               <Lanes run={run} team={team} view={view} t={clock.t} domain={domain} selected={selected} onSelect={(id) => setSelected((s) => (s === id ? undefined : id))} />
-              <Transport clock={clock} max={run.durationS} markers={markers} start={start} />
+              <Transport clock={{ ...clock, fastForward: () => { void fastForward(); } }} max={clock.max} markers={markers} start={run.recording?.spliceT !== undefined ? "end" : start} />
             </section>
 
             <Callouts run={run} view={view} report={report} summary={isLatest ? summary : undefined} />
@@ -304,7 +375,7 @@ function Callouts({ run, view, report, summary }: { run: Run; view: RunView; rep
 
 /** A task Dana proposed that hasn't run yet. The decision lives in Weave. */
 function ProposedScreen({ task, project, summary }: TaskData & { summary: TaskSummary }) {
-  const item = inboxSeed.find((i) => i.id === task.proposal?.itemId) as ProposalItem | undefined;
+  const item = weaveItems().find((i) => i.id === task.proposal?.itemId) as ProposalItem | undefined;
   const lead = leadOf(summary.team);
   return (
     <>

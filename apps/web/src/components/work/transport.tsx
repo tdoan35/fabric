@@ -14,8 +14,8 @@ const MARK: Record<RunMarker["kind"], string> = {
 };
 
 /** Live / Replay · N×. Replay is always badged (PRD §11: "Was this real?"). */
-export function ClockBadge({ clock, start }: { clock: RunClock; start: ClockStart }) {
-  return clock.source === "live"
+export function ClockBadge({ clock, start, liveActive = true }: { clock: RunClock; start: ClockStart; liveActive?: boolean }) {
+  return clock.source === "live" && liveActive
     ? (
       <span className="inline-flex items-center gap-1.5 rounded-full bg-run-soft px-2 py-0.5 text-xs font-medium text-run" title={start === "sim" ? "Simulated from the recorded loop" : "Where the loop is now"}>
         <span className="size-1.5 animate-pulse rounded-full bg-run" />Live{start === "now" && " · now"}
@@ -29,7 +29,7 @@ export function ClockBadge({ clock, start }: { clock: RunClock; start: ClockStar
  * artifacts (dots) and blocked tool calls (ticks). Fast-forward runs at 600× and pauses on each verdict.
  */
 export function Transport({ clock, max, markers, start }: { clock: RunClock; max: number; markers: RunMarker[]; start: ClockStart }) {
-  const pct = (s: number) => `${(s / max) * 100}%`;
+  const pct = (s: number) => `${max > 0 ? (s / max) * 100 : 0}%`;
   const atNow = start === "now" && clock.source === "live";
   return (
     <div className="flex flex-wrap items-center gap-x-3 gap-y-2 border-t border-foreground/10 px-3 py-2.5">
