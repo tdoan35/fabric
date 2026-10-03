@@ -13,9 +13,11 @@
     "@fabric/agents": "*",
     "@fabric/contracts": "*",
     "@fabric/db": "*",
+    "@fabric/fixtures": "*",
     "@fabric/integrations": "*",
     "@hono/node-server": "^2.1.3",
     "hono": "^4.13.12",
+    "drizzle-orm": "^0.44.5",
     "zod": "^4.6.5"
   },
   "devDependencies": {
