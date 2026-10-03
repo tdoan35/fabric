@@ -230,7 +230,7 @@ CORS allows `http://localhost:<web port>` and `app://fabric`.
 
 ### 4.6 Backend module interfaces
 
-FND writes these as stubs that throw `NotImplemented`, so every package compiles from CP0.
+FND wrote these as stubs that throw `NotImplementedError`, so every package compiles from CP-0. The code in `packages/*/src` is the authoritative version; this is a summary.
 
 ```ts
 // packages/db — DATA. The server constructs it with an onEvent hook wired to the SSE hub,
@@ -254,12 +254,15 @@ compileBrief(i: BriefInput): Promise<Brief>;        // BriefInput has no transcr
 assembleContext(i: AssembleInput): Promise<{ system: string; snapshot: Omit<ContextSnapshot, "id"> }>;
 countTokens(text: string): { tokens: number; estimated: boolean };
 
-// packages/agents/src/team — TEAM
-startTeamRun(runId: string): Promise<void>;
-cancelRun(runId: string): Promise<void>;
+// packages/agents/src/team — TEAM. Stateful pieces are factories; services/runtime.ts (DATA) wires them once.
+createTeamRuntime(deps: { writer: RunWriter }): { startTeamRun(runId): Promise<void>; cancelRun(runId): Promise<void> };
 
 // packages/agents/src/assistant — DANA
-postResultsMessage(sessionId: string, p: ResultsPayload): Promise<void>;
+createAssistant(deps: { writer: RunWriter; team: TeamRuntime }): {
+  chat(req: ChatRequest): AsyncIterable<ChatStreamLine>;   // POST /api/chat
+  history(sessionId: string): Promise<SessionMessages>;
+  postResultsMessage(sessionId: string, p: ResultsPayload): Promise<void>;
+};
 
 // packages/integrations — TOOLS
 toolsFor(agent: StudioProfile, ctx: { runId: string; step: string; writer: RunWriter }):
@@ -346,6 +349,8 @@ Each section can be pasted into an agent as its brief.
 5. **Scaffolds** for `packages/db`, `packages/agents` and `packages/integrations`, exporting the §4.6 interfaces as stubs.
 6. **`apps/server`:** Hono app with `env.ts` (zod; every integration optional behind a flag), CORS (§4.2), `/api/health`, and every route in §4.2 mounted from a per-owner file that returns 501 for now. Dev command runs `tsx watch`.
 7. `vite.config.ts` reads `VITE_PORT`. Add `.env.example` and `status/README.md` with the template from §7.6.
+
+**Status:** done Sat Oct 3 (tag `contracts-v1`). `npm run electron:dev -w web` was not re-run headlessly; check it when you restart your session.
 
 **Done when:** `npm i && npm run typecheck && npm run build -w web` passes; `npm run dev` serves the unchanged mockup on :3000 and `/api/health` on :8787; `npm run electron:dev` still works; `contracts-v1` is tagged.
 

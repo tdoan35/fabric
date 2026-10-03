@@ -1,0 +1,24 @@
+// @fabric/db — DATA owns this package: Drizzle schema, migrations, seed profiles and the RunWriter.
+import { NotImplementedError } from "@fabric/contracts";
+import type { Brief, ContextSnapshot, Run, RunEvent, RunEventPayloads, RunEventType, RunStatus, Task } from "@fabric/contracts";
+
+/** The only way anything writes to a run (WORK-PLAN §4.6). Stamps seq and t; validates payloads. */
+export interface RunWriter {
+  createTask(i: { projectId: string; teamId: string; title: string; sessionId?: string; recordingKey?: string }): Promise<Task>;
+  startRun(taskId: string, brief: Brief, budget: { costUsd: number; timeS: number; rework: number }): Promise<Run>;
+  emit<T extends RunEventType>(runId: string, type: T, actor: string | undefined, payload: RunEventPayloads[T]): Promise<RunEvent>;
+  /** Also emits context.snapshot. Call it before the model call that uses the context. */
+  saveSnapshot(s: Omit<ContextSnapshot, "id">): Promise<ContextSnapshot>;
+  saveArtifact(runId: string, a: { name: string; by: string; content: Uint8Array | string }): Promise<{ id: string }>;
+  end(runId: string, status: Exclude<RunStatus, "running">, outcome?: string): Promise<void>;
+}
+
+/** The server wires these: onEvent feeds the SSE hub, onEnd runs finalizeRun. Packages never import apps/server. */
+export interface RunWriterHooks {
+  onEvent?: (e: RunEvent) => void;
+  onEnd?: (runId: string, status: Exclude<RunStatus, "running">) => void | Promise<void>;
+}
+
+export function createRunWriter(_hooks: RunWriterHooks = {}): RunWriter {
+  throw new NotImplementedError("DATA", "createRunWriter");
+}
