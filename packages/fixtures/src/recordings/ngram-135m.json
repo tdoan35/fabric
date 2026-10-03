@@ -1,7 +1,7 @@
 {
   "key": "ngram-135m",
   "kind": "illustrative",
-  "exportedAt": "2026-10-03T19:41:21.868Z",
+  "exportedAt": "2026-10-03T21:48:24.257Z",
   "run": {
     "idHint": "run-ngram-1",
     "objective": "Does an n-gram lookup table improve a much smaller open model?",
@@ -1248,6 +1248,24 @@
       }
     ],
     "emailed": true,
+    "setup": [
+      {
+        "label": "Model",
+        "value": "135M open model"
+      },
+      {
+        "label": "Method",
+        "value": "Inference-time n-gram lookup"
+      },
+      {
+        "label": "Corpus",
+        "value": "Cached corpus"
+      },
+      {
+        "label": "Split",
+        "value": "Held-out; overlap removed after review"
+      }
+    ],
     "idHint": "report-ngram-1",
     "kind": "illustrative"
   }

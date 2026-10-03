@@ -17,7 +17,17 @@ const contentTypeFor = (name: string) =>
   name.endsWith(".zip") ? "application/zip" : name.endsWith(".md") ? "text/markdown" : "text/plain";
 
 const { id: _reportId, runId: _reportRunId, ...reportBody } = reportFixture;
-const report: Omit<Report, "id" | "runId"> & { idHint: string } = { ...reportBody, idHint: _reportId, kind: "illustrative" };
+const report: Omit<Report, "id" | "runId"> & { idHint: string } = {
+  ...reportBody,
+  setup: [
+    { label: "Model", value: "135M open model" },
+    { label: "Method", value: "Inference-time n-gram lookup" },
+    { label: "Corpus", value: "Cached corpus" },
+    { label: "Split", value: "Held-out; overlap removed after review" },
+  ],
+  idHint: _reportId,
+  kind: "illustrative",
+};
 
 const bundle = {
   key: "ngram-135m",

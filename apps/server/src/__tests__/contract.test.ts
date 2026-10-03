@@ -143,10 +143,21 @@ describe.skipIf(profile !== "lived-in")("lived-in matches the mock world", () =>
     expect(await get<ContextSnapshot[]>("/api/runs/run-ngram-1/snapshots")).toEqual(snapshots135);
   });
 
-  it("the 135M report equals the fixture plus the D9 label and artifact links", async () => {
+  it("the 135M report is the stored row: fixture body plus D9 label, Setup rows and stored artifact ids", async () => {
     const report = await get<Report>("/api/reports/report-ngram-1");
-    expect(report.artifacts.every((a) => !!a.id)).toBe(true);
-    expect({ ...report, artifacts: report.artifacts.map(({ name, from }) => ({ name, from })) }).toEqual({ ...reportFixture, kind: "illustrative" });
+    // Bundle import order: plan.md, literature-survey.md, code-bundle.zip, eval-log.jsonl.
+    expect(report.artifacts.map(({ name, id }) => ({ name, id }))).toEqual([
+      { name: "code-bundle.zip", id: "art-run-ngram-1-3" },
+      { name: "literature-survey.md", id: "art-run-ngram-1-2" },
+      { name: "eval-log.jsonl", id: "art-run-ngram-1-4" },
+    ]);
+    expect(report.setup).toEqual([
+      { label: "Model", value: "135M open model" },
+      { label: "Method", value: "Inference-time n-gram lookup" },
+      { label: "Corpus", value: "Cached corpus" },
+      { label: "Split", value: "Held-out; overlap removed after review" },
+    ]);
+    expect({ ...report, setup: undefined, artifacts: report.artifacts.map(({ name, from }) => ({ name, from })) }).toEqual({ ...reportFixture, kind: "illustrative" });
   });
 
   it("weave equals the fixtures", async () => {
