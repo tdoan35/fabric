@@ -43,11 +43,10 @@ export async function mergedEvents(db: Db, run: RunRowLike): Promise<RunEvent[]>
   // emit that slipped past the RunClosedError guard never reaches the merged log.
   const head = live.filter((e) => e.t <= spliceT);
   const tail = live.filter((e) => e.t > spliceT && e.type === "run.finished");
-  return [
-    ...head,
-    ...rec.map((e, i) => ({ ...e, seq: head.length + 1 + i })),
-    ...tail.map((e, i) => ({ ...e, seq: head.length + rec.length + 1 + i })),
-  ];
+  // Re-stamp the whole log 1..N so seqs stay contiguous however t order and seq order interleaved.
+  return [head, rec, tail]
+    .flat()
+    .map((e, i) => ({ ...e, runId: run.id, seq: i + 1 }));
 }
 
 export async function getRunRow(db: Db, runId: string): Promise<RunRowLike | undefined> {
