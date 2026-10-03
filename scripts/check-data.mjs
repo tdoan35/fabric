@@ -11,10 +11,15 @@
 //   6. POST /finalize-splice twice (idempotent)
 //   7. assert: report attached, run.finished emitted, a Weave result item exists, and
 //      task.changed / weave.changed / session.message arrived on /api/stream
+//   8. closed run: splice while sim is still emitting — late live events must not leak
 import { execFileSync, spawn } from "node:child_process";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import path from "node:path";
+
+const require = createRequire(import.meta.url);
+const bundle = require("../packages/fixtures/src/recordings/ngram-135m.json");
 
 const NEON_PROJECT = "solitary-meadow-39146227";
 const arg = (name, dflt) => {
@@ -87,7 +92,7 @@ const simPromise = run("npx", ["tsx", "scripts/sim-run.ts", "--speed", String(sp
 let runId;
 for (let i = 0; i < 50; i++) {
   try {
-    runId = JSON.parse((await import("node:fs")).readFileSync(runfile, "utf8")).runId;
+    runId = JSON.parse(readFileSync(runfile, "utf8")).runId;
     break;
   } catch {}
   await new Promise((r) => setTimeout(r, 200));
@@ -119,13 +124,13 @@ const pumpApp = (async () => {
   }
 })();
 
-const readUntil = async (predicate, timeoutMs) => {
+const readUntilFrom = (reader, label) => async (predicate, timeoutMs) => {
   const decoder = new TextDecoder();
   let buf = "";
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     const { done, value } = await Promise.race([
-      runReader.read(),
+      reader.read(),
       new Promise((r) => setTimeout(() => r({ done: false, value: undefined }), Math.max(0, deadline - Date.now()))),
     ]);
     if (done) break;
@@ -143,8 +148,9 @@ const readUntil = async (predicate, timeoutMs) => {
       }
     }
   }
-  return undefined;
+  throw new Error(`${label}: predicate not met within ${timeoutMs} ms`);
 };
+const readUntil = readUntilFrom(runReader, "run stream");
 
 const simStart = Date.now();
 const sim = await simPromise;
@@ -206,9 +212,40 @@ assert(seen("task.changed"), "task.changed arrived on /api/stream");
 assert(seen("weave.changed"), "weave.changed arrived on /api/stream");
 assert(appEvents.some((a) => a.event.type === "session.message" && a.event.sessionId), "session.message arrived on /api/stream");
 
+// ---- closed-run case: splice while sim is still emitting (speed 1, splice at ~t=22) ----
+console.log("8. closed run: splice mid-emission (speed 1) …");
+const runfile2 = path.join(tmp, "run2.json");
+const sim2Promise = run("npx", ["tsx", "scripts/sim-run.ts", "--speed", "1", "--runfile", runfile2], simEnv);
+let runId2;
+for (let i = 0; i < 50; i++) {
+  try {
+    runId2 = JSON.parse(readFileSync(runfile2, "utf8")).runId;
+    break;
+  } catch {}
+  await new Promise((r) => setTimeout(r, 200));
+}
+if (!runId2) throw new Error("sim (speed 1) never wrote its runfile");
+const stream2 = await fetch(`${base}/api/runs/${runId2}/stream`, { headers: { Origin: "app://fabric", Accept: "text/event-stream" } });
+const reader2 = stream2.body.getReader();
+const read2 = readUntilFrom(reader2, "run stream 2");
+await read2((a) => a.event.t >= 19, 40_000); // wall ≈ t at speed 1
+const spliceT = 22;
+const splice2 = await fetch(`${base}/api/runs/${runId2}/splice`, {
+  method: "POST",
+  headers: { "content-type": "application/json", Origin: "app://fabric" },
+  body: JSON.stringify({ t: spliceT }),
+});
+if (!splice2.ok) throw new Error(`mid-emission splice failed: ${splice2.status} ${await splice2.text()}`);
+const sim2 = await sim2Promise;
+assert(sim2.code === 0 && sim2.output.includes("sim: run spliced, stopping"), "sim exits 0 with 'run spliced, stopping' once the run closes");
+await fetch(`${base}/api/runs/${runId2}/finalize-splice`, { method: "POST", headers: { Origin: "app://fabric" } });
+const merged2 = await (await fetch(`${base}/api/runs/${runId2}/events`)).json();
+const key = (e) => `${e.t}|${e.type}|${JSON.stringify(e.payload)}`;
+const recTail = new Set(bundle.events.filter((e) => e.t > spliceT && e.type !== "run.finished").map(key));
+const after = merged2.filter((e) => e.t > spliceT);
+assert(after.every((e) => e.type === "run.finished" || recTail.has(key(e))), "no live events after splice_t other than run.finished");
+assert(after.length === recTail.size + 1, `tail is exactly the recording's + finalize's run.finished (${after.length} events)`);
+assert(merged2[merged2.length - 1].type === "run.finished", "run.finished closes the merged log");
+reader2.cancel();
+
 console.log(`done in ${((Date.now() - startedAll) / 1000).toFixed(1)}s · branch ${branch} · run ${runId}`);
-runReader.cancel();
-appReader.cancel();
-await pumpApp.catch(() => {});
-rmSync(tmp, { recursive: true, force: true });
-stopAll();

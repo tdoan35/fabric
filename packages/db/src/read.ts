@@ -39,8 +39,10 @@ export async function mergedEvents(db: Db, run: RunRowLike): Promise<RunEvent[]>
   const rec = (await listStoredEvents(db, run.spliced_from_run_id))
     .filter((e) => e.t > spliceT && e.type !== "run.finished")
     .map((e) => ({ ...e, runId: run.id }));
+  // Second line of defence: only finalize's run.finished may follow the splice point; a late live
+  // emit that slipped past the RunClosedError guard never reaches the merged log.
   const head = live.filter((e) => e.t <= spliceT);
-  const tail = live.filter((e) => e.t > spliceT); // the finalize event(s), positioned last
+  const tail = live.filter((e) => e.t > spliceT && e.type === "run.finished");
   return [
     ...head,
     ...rec.map((e, i) => ({ ...e, seq: head.length + 1 + i })),
