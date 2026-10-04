@@ -35,6 +35,8 @@ export { sql } from "drizzle-orm";
 export { createRunWriterWith, emitAt, slugId, rowToRun } from "./writer";
 export { deriveSegments } from "./derive";
 export { importRecording, exportRecording } from "./recordings";
+export { provisionTeam } from "./provision";
+export type { ProvisionTeamInput, ProvisionTeamResult } from "./provision";
 export { RunClosedError } from "./errors";
 export {
   getRunRow, latestRecordingRun, listProjects, listRuns, listSnapshots, listStoredEvents, listTasks,
