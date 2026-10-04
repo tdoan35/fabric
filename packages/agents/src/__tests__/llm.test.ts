@@ -1,8 +1,9 @@
 // llm unit tests: thinking request bodies per level, defaults, model mapping, metering (WORK-PLAN CTX/DANA step 1).
 // No network: fetch is stubbed at the provider boundary.
 import { describe, expect, it, beforeEach, afterEach, vi } from "vitest";
-import { generateText, streamText } from "ai";
-import { defaultThinking, model, modelFamily, providerModelId, runCostUsd, runUsages, sparkThinkingBody, type MeterContext, type ThinkingLevel } from "../llm";
+import { generateObject, generateText, streamText } from "ai";
+import { z } from "zod";
+import { defaultThinking, model, modelFamily, providerModelId, neonAnthropicOptions, runCostUsd, runUsages, sparkThinkingBody, type MeterContext, type ThinkingLevel } from "../llm";
 
 const sparkCompletion = (usage: Record<string, unknown> = { prompt_tokens: 12, completion_tokens: 34, total_tokens: 46 }) => ({
   id: "cmpl-1",
@@ -99,6 +100,80 @@ describe("thinking levels on the wire (model → request body)", () => {
   });
 });
 
+describe("neonAnthropicOptions", () => {
+  it("always asks for JSON-tool structured output (the gateway rejects output_config.format)", () => {
+    for (const level of ["off", "low", "medium", "high"] as const) {
+      expect(neonAnthropicOptions("claude-sonnet-5", level).structuredOutputMode).toBe("jsonTool");
+    }
+  });
+  it("off disables thinking", () => {
+    expect(neonAnthropicOptions("claude-opus-5-5", "off").thinking).toEqual({ type: "disabled" });
+  });
+  it("5-series: adaptive thinking steered by effort", () => {
+    expect(neonAnthropicOptions("claude-sonnet-5", "low")).toMatchObject({ thinking: { type: "adaptive" }, effort: "low" });
+  });
+  it("Haiku 4.5: a token budget per level", () => {
+    expect(neonAnthropicOptions("claude-haiku-4-5", "medium")).toMatchObject({ thinking: { type: "enabled", budgetTokens: 4096 } });
+  });
+});
+
+describe("neon wire: structured output (model → request body)", () => {
+  const anthropicReply = (input: unknown) => ({
+    id: "msg_1", type: "message", role: "assistant", model: "m", stop_reason: "tool_use", stop_sequence: null,
+    content: [{ type: "tool_use", id: "tu_1", name: "json", input }],
+    usage: { input_tokens: 10, output_tokens: 5 },
+  });
+  beforeEach(() => {
+    vi.stubEnv("LLM_PROVIDER", "neon");
+    vi.stubEnv("NEON_AI_GATEWAY_BASE_URL", "https://gw.test");
+    vi.stubEnv("NEON_AI_GATEWAY_TOKEN", "nt_test");
+  });
+  const schema = z.object({ verdict: z.enum(["accept", "request_changes"]) });
+
+  it("Opus 5.5 schema calls run on claude-opus-5 as a forced JSON tool, thinking off", async () => {
+    const calls = stubFetch(() => anthropicReply({ verdict: "accept" }));
+    const { object } = await generateObject({ model: model("Opus 5.5", { thinking: "medium" }), schema, prompt: "verdict?" });
+    expect(object).toEqual({ verdict: "accept" });
+    expect(calls[0].body.model).toBe("claude-opus-5");
+    expect(calls[0].body.thinking).toEqual({ type: "disabled" });
+    expect(calls[0].body.output_config).toBeUndefined();
+  });
+
+  it("a forced tool choice (Dana's first step) on Opus 5.5 stays on Opus 5.5", async () => {
+    const calls = stubFetch(() => anthropicReply({ verdict: "accept" }));
+    await generateText({
+      model: model("Opus 5.5", { thinking: "high" }), prompt: "route",
+      tools: { json: { description: "d", inputSchema: schema } }, toolChoice: { type: "tool", toolName: "json" },
+    });
+    expect(calls[0].body.model).toBe("claude-opus-5-5");
+  });
+
+  it("Fable 5.1 free calls stay on claude-fable-5-1 with adaptive xhigh effort", async () => {
+    const calls = stubFetch(() => anthropicReply({ verdict: "accept" }));
+    await generateText({ model: model("Fable 5.1", { thinking: "xhigh" }), prompt: "hi" });
+    expect(calls[0].body.model).toBe("claude-fable-5-1");
+    expect(calls[0].body.thinking).toEqual({ type: "adaptive" });
+    expect(calls[0].body.output_config).toMatchObject({ effort: "xhigh" });
+  });
+
+  it("a forced tool choice on Sonnet keeps the force and turns thinking off", async () => {
+    const calls = stubFetch(() => anthropicReply({ verdict: "accept" }));
+    await generateText({
+      model: model("Sonnet 5.5", { thinking: "high" }), prompt: "route",
+      tools: { json: { description: "d", inputSchema: schema } }, toolChoice: { type: "tool", toolName: "json" },
+    });
+    expect(calls[0].body.thinking).toEqual({ type: "disabled" });
+    expect(calls[0].body.tool_choice).toMatchObject({ type: "tool", name: "json" });
+  });
+
+  it("Sonnet schema calls stay on their model with thinking off", async () => {
+    const calls = stubFetch(() => anthropicReply({ verdict: "accept" }));
+    await generateObject({ model: model("Sonnet 5.5", { thinking: "high" }), schema, prompt: "verdict?" });
+    expect(calls[0].body.model).toBe("claude-sonnet-5");
+    expect(calls[0].body.thinking).toEqual({ type: "disabled" });
+  });
+});
+
 describe("model mapping", () => {
   it("spark maps every display model to SPARK_MODEL", () => {
     expect(providerModelId(modelFamily("Sonnet 5.5"), "spark")).toBe("qwen3.8-flash-next");
@@ -111,7 +186,8 @@ describe("model mapping", () => {
     expect(providerModelId("sonnet", "openrouter")).toBe("anthropic/claude-sonnet-5.5");
     expect(providerModelId("haiku", "openrouter")).toBe("anthropic/claude-haiku-4.5");
     expect(providerModelId("opus", "openrouter")).toBe("anthropic/claude-opus-5.5");
-    expect(providerModelId("sonnet", "neon")).toBe("claude-sonnet-5-5");
+    expect(providerModelId("sonnet", "neon")).toBe("claude-sonnet-5");
+    expect(providerModelId(modelFamily("Fable 5.1"), "neon")).toBe("claude-fable-5-1");
     expect(providerModelId("haiku", "neon")).toBe("claude-haiku-4-5");
   });
 

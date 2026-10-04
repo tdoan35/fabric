@@ -10,6 +10,8 @@ export const TOOL_NAMES = [
   "agentmail.send",
   "network.fetch",
   "team.assign",
+  "browser.task",
+  "recall",
 ] as const;
 export type ToolName = (typeof TOOL_NAMES)[number];
 

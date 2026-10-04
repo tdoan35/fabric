@@ -8,7 +8,8 @@
     "./llm": "./src/llm/index.ts",
     "./assistant": "./src/assistant/index.ts",
     "./team": "./src/team/index.ts",
-    "./context": "./src/context/index.ts"
+    "./context": "./src/context/index.ts",
+    "./memory": "./src/memory/index.ts"
   },
   "scripts": {
     "typecheck": "tsc -p tsconfig.json",
@@ -19,6 +20,7 @@
     "@fabric/contracts": "*",
     "@fabric/db": "*",
     "@fabric/integrations": "*",
+    "@huggingface/transformers": "^3.7.6",
     "@mastra/core": "^1.74.0",
     "@neon/ai-sdk-provider": "^1.0.0",
     "@openrouter/ai-sdk-provider": "^3.1.0",

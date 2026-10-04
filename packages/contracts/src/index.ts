@@ -1,5 +1,5 @@
 // @fabric/contracts — frozen at Checkpoint 0 (tag contracts-v1). Changes go through the integrator
-// (WORK-PLAN §0): file a request in your status/<code>.md.
+// (WORK-PLAN §0): file a request in your docs/status/<code>.md.
 export * from "./domain";
 export * from "./registry";
 export * from "./weave";

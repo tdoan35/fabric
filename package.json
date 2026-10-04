@@ -17,6 +17,7 @@
     "test": "npm run test --workspaces --if-present",
     "lint": "npm run lint -w web",
     "seed": "npm run seed -w @fabric/db --",
+    "memory:import": "tsx scripts/import-mnemosyne.ts",
     "smoke": "node scripts/smoke.mjs",
     "llm:check": "tsx scripts/llm-check.ts",
     "export-recording": "tsx scripts/export-recording.ts",

@@ -69,4 +69,6 @@ export const mockApi = {
   },
   listOccurrences: (from: string, to: string): Promise<Occurrence[]> =>
     delay(mockOccurrences(new Date(from), new Date(to), bundledRuns)),
+  /** No-op offline: mock memory decisions stay client-side (the mock pulse rows have no memoryId). */
+  decideMemory: (): Promise<{ ok: true }> => delay({ ok: true }),
 };

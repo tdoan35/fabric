@@ -6,6 +6,7 @@ export const MODELS = [
   { id: "opus-5-5", name: "Opus 5.5", note: "Deep reasoning" },
   { id: "sonnet-5-5", name: "Sonnet 5.5", note: "Balanced" },
   { id: "haiku-4-5", name: "Haiku 4.5", note: "Fastest" },
+  { id: "glm-5-3-flash", name: "GLM 5.3 Flash", note: "Open model, fast" },
 ];
 export const EFFORTS = ["Low", "Medium", "High", "Extra high"];
 

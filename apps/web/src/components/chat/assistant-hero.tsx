@@ -7,7 +7,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Group, panel } from "@/components/studio/studio-ui";
-import { myProfiles } from "@/lib/registry";
+import { forgetMemory, myProfiles } from "@/lib/registry";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import type { ChatAgent } from "@/lib/mock/assistant";
 import { cn } from "@/lib/utils";
@@ -19,9 +19,9 @@ export const policyStyle = {
 } as const;
 
 /** Portrait for any chat agent: animated sprite when it has art, initial circle otherwise. */
-export function Portrait({ agent, className }: { agent: ChatAgent; className?: string }) {
+export function Portrait({ agent, working, className }: { agent: ChatAgent; working?: boolean; className?: string }) {
   return agent.avatar
-    ? <AgentAvatar avatar={agent.avatar} name={agent.name} className={className} />
+    ? <AgentAvatar avatar={agent.avatar} name={agent.name} working={working} className={className} />
     : <InitialAvatar initial={agent.name[0]} name={agent.name} tone={agent.tone} className={cn("text-4xl", className)} />;
 }
 
@@ -323,9 +323,17 @@ function ProfileTabs({ agent }: { agent: ChatAgent }) {
             {workspace.memories.length > 0 ? (
               <ul className={cn(panel, "divide-y divide-foreground/10")}>
                 {workspace.memories.map((m) => (
-                  <li key={m.text} className="px-3 py-2.5">
-                    <p className="text-sm leading-snug">{m.text}</p>
-                    <p className="mt-1 text-[11px] text-muted-foreground">{m.source} · {m.when}</p>
+                  <li key={m.id ?? m.text} className="flex items-start justify-between gap-3 px-3 py-2.5">
+                    <div className="min-w-0">
+                      <p className="text-sm leading-snug">{m.text}</p>
+                      <p className="mt-1 text-[11px] text-muted-foreground">{m.source} · {m.when}</p>
+                    </div>
+                    {m.id && (
+                      <Button variant="ghost" size="xs" className="shrink-0 text-muted-foreground hover:text-foreground"
+                        onClick={() => forgetMemory(agent.id, m.id!)}>
+                        Forget
+                      </Button>
+                    )}
                   </li>
                 ))}
               </ul>

@@ -128,6 +128,8 @@ export interface MemoryEntry extends EntryBase {
   text: string;
   source: string;
   decision?: "kept" | "forgotten";
+  /** Set on pulse entries backed by the memories table: Keep/Forget write through to it. */
+  memoryId?: string;
 }
 export interface PolicyEntry extends EntryBase { kind: "policy"; agentId: string; text: string }
 export type PulseEntry = UpdateEntry | EventEntry | MemoryEntry | PolicyEntry;

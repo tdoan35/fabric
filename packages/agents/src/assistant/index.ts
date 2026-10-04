@@ -4,8 +4,8 @@
 // opens with a recorded disposition (forced tool call, one retry), proposals are human tools whose
 // decisions create rows on the next request, and the handoff compiles a brief and starts a real
 // task + run. Fixture mode (DANA 6) runs the scripted branches with the same side effects.
-import { ToolChoiceViolationError, stepCountIs, streamText, tool } from "ai";
-import type { ToolSet } from "ai";
+import { streamText, tool } from "ai";
+import type { ModelMessage, ToolSet } from "ai";
 import { z } from "zod";
 import { NotImplementedError } from "@fabric/contracts";
 import type {
@@ -13,11 +13,13 @@ import type {
   SessionMessages, StudioProfile, ThreadMessage,
 } from "@fabric/contracts";
 import type { Db, RunWriter } from "@fabric/db";
-import { createInbox } from "@fabric/integrations";
-import type { LanguageModel } from "../llm";
+import { browserTaskInputSchema, createInbox } from "@fabric/integrations";
+import type { LanguageModel, ThinkingLevel } from "../llm";
 import { model } from "../llm";
 import { compileBrief } from "../context";
 import type { BriefInput } from "../context";
+import { recallForDana } from "../memory";
+import type { MemoryRecall } from "../memory";
 import type { TeamRuntime } from "../team";
 import { buildSystemPrompt, fallbackDana } from "./prompt";
 import { runScheduledTurn } from "./scheduled";
@@ -33,11 +35,19 @@ import {
 import type { SessionRow } from "./store";
 import { applyApproval, specialistCard, teamCard } from "./teams";
 import type { SpecialistChoice, TeamChoice, World } from "./teams";
-import { prepareDispositionFirstStep, withForcedDisposition } from "./stream";
+import { fallbackDisposition, withOneRetry } from "./stream";
 import type { AttemptControl } from "./stream";
 import { statusAfterDecision } from "./transitions";
 import { diffThread, parseIncoming, toModelMessages } from "./thread";
 import type { DecisionDelta, ThreadDelta } from "./thread";
+import { recallFacts } from "./recall";
+import type { RecalledFact } from "./recall";
+import { runErrand, confirmationFor, decideErrand } from "./errand";
+import type { ErrandResult } from "./errand";
+import { errandContext } from "./errand-context";
+import { fixtureErrandTurn } from "./errand-fixture";
+export { recallFacts } from "./recall";
+export { readSessionDesktop } from "./errand";
 
 export interface Assistant {
   /** POST /api/chat: yields cumulative snapshots of the assistant message (§4.3). */
@@ -54,6 +64,11 @@ export interface ChatRequestBody {
   sessionId: string;
   messages: unknown[];
   fixture?: boolean;
+  /** The composer's picks for this turn; absent means Dana's registry model, thinking off. */
+  model?: string;
+  effort?: ThinkingLevel;
+  /** Incognito threads get no personal-memory recall (CONCEPT §2.9); additive, contract-checked. */
+  incognito?: boolean;
 }
 
 export interface AssistantDeps {
@@ -162,7 +177,7 @@ export function createAssistant(deps: AssistantDeps): Assistant {
 
       // ---- the turn ----
       const fixture = req.fixture || deps.mode === "fixture";
-      const lines = fixture ? fixtureLines(sessionId, session, delta) : liveLines(sessionId, session, delta);
+      const lines = fixture ? fixtureLines(sessionId, session, delta) : liveLines(sessionId, session, delta, { incognito: req.incognito });
       let final: ChatPart[] = [];
       for await (const line of lines) {
         final = line.content;
@@ -172,7 +187,7 @@ export function createAssistant(deps: AssistantDeps): Assistant {
         await insertMessage(db, sessionId, "assistant", final);
         const open = (await listProposals(db, sessionId)).some(
           (p) => p.status === "pending" && final.some((part) => part.type === "tool-call" && part.toolCallId === p.toolCallId),
-        );
+        ) || final.some((part) => part.type === "tool-call" && part.toolName === "confirm_browser" && part.result === undefined);
         await touchSession(db, sessionId, open ? "input" : "unread");
         publish({ type: "registry.changed" }); // the sidebar row's count and status
       }
@@ -182,6 +197,16 @@ export function createAssistant(deps: AssistantDeps): Assistant {
       async function applyDecision(sessionId: string, storedMessages: ThreadMessage[], d: DecisionDelta): Promise<void> {
         const message = storedMessages.find((m) => m.content.some((p) => p.type === "tool-call" && p.toolCallId === d.toolCallId));
         if (!message) return;
+        if (d.toolName === "confirm_browser") {
+          const result = await decideErrand(d.toolCallId, d.decision, {
+            db, writer: deps.writer, publish, sessionId, projectId: session?.projectId,
+            operationKey: d.toolCallId,
+            snapshot: errandContext("Dana confirms a server-stored reservation action.", toModelMessages(storedMessages)),
+            browser: (runId) => ({ model: model(process.env.BROWSER_MODEL || "Haiku 4.5", { thinking: "off", meter: { runId, agentId: "dana", step: "browser" } }) }),
+          });
+          if (result) await setToolResult(db, message.id, d.toolCallId, { decision: d.decision, result });
+          return;
+        }
         const row = pendingFor(await listProposals(db, sessionId), d.toolCallId);
         if (!row) return; // we never stored this call: not ours to decide
         await setToolResult(db, message.id, d.toolCallId, { decision: d.decision });
@@ -197,7 +222,7 @@ export function createAssistant(deps: AssistantDeps): Assistant {
         // discuss (next === "pending"): stays pending while Dana talks it through (CARD-4)
       }
 
-      function fixtureLines(sessionId: string, session: SessionRow | undefined, delta: ReturnType<typeof diffThread>) {
+      function fixtureLines(sessionId: string, session: SessionRow | undefined, delta: ThreadDelta) {
         const ctx: FixtureDeps = {
           sessionId, session, delta,
           pending: [],
@@ -209,6 +234,9 @@ export function createAssistant(deps: AssistantDeps): Assistant {
           propose: async (input) => (await storeProposal(db, { sessionId, ...input })).payload,
           handoff: (input: HandoffInput) => runHandoff(handoffDeps(async (i) => fixtureBrief(i)), input),
         };
+        if (delta.newUserText && /reserv|book.*(?:restaurant|dinner|table|japan)|browser|https?:\/\//i.test(delta.newUserText)) {
+          return fixtureErrandTurn({ db, writer: deps.writer, publish, sessionId, projectId: session?.projectId, goal: delta.newUserText, incognito: req.incognito });
+        }
         return (async function* () {
           const [proposals, view] = await Promise.all([listProposals(db, sessionId), readDanaView(db)]);
           ctx.pending = proposals.filter((p) => p.status === "pending");
@@ -217,21 +245,52 @@ export function createAssistant(deps: AssistantDeps): Assistant {
         })();
       }
 
-      async function* liveLines(sessionId: string, session: SessionRow | undefined, delta: ThreadDelta): AsyncGenerator<ChatStreamLine> {
+      async function* liveLines(sessionId: string, session: SessionRow | undefined, delta: ThreadDelta, opts: { incognito?: boolean } = {}): AsyncGenerator<ChatStreamLine> {
         // Independent reads, one round trip each, in parallel: they sit in front of the first token.
-        const [proposals, dana, view, thread] = await Promise.all([
-          listProposals(db, sessionId), getProfile(db, "dana"), readDanaView(db), listMessages(db, sessionId),
+        // Recall rides along (MEM): the query is this turn's newest user text (the stored tail on a
+        // decision turn), it never blocks a turn (a failure logs and reads as no memory), and
+        // incognito threads get none at all.
+        const threadPromise = listMessages(db, sessionId);
+        const [proposals, dana, view, thread, memory] = await Promise.all([
+          listProposals(db, sessionId), getProfile(db, "dana"), readDanaView(db), threadPromise,
+          (async (): Promise<MemoryRecall | undefined> => {
+            if (opts.incognito) return undefined;
+            const stored = await threadPromise;
+            const query = (delta.newUserText
+              ?? [...stored].reverse().find((m) => m.role === "user")?.content.map((p) => (p.type === "text" ? p.text : "")).join(" ")
+              ?? "").trim();
+            if (!query) return undefined;
+            try {
+              return await recallForDana(db, query);
+            } catch (err) {
+              console.log(`[assistant] recall failed (${err instanceof Error ? err.message : err}); continuing without memory`);
+              return undefined;
+            }
+          })(),
         ]);
         const active = activeToolsFor(delta, proposals);
         const { world } = view;
-        const system = buildSystemPrompt(dana ?? fallbackDana(), view.registry);
+        const system = `${buildSystemPrompt(dana ?? fallbackDana(), view.registry, memory)}\n\nCurrent date in America/Los_Angeles: ${new Intl.DateTimeFormat("en-CA", { timeZone: "America/Los_Angeles" }).format(new Date())}.`;
+        // FABRIC_DEBUG_PROMPT=1 logs what the model actually sees (the memory gate greps it).
+        if (process.env.FABRIC_DEBUG_PROMPT === "1") {
+          console.log(`[assistant] system prompt (${system.length} chars):\n${system}`);
+        }
         const messages = toModelMessages(thread);
+        let routedDirectly = false;
+        let recalled: RecalledFact[] = [];
+        let recallCalled = false;
+        let latestModelMessages: ModelMessage[] = messages;
+        let browserDone: Promise<ErrandResult> | undefined;
 
         const tools: ToolSet = {
           record_disposition: tool({
-            description: "Record how this turn is routed. First call of every turn.",
+            description: "Record how this turn is routed. Call it first, every turn, before any text.",
             inputSchema: dispositionSchema,
-            execute: (args) => recordDisposition(db, sessionId, args),
+            execute: async (args) => {
+              const result = await recordDisposition(db, sessionId, args);
+              routedDirectly = args.disposition === "handle_directly";
+              return result;
+            },
           }),
           // Kept for registries that outgrow the prompt; not active by default (the compact registry
           // is in the system prompt, and a lookup round trip costs a whole model step).
@@ -273,18 +332,51 @@ export function createAssistant(deps: AssistantDeps): Assistant {
               }
             }), {
               sessionId, session, teamName: args.teamName, request: args.request, title: args.title,
+              // Dana's measured context and her handoff snapshot include what she recalled (MEM).
+              ...(memory ? { memory: { content: memory.content, items: memory.items.length } } : {}),
             }).catch((err: unknown) => {
               handoffDone = undefined; // a failed handoff must not poison a retried turn
               throw err;
             })),
           }),
+          recall: tool({
+            description: "Recall only the personal facts relevant to a direct errand. Pass the returned key/value facts to browser_task.",
+            inputSchema: z.object({ query: z.string().min(1).max(1000) }),
+            execute: async ({ query }) => {
+              if (req.incognito) return { facts: [], unavailable: "Personal recall is disabled in incognito." };
+              recalled = await recallFacts(query);
+              recallCalled = true;
+              return { facts: recalled };
+            },
+          }),
+          browser_task: tool({
+            description: "Handle a browser errand directly; bounded private browser loop, streamed Session desktop, ONE compact result. A booking request authorizes real submission.",
+            inputSchema: browserTaskInputSchema,
+            execute: async (input) => {
+              if (!routedDirectly || !recallCalled) throw new Error("First record handle_directly, then recall the necessary facts.");
+              if (input.facts && Object.entries(input.facts).some(([key, value]) => !recalled.some((fact) => fact.key === key && fact.value === value))) {
+                throw new Error("Browser facts must be key/value facts returned by recall.");
+              }
+              const latestUser = [...thread].reverse().find((message) => message.role === "user");
+              return await (browserDone ??= runErrand({
+                ...input,
+                goal: `${input.goal}\nCurrent date (America/Los_Angeles): ${new Intl.DateTimeFormat("en-CA", { timeZone: "America/Los_Angeles" }).format(new Date())}.`,
+                facts: input.facts ?? Object.fromEntries(recalled.map((fact) => [fact.key, fact.value])),
+              }, {
+                db, writer: deps.writer, publish, sessionId, projectId: session?.projectId,
+                operationKey: latestUser?.id ?? sessionId,
+                snapshot: errandContext(system, latestModelMessages),
+                browser: (runId) => ({ model: model(process.env.BROWSER_MODEL || "Haiku 4.5", { thinking: "off", meter: { runId, agentId: "dana", step: "browser" } }) }),
+              }));
+            },
+          }),
         };
 
-        const m = deps.modelFor?.(dana ?? fallbackDana()) ?? model(dana?.agent.model ?? "", { thinking: "off", meter: { agentId: "dana", step: "chat" } });
+        const m = deps.modelFor?.(dana ?? fallbackDana())
+          ?? model(req.model || dana?.agent.model || "", { thinking: req.effort ?? "off", meter: { agentId: "dana", step: "chat" } });
         const allowed = active ?? DEFAULT_TOOLS;
         let handoffDone: Promise<HandoffPayload> | undefined;
         const attempt = async function* (control: AttemptControl): AsyncGenerator<ChatStreamLine> {
-          let yielded = false;
           const turnAbort = new AbortController();
           const stream = streamText({
             model: m,
@@ -294,19 +386,25 @@ export function createAssistant(deps: AssistantDeps): Assistant {
             temperature: TEMPERATURE,
             abortSignal: turnAbort.signal,
             activeTools: allowed,
-            stopWhen: stepCountIs(MAX_STEPS),
-            // DANA 2: record_disposition is forced as the first call of every turn; later steps choose freely.
+            stopWhen: ({ steps }) => steps.length >= (browserDone ? 8 : MAX_STEPS),
+            // DANA 2: the prompt asks for record_disposition first; it isn't forced (Opus 5.5 / Fable 5.1
+            // reject forced tool use), and a turn without one gets a fallback below.
             // activeTools must be re-asserted every step: a step-level prepareStep return
             // overrides the top-level option.
-            prepareStep: ({ stepNumber }) => ({
-              activeTools: allowed,
-              ...prepareDispositionFirstStep(stepNumber),
-            }),
+            prepareStep: ({ messages: stepMessages }) => {
+              latestModelMessages = stepMessages;
+              if (browserDone) return { activeTools: [] };
+              if (routedDirectly && !recallCalled) return {
+                system: `${system}\nFor a browser errand, your next tool call must be recall alone. browser_task is not available yet. For a text-only answer, reply without tools.`,
+                activeTools: allowed.filter((name) => name === "recall"),
+              };
+              return { activeTools: allowed.filter((name) => name !== "browser_task" || (routedDirectly && recallCalled)) };
+            },
           });
           const toolParts: ChatToolCallPart[] = [];
           let text = "";
           let anchor = 0; // non-disposition tool parts that came before the text
-          let dispositionSeen = false;
+          let refused = false; // a step ended on the provider's refusal (finishReason content-filter)
           // Contract turn-enders (§4.3): a propose_* call (human decision pending) and a completed
           // handoff. Live models sometimes keep going past them; Dana's turn ends there.
           let terminal = false;
@@ -368,7 +466,6 @@ export function createAssistant(deps: AssistantDeps): Assistant {
                 args = stored.payload;
                 terminal = true;
               }
-              if (part.toolName === "record_disposition") dispositionSeen = true;
               toolParts.push({ type: "tool-call", toolCallId: part.toolCallId, toolName: part.toolName, args, argsText: JSON.stringify(args) });
             } else if (part.type === "tool-error") {
               console.error(`[assistant] ${part.toolName} failed:`, part.error instanceof Error ? part.error.message : part.error);
@@ -387,6 +484,13 @@ export function createAssistant(deps: AssistantDeps): Assistant {
               const target = toolParts.find((p) => p.toolCallId === part.toolCallId && p.result === undefined);
               if (target) {
                 target.result = part.output;
+                if (target.toolName === "browser_task" && part.output && typeof part.output === "object" && "status" in part.output && part.output.status === "needs_confirmation" && "runId" in part.output) {
+                  const card = await confirmationFor(db, sessionId, String(part.output.runId));
+                  if (card) {
+                    toolParts.push({ type: "tool-call", toolName: "confirm_browser", ...card, argsText: JSON.stringify(card.args) });
+                    terminal = true;
+                  }
+                }
                 if (target.toolName === "handoff_to_team" && isHandoffPayload(part.output)) {
                   target.args = part.output; // the card reads the real ids and personas
                   target.argsText = JSON.stringify(part.output);
@@ -395,35 +499,50 @@ export function createAssistant(deps: AssistantDeps): Assistant {
                 }
               }
             } else {
+              if (part.type === "finish-step" && part.finishReason === "content-filter") refused = true;
               continue;
             }
-            // Hold everything back until the disposition call has landed, so a retried turn never
-            // streams text without one (the UI replaces content per line either way).
-            if (dispositionSeen) {
-              yielded = true;
-              yield snapshot();
-            }
+            // Stream as it comes: the reply no longer waits on the disposition call (a retried turn's
+            // lines replace these on screen, every line being a full snapshot).
+            yield snapshot();
             // A card/handoff may share a step with the disposition call; its result still has to
             // land (the chip shows {recorded: true}) before the turn can end.
             const disposition = toolParts.find((p) => p.toolName === "record_disposition");
-            if (terminal && disposition?.result !== undefined) {
+            if (terminal && (!disposition || disposition.result !== undefined)) {
               yield snapshot();
               turnAbort.abort(); // the turn is complete; nothing may follow the card or the handoff
               break;
             }
           }
           } catch (err) {
-            // A provider that ignores the forced tool choice (seen on the Spark lane) fails before
-            // anything streamed: hand the turn to the one retry instead of failing the request.
-            if (yielded || !(err instanceof ToolChoiceViolationError)) throw err;
-            console.warn(`[assistant] step 0 ignored the forced record_disposition; retrying: ${err.message}`);
+            // An abort after an invalid part is ours; anything else fails the request.
+            if (!control.invalid) throw err;
           }
-          if (!dispositionSeen) control.invalid = true; // nothing usable came out of this attempt
+          if (control.invalid) return;
+          // A refusal won't change on a retry: say so instead of ending the turn empty.
+          if (refused && !text && !toolParts.some((p) => p.toolName !== "record_disposition")) {
+            text = "This model declined the request. Pick another model and send it again.";
+            yield snapshot();
+            return;
+          }
+          if (!text && !toolParts.some((p) => p.toolName !== "record_disposition")) control.invalid = true; // nothing usable
           if (handoffFailed) control.invalid = true; // the handoff never went through: retry the turn once
+          if (control.invalid) return;
+          // The model replied without routing first: record what the turn implies, so the chip, the
+          // dispositions table and the next turn's history all still carry one.
+          if (!toolParts.some((p) => p.toolName === "record_disposition")) {
+            const args = fallbackDisposition(toolParts.map((p) => p.toolName));
+            const result = await recordDisposition(db, sessionId, args);
+            toolParts.unshift({
+              type: "tool-call", toolCallId: `disp-fallback-${Date.now()}`, toolName: "record_disposition",
+              args, argsText: JSON.stringify(args), result,
+            });
+            yield snapshot();
+          }
         };
 
-        yield* withForcedDisposition(attempt, () =>
-          console.warn(`[assistant] unusable first attempt for ${sessionId} (no disposition, or a disallowed tool call); retrying the turn`));
+        yield* withOneRetry(attempt, () =>
+          console.warn(`[assistant] unusable first attempt for ${sessionId} (empty, or a disallowed tool call); retrying the turn`));
       }
     },
 
@@ -455,7 +574,7 @@ export { ensureSession } from "./store";
 const copy = (p: ChatToolCallPart): ChatToolCallPart => ({ ...p });
 
 /** Every turn's tools unless a post-approval step narrows them; search_registry stays off (see tools). */
-const DEFAULT_TOOLS = ["record_disposition", "propose_team", "propose_specialist", "handoff_to_team"];
+const DEFAULT_TOOLS = ["record_disposition", "propose_team", "propose_specialist", "handoff_to_team", "recall", "browser_task"];
 
 /**
  * The canonical post-approval steps (the demo script, D2/D3), as a tool guard rather than hope:
@@ -465,6 +584,7 @@ const DEFAULT_TOOLS = ["record_disposition", "propose_team", "propose_specialist
 function activeToolsFor(delta: ThreadDelta, proposals: { kind: "team" | "specialist" }[]): string[] | undefined {
   const last = delta.decisions[delta.decisions.length - 1];
   if (!last) return undefined;
+  if (last.toolName === "confirm_browser") return ["record_disposition"];
   if (last.toolName === "propose_specialist" && last.decision === "approved") {
     return ["record_disposition", "handoff_to_team"];
   }

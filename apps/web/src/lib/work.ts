@@ -5,6 +5,7 @@ import type { StudioTeam } from "@fabric/contracts";
 import { isActive, stagesAt, type StageState } from "./run-state";
 import { isAsk, weaveItems, type WeaveState } from "./weave-store";
 import type { Run, Task } from "./types";
+import { danaErrandOwner } from "./errand-owner";
 
 /**
  * Work board columns. Teams have different workflows, so the project board uses stages every
@@ -70,7 +71,7 @@ const DECISIONS: Record<string, Record<string, Override>> = {
 };
 
 export const addSeconds = (iso: string, s: number) => new Date(new Date(iso).getTime() + s * 1000).toISOString();
-export const teamById = (id: string) => studioTeams().find((t) => t.id === id)!;
+export const teamById = (id: string) => id === "dana" ? danaErrandOwner : studioTeams().find((t) => t.id === id)!;
 export const leadOf = (team: StudioTeam) => team.members.find((m) => m.lead)!.agentId;
 export const reworkOf = (run: Run) => run.segments.filter((s) => s.kind === "bounce").length;
 

@@ -7,7 +7,7 @@ import type { AppEvent, Brief, HandoffPayload, StudioProfile, StudioTeam } from 
 import { listProjects } from "@fabric/db";
 import type { Db, RunWriter } from "@fabric/db";
 import type { TeamRuntime } from "../team";
-import { measureAssistantContext } from "../context";
+import { assistantContextSections, measureAssistantContext } from "../context";
 import type { BriefInput } from "../context";
 import { getProfile, getTeamByName, projectFor, type SessionRow } from "./store";
 
@@ -59,6 +59,8 @@ export interface HandoffInput {
   title?: string;
   /** The handoff card's line; defaults to the compiled brief's objective (what the team receives). */
   summary?: string;
+  /** What Dana recalled this turn (MEM): counted into her tokens, shown in her snapshot. */
+  memory?: { content: string; items: number };
 }
 
 /** Runs the whole handoff and returns the payload that streams back to the thread. */
@@ -81,12 +83,29 @@ export async function runHandoff(deps: HandoffDeps, input: HandoffInput): Promis
       projectId: project, teamId: team.id, title, sessionId: input.sessionId, recordingKey: deps.recordingKey,
     }),
   ]);
+  const assistantTokens = dana ? measureAssistantContext(dana, input.memory) : brief.tokens;
   const run = await deps.writer.startRun(
     task.id,
     brief,
     { costUsd: 0, timeS: BUDGET_TIME_S, rework: team.reworkBudget },
-    { assistantTokens: dana ? measureAssistantContext(dana) : brief.tokens },
+    { assistantTokens },
   );
+  if (dana) {
+    // Dana's own context, beside each specialist's (INSPECTOR): her files, skills, connectors and —
+    // when this turn recalled any — Personal memory. The specialists' snapshots never change: they
+    // keep listing personal memory under notLoaded, and their sections never contain it (CONCEPT §2.9).
+    await deps.writer.saveSnapshot({
+      runId: run.id,
+      agentId: dana.agent.id,
+      step: "Handoff",
+      assembledAtS: 0,
+      sections: assistantContextSections(dana, input.memory),
+      totalTokens: assistantTokens,
+      tools: [],
+      notLoaded: "the specialists' skills · team knowledge",
+      note: `Dana's base context at the handoff${input.memory ? ", with what she remembered about you" : ""}.`,
+    });
+  }
 
   try {
     await deps.team.startTeamRun(run.id);

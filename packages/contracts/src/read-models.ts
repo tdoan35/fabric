@@ -15,7 +15,7 @@ const ProfileSchema = z.object({
     files: z.array(z.object({ name: z.enum(["SOUL.md", "IDENTITY.md", "USER.md"]), body: z.string() })),
     skills: z.array(z.object({ name: z.string(), description: z.string() })),
     connectors: z.array(z.object({ name: z.string(), note: z.string(), status: z.enum(["connected", "available"]) })),
-    memories: z.array(z.object({ text: z.string(), source: z.string(), when: z.string() })),
+    memories: z.array(z.object({ text: z.string(), source: z.string(), when: z.string(), id: z.string().optional() })),
   }),
 });
 const TeamSchema = z.object({

@@ -6,7 +6,7 @@
 | Owner | Ty Thanh Doan (solo) |
 | Derived from | `CONCEPT.md` (product model), sponsor doc research (Sept 29) |
 | Companion docs | `ARCHITECTURE.md`, `DEMO-SCRIPT.md`, `MOCKUP-GAPS.md` (docs ↔ mockup gap register) |
-| UI | Coded mockup in `apps/web` (Next.js, mock data, no backend) is the UI reference. `fabric-screens.pen` is the earlier design pass. |
+| UI | Coded mockup in `apps/web` (Next.js, mock data, no backend) is the UI reference. `docs/design/fabric-screens.pen` is the earlier design pass. |
 | Rules | Pre-building allowed (per owner; disclose on stage). ~5h15m of on-site hacking (10:30–1:00, 1:45–4:30). Submissions close 4:30 PM. Top 6 teams present. |
 
 `CONCEPT.md` §2 (settled decisions) still binds. This PRD is the demo-thin slice of it. Anything marked **[UNVERIFIED]** rests on an assumption from docs that a spike must confirm. IDs in square brackets, such as [RUN-1], point to `MOCKUP-GAPS.md`.
@@ -136,7 +136,7 @@ The recorded run must come from the *actual* team on the *actual* task at real s
 
 ## 8. UI surfaces (coded mockup in `apps/web`)
 
-The Pencil pass (`fabric-screens.pen`) came first. The coded mockup has since moved past it and is now the reference; the routes below are the mockup's. `MOCKUP-GAPS.md` §4.12 lists what the `.pen` still shows that the mockup lacks.
+The Pencil pass (`docs/design/fabric-screens.pen`) came first. The coded mockup has since moved past it and is now the reference; the routes below are the mockup's. `MOCKUP-GAPS.md` §4.12 lists what the `.pen` still shows that the mockup lacks.
 
 | Screen | Route | Content (mockup) | Open gaps | Priority |
 |---|---|---|---|---|

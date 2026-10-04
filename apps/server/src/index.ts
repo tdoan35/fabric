@@ -4,8 +4,10 @@ import { Hono } from "hono";
 import { cors } from "hono/cors";
 import { logger } from "hono/logger";
 import { corsOrigins, env } from "./env";
+import { warmEmbedder } from "@fabric/agents/memory";
 import { chat } from "./routes/chat";
 import { dev } from "./routes/dev";
+import { memory } from "./routes/memory";
 import { registry } from "./routes/registry";
 import { reports } from "./routes/reports";
 import { runs } from "./routes/runs";
@@ -22,6 +24,7 @@ const api = new Hono()
   .route("/", runs)
   .route("/", schedules)
   .route("/", reports)
+  .route("/", memory)
   .route("/", weave)
   .route("/", stream)
   .route("/", chat);
@@ -35,6 +38,11 @@ app.route("/api", api);
 
 serve({ fetch: app.fetch, port: env.PORT }, (info) => {
   console.log(`fabric server on http://localhost:${info.port} · CORS ${corsOrigins.join(", ")}`);
+  // The embedder loads once (~1–2 s from cache); doing it at boot keeps the first turn's recall to
+  // a query embed (~20–50 ms). A failure only means turns run without memory (recall catches).
+  warmEmbedder()
+    .then(() => console.log("[memory] embedder warm"))
+    .catch((err) => console.log(`[memory] embedder failed to load (${err instanceof Error ? err.message : err}); recall is off`));
 });
 
 startScheduler();

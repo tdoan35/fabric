@@ -207,11 +207,26 @@ export async function assembleContext(i: AssembleInput): Promise<{ system: strin
 
 // ---- Dana's base context (P1-3: runs.assistant_tokens, beside each specialist's own count) ----
 
-/** Dana's per-turn base context: her profile plus her compact capability list, measured with the same counter. */
-export function measureAssistantContext(profile: StudioProfile): number {
+/** What Dana's measured context is made of, for the Inspector's Context tab (MEM adds the last one). */
+export function assistantContextSections(profile: StudioProfile, memory?: { content: string; items: number }): ContextSection[] {
   const files = profile.workspace.files.map((f) => f.body.trim()).join("\n\n");
   const skills = profile.workspace.skills.map((s) => `- ${s.name} — ${s.description}`).join("\n");
   const connectors = profile.workspace.connectors.map((c) => `- ${c.name} — ${c.note}`).join("\n");
-  const rendered = [files, skills && `# Skills\n${skills}`, connectors && `# Connectors\n${connectors}`].filter(Boolean).join("\n\n");
+  return [
+    { label: "Workspace files", source: "SOUL.md · IDENTITY.md · USER.md", content: files },
+    skills && { label: "Skills", source: "capabilities", content: `# Skills\n${skills}` },
+    connectors && { label: "Connectors", source: "accounts", content: `# Connectors\n${connectors}` },
+    memory && { label: "Personal memory", source: `Mnemosyne · ${memory.items} items`, content: memory.content },
+  ].filter((s): s is { label: string; source: string; content: string } => !!s)
+    .map((s) => ({ ...s, tokens: countTokens(s.content).tokens, estimated: true }));
+}
+
+/** Dana's per-turn base context: her profile plus her compact capability list, measured with the same counter. */
+export function measureAssistantContext(profile: StudioProfile, memory?: { content: string; items: number }): number {
+  const files = profile.workspace.files.map((f) => f.body.trim()).join("\n\n");
+  const skills = profile.workspace.skills.map((s) => `- ${s.name} — ${s.description}`).join("\n");
+  const connectors = profile.workspace.connectors.map((c) => `- ${c.name} — ${c.note}`).join("\n");
+  const rendered = [files, skills && `# Skills\n${skills}`, connectors && `# Connectors\n${connectors}`, memory?.content]
+    .filter(Boolean).join("\n\n");
   return countTokens(rendered).tokens;
 }

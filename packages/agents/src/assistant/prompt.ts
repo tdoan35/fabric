@@ -2,6 +2,7 @@
 // registry and a few worked routing examples (ARCH §5: no separate classifier; quality comes from
 // the prompt). Every token here is prefilled on every step, so it stays terse.
 import type { StudioProfile } from "@fabric/contracts";
+import type { MemoryRecall } from "../memory";
 
 export interface RegistryBrief {
   agents: { id: string; name: string; role: string; summary: string }[];
@@ -26,6 +27,17 @@ const ROUTING = `## Every turn
    - handoff_to_team {teamName, request: your one-sentence restatement of what Ty wants, title}:
      once the team (and any specialist you proposed) is approved. The team gets a compiled brief,
      never this chat.
+   - recall {query}: retrieve only the personal facts needed for a direct errand. Never prefill
+     memory or share these facts with specialists.
+     Before EVERY browser_task, call recall first, even for a public page with no personal facts.
+     Invoke record_disposition, recall and browser_task in separate sequential responses, never
+     parallel calls. Only invoke tools currently present in your tool definitions.
+   - browser_task {goal, startUrl?, facts?}: do a browser errand yourself. The browser runs inside
+     the tool; you receive one compact result, not its transcript. Pass only facts from recall.
+     Resolve dates in America/Los_Angeles using the current date supplied for this turn.
+     A reservation request authorizes the final booking; do not ask again unless the tool returns
+     needs_confirmation. Report only observed success, date, time, party size and reference.
+     A blocked/login/SMS/CAPTCHA result is NOT a booking; say what is missing.
    A card or a handoff ENDS the turn: nothing follows it.
 4. A card's decision arrives as its tool result on your next turn. approved → the next step;
    declined → acknowledge (nothing is created) and offer the alternative; discuss → it stays
@@ -34,6 +46,10 @@ const ROUTING = `## Every turn
 ## Examples
 
 - "What's an n-gram, in one line?" → record_disposition(handle_directly) → answer in one line.
+- "Book a reservation at the japanese restaurant near my place tomorrow at 6pm for 2" →
+  record_disposition(handle_directly) → recall("home, usual Japanese restaurant, reservation
+  booking link, name, phone, email, default party size") → browser_task with the request and
+  just those facts → one-line report from the tool result. Never propose a team for a browser errand.
 - An experiment idea (e.g. an n-gram / Engram lookup table on a small open model) →
   record_disposition(propose_team) → one sentence on why a team helps → propose_team named exactly
   "Research Team", roster elliot (the new lead, a free persona), megan, jonah, carlos.
@@ -46,8 +62,8 @@ const ROUTING = `## Every turn
 /** A registry row's first clause: with the role, enough to route on. */
 const firstClause = (s: string) => s.trim().split(/[.:;](?:\s|$)|,\s/)[0];
 
-/** The whole prompt: Dana's files from the DB, the registry in brief, and the routing rules. */
-export function buildSystemPrompt(dana: StudioProfile, registry: RegistryBrief): string {
+/** The whole prompt: Dana's files from the DB, what she remembers about Ty, the registry, the rules. */
+export function buildSystemPrompt(dana: StudioProfile, registry: RegistryBrief, memory?: Pick<MemoryRecall, "content">): string {
   const files = dana.workspace.files.map((f) => f.body.trim()).join("\n\n");
   const others = registry.agents.filter((a) => a.id !== dana.agent.id);
   const agents = others.length
@@ -59,7 +75,7 @@ export function buildSystemPrompt(dana: StudioProfile, registry: RegistryBrief):
   const pool = registry.personaPool.length
     ? registry.personaPool.map((p) => `- ${p.name} · ${p.role} (${p.id})`).join("\n")
     : "- (none: a new member would need a new portrait)";
-  return `${files}
+  return `${files}${memory?.content ? `\n\n${memory.content}` : ""}
 
 ## Who exists (ids in parentheses)
 

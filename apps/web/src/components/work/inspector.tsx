@@ -70,6 +70,9 @@ export function Inspector({ member, run, view, t, snapshots, onClose }: {
 }) {
   const a = agentOf(member.agentId);
   const snap = snapshots.filter((s) => s.agentId === member.agentId && s.assembledAtS <= t).sort((x, y) => y.assembledAtS - x.assembledAtS)[0];
+  // Dana's own base context, recorded at the handoff (MEM): the "Personal memory" row shows what
+  // she recalled. Specialists' snapshots never contain personal memory — theirs says notLoaded.
+  const danaSnap = snapshots.find((s) => s.agentId === "dana" && s.assembledAtS <= t);
   const sandbox = snap?.sandbox ?? SANDBOX[member.agentId];
   const term = member.lines.filter((l) => l.kind === "term");
   const msgs = member.lines.filter((l) => l.kind === "msg");
@@ -151,6 +154,22 @@ export function Inspector({ member, run, view, t, snapshots, onClose }: {
                   ))}
                 </ul>
                 <p className="text-xs text-muted-foreground"><span className="font-medium text-foreground">Not loaded:</span> {snap.notLoaded}</p>
+                {danaSnap && (
+                  <div className="space-y-1 border-t border-foreground/10 pt-3">
+                    <div className="flex items-center justify-between text-xs">
+                      <span className="font-medium">Dana's context</span>
+                      <span className="tabular-nums text-muted-foreground">{danaSnap.totalTokens.toLocaleString()} tokens</span>
+                    </div>
+                    <ul className="divide-y divide-foreground/10 text-xs">
+                      {danaSnap.sections.map((s) => (
+                        <li key={s.label} className="flex items-center gap-2 py-2">
+                          <span className="min-w-0 flex-1"><span className="block font-medium">{s.label}</span><span className="block text-muted-foreground">{s.source}</span></span>
+                          <span className="shrink-0 font-mono tabular-nums">{s.tokens.toLocaleString()}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
               </div>
             )}
           </TabsContent>

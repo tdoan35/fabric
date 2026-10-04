@@ -13,6 +13,8 @@ export { EGRESS_ALLOWLIST, SPRITE_WORKDIR, egressAllowed, sandboxIdFor, spriteFo
 export { exaClient, exaSearch, exaNarration } from "./exa";
 export type { ExaHit, ExaSearchOutcome } from "./exa";
 export { spriteFileReader } from "./tools/sprite";
+export { browserTaskInputSchema, browserTaskResultSchema, browserTaskTool, runBrowserTask, resumeBrowserTask, cancelBrowserTask } from "./tools/browser";
+export type { BrowserTaskInput, BrowserTaskResult, BrowserDeps, BrowserAction, BrowserObservation, BrowserDecision, BrowserUsage, BrowserConfirmation } from "./tools/browser";
 
 /** The AI SDK's tool type — what every entry of AgentTools.tools is (S1: plain AI SDK, not Mastra). */
 export type Tool = import("ai").Tool;

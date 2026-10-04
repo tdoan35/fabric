@@ -12,7 +12,7 @@ function ensure(): NodeJS.ProcessEnv {
   return process.env;
 }
 
-export function env(key: "SPRITES_TOKEN" | "SPRITE_CODER" | "SPRITE_VALIDATOR" | "EXA_API_KEY" | "AGENTMAIL_API_KEY" | "EXECUTOR_URL" | "EXECUTOR_KEY"): string | undefined {
+export function env(key: "SPRITES_TOKEN" | "SPRITE_CODER" | "SPRITE_VALIDATOR" | "SPRITE_ASSISTANT" | "EXA_API_KEY" | "AGENTMAIL_API_KEY" | "EXECUTOR_URL" | "EXECUTOR_KEY"): string | undefined {
   return ensure()[key];
 }
 

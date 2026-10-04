@@ -17,6 +17,9 @@ import { httpMode } from "@/lib/api";
 import { httpAssistant } from "@/lib/chat/http-assistant";
 import { fetchHistory, toRuntimePart } from "@/lib/chat/session";
 import { onSessionMessage } from "@/lib/chat/events";
+import { useSessionDesktop } from "@/lib/chat/desktop";
+import type { SessionDesktop } from "@/lib/chat/events";
+import { apiBase } from "@/lib/api/http";
 import { isFixtureHotkey, toggleFixture } from "@/lib/chat/fixture";
 import { demoMode } from "@/lib/chat/demo";
 import { suggestionPool, type Suggestion } from "@/lib/mock/suggestions";
@@ -27,6 +30,7 @@ import { TeamHero, TeamProfile, teamLead } from "./team-hero";
 import { Composer } from "./composer";
 import { ComposerBar, ConnectorPicker, ContextMeter, ProjectPicker, RunTargetPicker, SessionSettingsProvider } from "./composer-bar";
 import { DispositionChip, HandoffCard, ResultsCard, SpecialistProposalCard, TeamProposalCard } from "./cards";
+import { BrowserConfirmationCard, BrowserTaskStatus, RecallStatus } from "./browser-cards";
 
 const tools = {
   by_name: {
@@ -35,6 +39,9 @@ const tools = {
     propose_specialist: SpecialistProposalCard,
     handoff_to_team: HandoffCard,
     post_results: ResultsCard,
+    browser_task: BrowserTaskStatus,
+    recall: RecallStatus,
+    confirm_browser: BrowserConfirmationCard,
   },
 } as never;
 
@@ -137,11 +144,13 @@ function AgentTabs({ value, onChange, disabled }: { value: Target; onChange: (v:
 
 /** After the first message: the hero portrait + name pill, flown up (same size) in place of the tabs. */
 function AgentChip({ agent, team, incognito, onBackToDana, onProfileToggle }: { agent: ChatAgent; team?: StudioTeam; incognito?: boolean; onBackToDana: () => void; onProfileToggle: () => void }) {
+  // The portrait switches to its working loop while a reply is in flight.
+  const working = useAuiState((s) => s.thread.isRunning);
   return (
     <div className="flex flex-col items-center">
       <button type="button" onClick={onProfileToggle} aria-label={`Toggle ${agent.name}'s profile`} className="group flex flex-col items-center rounded-full outline-none">
         <motion.div layoutId={portraitLayoutId(agent.id)} transition={FLY} className="rounded-full">
-          <Portrait agent={agent} className={cn("size-28 border-[3px] border-foreground/30 transition-[transform,filter] duration-200 group-hover:scale-105 group-hover:animate-[avatar-glow_1.8s_ease-in-out_infinite] group-focus-visible:animate-[avatar-glow_1.8s_ease-in-out_infinite]", incognito && veil)} />
+          <Portrait agent={agent} working={working} className={cn("size-28 border-[3px] border-foreground/30 transition-[transform,filter] duration-200 group-hover:scale-105 group-hover:animate-[avatar-glow_1.8s_ease-in-out_infinite] group-focus-visible:animate-[avatar-glow_1.8s_ease-in-out_infinite]", incognito && veil)} />
         </motion.div>
         <motion.span layoutId={nameLayoutId(agent.id)} transition={FLY} className="relative z-10 -mt-3 block rounded-full border bg-card px-3 py-1 text-sm font-medium shadow-xs">
           {team?.name ?? agent.name}{incognito && " · incognito"}
@@ -212,34 +221,35 @@ function PageActions({ started, incognito, onIncognito, panelOpen, onPanel }: {
   );
 }
 
-/**
- * Live desktop for computer-use / browser-use sessions (VNC or a browser live view).
- * Pass `url` (e.g. a noVNC or Kernel live-view URL) to embed it; with no url it shows the idle state.
- */
-function DesktopView({ url, label = "Desktop" }: { url?: string; label?: string }) {
-  const live = Boolean(url);
+/** A single viewer: live desktop when available, otherwise event-driven step screenshots. */
+function DesktopView({ desktop, label = "Desktop" }: { desktop: SessionDesktop; label?: string }) {
+  const { runId, replay, screenshotArtifactId } = desktop;
+  const url = runId ? desktop.url : null;
+  const live = Boolean(runId) && !replay;
   return (
     <section>
       <div className="mb-2 flex items-center justify-between">
         <h3 className="text-xs font-semibold uppercase text-muted-foreground">{label}</h3>
         <span className={cn("flex items-center gap-1.5 text-[11px]", live ? "text-ok" : "text-muted-foreground")}>
           <span className={cn("size-1.5 rounded-full", live ? "animate-pulse bg-ok" : "bg-muted-foreground/40")} />
-          {live ? "Live" : "Idle"}
+          {runId ? replay ? "Replay" : url ? "Live" : "Running" : "Idle"}
         </span>
       </div>
       <div className="relative aspect-[16/10] overflow-hidden rounded-lg border bg-neutral-950">
-        {live ? (
+        {url ? (
           <>
             <iframe src={url} title={`${label} live view`} className="absolute inset-0 size-full" allow="clipboard-read; clipboard-write" />
             <Button variant="ghost" size="icon" asChild className="absolute right-1.5 top-1.5 size-7 bg-black/40 text-white hover:bg-black/60 hover:text-white">
               <a href={url} target="_blank" rel="noreferrer" aria-label="Open desktop in a new tab"><Maximize2 className="size-3.5" /></a>
             </Button>
           </>
+        ) : runId && screenshotArtifactId ? (
+          <img key={screenshotArtifactId} src={`${apiBase}/api/artifacts/${encodeURIComponent(screenshotArtifactId)}/screenshot`} alt={replay ? "Browser errand replay screenshot" : "Latest browser errand step"} className="absolute inset-0 size-full object-contain" />
         ) : (
           <div className="flex size-full flex-col items-center justify-center gap-1.5 px-6 text-center">
             <Monitor className="size-5 text-neutral-500" />
-            <div className="text-xs font-medium text-neutral-300">No desktop session</div>
-            <div className="text-[11px] leading-snug text-neutral-500">Appears here when an agent uses a computer or browser.</div>
+            <div className="text-xs font-medium text-neutral-300">{runId ? "Waiting for browser view" : "No desktop session"}</div>
+            <div className="text-[11px] leading-snug text-neutral-500">{runId ? "Each browser step appears here as it arrives." : "Appears here when an agent uses a computer or browser."}</div>
           </div>
         )}
       </div>
@@ -248,11 +258,11 @@ function DesktopView({ url, label = "Desktop" }: { url?: string; label?: string 
 }
 
 /** Session tab of the side card: the desktop view plus the settings that lived in the tray. */
-function SessionPanel() {
+function SessionPanel({ desktop }: { desktop: SessionDesktop }) {
   const row = "flex items-center justify-between gap-3";
   return (
     <div className={cn(scrollArea, "flex flex-col gap-6 text-sm")}>
-      <DesktopView />
+      <DesktopView desktop={desktop} />
       <section className="space-y-1">
         <h3 className="mb-1 text-xs font-semibold uppercase text-muted-foreground">Settings</h3>
         <div className={row}><span className="text-muted-foreground">Project</span><ProjectPicker className="-mr-2" /></div>
@@ -277,16 +287,19 @@ export function AssistantThread({ sessionId, initialMessages, agentIndex, onAgen
   sessionId: string; initialMessages: readonly ThreadMessageLike[];
   agentIndex: number; onAgentChange: Dispatch<SetStateAction<number>>; onBackToDana: () => void;
 }) {
+  const [incognito, setIncognito] = useState(false);
   const adapters = useMemo(() => ({
     attachments: new CompositeAttachmentAdapter([new SimpleImageAttachmentAdapter(), new SimpleTextAttachmentAdapter()]),
     dictation: WebSpeechDictationAdapter.isSupported() ? new WebSpeechDictationAdapter() : undefined,
   }), []);
-  const chatModel = useMemo(() => (httpMode ? httpAssistant(sessionId) : mockAssistant), [sessionId]);
-  const runtime = useLocalRuntime(chatModel, { adapters, initialMessages, unstable_humanToolNames: ["propose_team", "propose_specialist"] });
+  // Incognito threads tell the server, which skips personal-memory recall (CONCEPT §2.9).
+  const chatModel = useMemo(() => (httpMode ? httpAssistant(sessionId, { incognito }) : mockAssistant), [sessionId, incognito]);
+  const runtime = useLocalRuntime(chatModel, { adapters, initialMessages, unstable_humanToolNames: ["propose_team", "propose_specialist", "confirm_browser"] });
   return (
     <AssistantRuntimeProvider runtime={runtime}>
       <SessionSettingsProvider>
-        <ThreadBody sessionId={sessionId} agentIndex={agentIndex} onAgentChange={onAgentChange} onBackToDana={onBackToDana} />
+        <ThreadBody sessionId={sessionId} agentIndex={agentIndex} onAgentChange={onAgentChange} onBackToDana={onBackToDana}
+          incognito={incognito} setIncognito={setIncognito} />
       </SessionSettingsProvider>
     </AssistantRuntimeProvider>
   );
@@ -333,13 +346,14 @@ function useFixtureHotkey() {
  * the portrait flies up into the top bar, the composer drops to the bottom, the tray and suggestions
  * hide, and the context meter fades into the composer toolbar.
  */
-function ThreadBody({ sessionId, agentIndex, onAgentChange, onBackToDana }: {
+function ThreadBody({ sessionId, agentIndex, onAgentChange, onBackToDana, incognito, setIncognito }: {
   sessionId: string; agentIndex: number; onAgentChange: Dispatch<SetStateAction<number>>; onBackToDana: () => void;
+  /** Owned by AssistantThread: the chat adapter reads it to skip memory recall while incognito. */
+  incognito: boolean; setIncognito: Dispatch<SetStateAction<boolean>>;
 }) {
   useLiveResults(sessionId);
   useFixtureHotkey();
   const started = useAuiState((st) => !st.thread.isEmpty);
-  const [incognito, setIncognito] = useState(false);
   useRegistry();
   const chatAgents = registryChatAgents();
   const studioTeams = registryTeams();
@@ -362,8 +376,14 @@ function ThreadBody({ sessionId, agentIndex, onAgentChange, onBackToDana }: {
   const [sideOpen, setSideOpen] = useState(false);
   // Last-used tab, so the toggle reopens where you left off. Session is the default once a chat is running.
   const [lastTab, setLastTab] = useState<SideTab>("session");
+  const desktop = useSessionDesktop(sessionId);
+  useEffect(() => {
+    if (!desktop.runId) return;
+    setLastTab("session");
+    setSideOpen(true);
+  }, [desktop.runId]);
   // The Session tab only exists once a chat has started.
-  const sideTab: SideTab = lastTab === "session" && !started ? "agent" : lastTab;
+  const sideTab: SideTab = lastTab === "session" && !started && !desktop.runId ? "agent" : lastTab;
   // Teams mode talks straight to the team's lead; the create slot talks to Dana.
   // Incognito is always Dana, off the record, so it overrides the agent and team pickers.
   const mode: Target = incognito ? "agent" : target;
@@ -427,7 +447,7 @@ function ThreadBody({ sessionId, agentIndex, onAgentChange, onBackToDana }: {
         </div>
       </div>
 
-      <AgentProfilePanel agent={agent} open={sideOpen} tab={sideTab} onTabChange={setLastTab} session={started ? <SessionPanel /> : undefined}
+      <AgentProfilePanel agent={agent} open={sideOpen} tab={sideTab} onTabChange={setLastTab} session={started || desktop.runId ? <SessionPanel desktop={desktop} /> : undefined}
         agentTab={incognito ? <IncognitoInfo agent={agent} onExit={started ? undefined : () => setIncognito(false)} /> : team ? <TeamProfile team={team} /> : undefined}
         agentTabLabel={incognito ? "Incognito" : team ? "Team" : "Agent"} onClose={() => setSideOpen(false)} />
     </ThreadPrimitive.Root>

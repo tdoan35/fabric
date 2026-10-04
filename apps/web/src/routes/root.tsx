@@ -5,7 +5,7 @@ import { api, httpMode, streamUrl } from "@/lib/api";
 import { setRegistry, setWorkData } from "@/lib/registry";
 import { setWeaveSnapshot } from "@/lib/weave-store";
 import { AppEventSchema } from "@fabric/contracts";
-import { publishSessionMessage } from "@/lib/chat/events";
+import { publishSessionDesktop, publishSessionMessage, publishStreamConnected } from "@/lib/chat/events";
 
 export async function rootLoader() {
   const [registry, tasks, runs, weave] = await Promise.all([
@@ -29,6 +29,7 @@ export function RootLayout() {
     const connect = () => {
       if (stopped) return;
       source = new EventSource(streamUrl("/stream"));
+      source.onopen = publishStreamConnected;
       source.addEventListener("app", (message) => {
         try {
           const parsed = AppEventSchema.safeParse(JSON.parse((message as MessageEvent).data));
@@ -45,6 +46,8 @@ export function RootLayout() {
             // The open thread appends it (CHAT-14); the sidebar row's status comes with the registry.
             publishSessionMessage(event);
             void api.getRegistry().then(setRegistry).catch((err) => console.warn("[app stream] registry refresh failed", err));
+          } else if (event.type === "session.desktop") {
+            publishSessionDesktop(event);
           }
         } catch (err) { console.warn("[app stream] parse failed", err); }
       });

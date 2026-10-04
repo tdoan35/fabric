@@ -48,6 +48,8 @@ export {
   updateSchedule,
 } from "./schedules";
 export type { FireWithRun, NewSchedule } from "./schedules";
+export { decideMemory, listMemories, searchMemories, upsertMemories } from "./memory";
+export type { MemoryHit, MemoryList, MemorySearch, MemoryUpsert } from "./memory";
 export type { RunRowLike } from "./read";
 export * as schema from "./schema";
 export type { AgentToolRow } from "./schema";

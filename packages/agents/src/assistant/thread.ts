@@ -22,7 +22,7 @@ export interface IncomingMessage {
 }
 
 /** Human tools whose results arrive as {decision} on the next request (D2). */
-export const HUMAN_TOOLS = new Set(["propose_team", "propose_specialist"]);
+export const HUMAN_TOOLS: Record<string, true> = { propose_team: true, propose_specialist: true, confirm_browser: true };
 
 const parsePart = (p: unknown): IncomingPart | undefined => {
   if (!p || typeof p !== "object") return undefined;
@@ -80,10 +80,10 @@ const decisionOf = (part: IncomingPart): ProposalDecision | undefined => {
 /** Diffs the request against the stored thread. Pure; the persistence layer acts on the result. */
 export function diffThread(stored: ThreadMessage[], incoming: IncomingMessage[]): ThreadDelta {
   // ---- decisions: results on stored human-tool calls that the stored copy doesn't carry yet ----
-  const storedCalls = new Map<string, { result?: unknown }>();
+  const storedCalls = new Map<string, { toolName: string; result?: unknown }>();
   for (const m of stored) {
     for (const p of m.content) {
-      if (p.type === "tool-call") storedCalls.set(p.toolCallId, { result: p.result });
+      if (p.type === "tool-call") storedCalls.set(p.toolCallId, { toolName: p.toolName, result: p.result });
     }
   }
   const decisions: DecisionDelta[] = [];
@@ -91,11 +91,11 @@ export function diffThread(stored: ThreadMessage[], incoming: IncomingMessage[])
     if (m.role !== "assistant") continue;
     for (const p of m.parts) {
       if (p.type !== "tool-call" || !p.toolCallId || !p.toolName) continue;
-      if (!HUMAN_TOOLS.has(p.toolName)) continue;
+      if (!Object.hasOwn(HUMAN_TOOLS, p.toolName)) continue;
       const decision = decisionOf(p);
       if (!decision) continue;
       const known = storedCalls.get(p.toolCallId);
-      if (!known) continue; // the server never stored this call: not ours to decide
+      if (!known || known.toolName !== p.toolName) continue; // call id and human tool must both match
       if (known.result !== undefined) continue; // already applied
       decisions.push({ toolCallId: p.toolCallId, toolName: p.toolName, decision });
     }

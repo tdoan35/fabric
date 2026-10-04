@@ -1,4 +1,5 @@
 import { useSyncExternalStore } from "react";
+import { api } from "@/lib/api";
 import type { ChatAgent, Organization, Project, Registry, Run, Session, StudioProfile, Task } from "@fabric/contracts";
 
 const empty: Registry = { agents: [], communityAgents: [], teams: [], communityTeams: [], organizations: [], projects: [], sessions: [], personaPool: [] };
@@ -17,6 +18,30 @@ export function setProjects(projects: Project[]) { current = { ...current, proje
 
 export const registry = () => current;
 export const profileById = (id: string): StudioProfile => [...current.agents, ...current.communityAgents].find((p) => p.agent.id === id)!;
+
+/**
+ * Keep/Forget on a Memory tab row: the store patches immediately, the API call is the caller's.
+ * A reload refetches /registry, so the server's decision is what survives.
+ */
+export function patchMemory(agentId: string, memoryId: string, decision: "kept" | "forgotten") {
+  const patch = (profiles: StudioProfile[]) => profiles.map((p) => {
+    if (p.agent.id !== agentId) return p;
+    const memories = decision === "forgotten"
+      ? p.workspace.memories.filter((m) => m.id !== memoryId)
+      : [...p.workspace.memories].sort((a, b) => (b.id === memoryId ? 1 : 0) - (a.id === memoryId ? 1 : 0));
+    return { ...p, workspace: { ...p.workspace, memories } };
+  });
+  current = { ...current, agents: patch(current.agents), communityAgents: patch(current.communityAgents) };
+  notify();
+}
+
+/** Forget from a Memory tab: optimistic patch, then the server decision (a failed call warns). */
+export function forgetMemory(agentId: string, memoryId: string) {
+  patchMemory(agentId, memoryId, "forgotten");
+  void api.decideMemory(memoryId, "forgotten").catch((err: unknown) =>
+    console.warn(`[registry] forget failed: ${err instanceof Error ? err.message : err}`));
+}
+
 export const myProfiles = () => current.agents;
 export const communityProfiles = () => current.communityAgents;
 export const studioTeams = () => current.teams;

@@ -159,7 +159,7 @@ function LoopScreen({ task, project, loops, run: initialRun, events: initialEven
   }, [run.id, run.status, run.recording, initialEvents]);
 
   const fastForward = useCallback(async () => {
-    if (httpMode && run.status === "running" && !run.recording) {
+    if (httpMode && run.teamId !== "dana" && run.status === "running" && !run.recording) {
       sourceRef.current?.close(); setStreaming(false);
       const at = clock.t;
       try {
@@ -169,7 +169,7 @@ function LoopScreen({ task, project, loops, run: initialRun, events: initialEven
         clock.fastForwardFrom(at);
       } catch (err) { console.warn("[run] splice failed", err); }
     } else clock.fastForward();
-  }, [run.id, run.status, run.recording, clock]);
+  }, [run.id, run.teamId, run.status, run.recording, clock]);
   useEffect(() => {
     if (!httpMode || run.recording?.spliceT === undefined || run.status !== "running" || clock.t < run.durationS || clock.playing || finalizing.current) return;
     finalizing.current = true;
@@ -216,8 +216,10 @@ function LoopScreen({ task, project, loops, run: initialRun, events: initialEven
             <header>
               <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
                 <Face id={lead} size="size-5" />
-                <Link to={`/work?view=teams&team=${team.id}`} className="font-medium text-foreground hover:underline hover:underline-offset-2">{team.name}</Link>
-                <span>· {agentOf(lead).name} leads · Loop {run.n}{loops.length > 1 && ` of ${loops.length}`} · started {whenFull(run.startedAt)}</span>
+                {run.teamId === "dana"
+                  ? <span className="font-medium text-foreground">Dana · direct errand</span>
+                  : <Link to={`/work?view=teams&team=${team.id}`} className="font-medium text-foreground hover:underline hover:underline-offset-2">{team.name}</Link>}
+                <span>· {run.teamId !== "dana" && <>{agentOf(lead).name} leads · </>}Loop {run.n}{loops.length > 1 && ` of ${loops.length}`} · started {whenFull(run.startedAt)}</span>
               </div>
               <h1 className="mt-1.5 text-xl font-semibold tracking-tight">{run.objective}</h1>
               <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
@@ -310,7 +312,7 @@ function WaitingOnYou({ summary }: { summary: TaskSummary }) {
 /** Budgets as stat tiles: rework and time against their limits, and Dana's own context for scale. */
 function Stats({ run, view, t, summary }: { run: Run; view: RunView; t: number; summary?: TaskSummary }) {
   const reworkBudget = summary?.reworkBudget ?? run.reworkBudget;
-  const spent = view.reworkUsed >= reworkBudget;
+  const spent = reworkBudget > 0 && view.reworkUsed >= reworkBudget;
   const ongoing = run.status === "running" || run.status === "blocked";
   const tile = "min-w-0 space-y-1.5 px-4 py-3";
   return (
@@ -328,7 +330,9 @@ function Stats({ run, view, t, summary }: { run: Run; view: RunView; t: number; 
       <div className={tile}>
         <div className="text-xs text-muted-foreground">Dana's context</div>
         <div className="text-base font-semibold tabular-nums">{(run.assistantTokens / 1000).toFixed(1)}k <span className="text-xs font-normal text-muted-foreground">tokens</span></div>
-        <div className="truncate text-[11px] text-muted-foreground" title="The team got a brief, not your chat">Team brief: {(run.brief.tokens / 1000).toFixed(1)}k</div>
+        {run.teamId === "dana"
+          ? <div className="truncate text-[11px] text-muted-foreground">Browser result only · no inner transcript</div>
+          : <div className="truncate text-[11px] text-muted-foreground" title="The team got a brief, not your chat">Team brief: {(run.brief.tokens / 1000).toFixed(1)}k</div>}
       </div>
     </section>
   );
@@ -396,7 +400,9 @@ function Callouts({ run, view, report, summary }: { run: Run; view: RunView; rep
         <motion.section key="blocked" initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }} className="flex items-start gap-2.5 rounded-xl border border-warn/30 bg-warn-soft/60 p-4 text-sm">
           <OctagonPause className="mt-0.5 size-4 shrink-0 text-warn" />
           <span>
-            <span className="font-medium">Stopped on its budget.</span> {view.blocked.reason}. The escalation went member → lead → Dana → you, and nothing else runs until you decide.
+            {run.teamId === "dana"
+              ? <><span className="font-medium">Browser stopped.</span> {view.blocked.reason}</>
+              : <><span className="font-medium">Stopped on its budget.</span> {view.blocked.reason}. The escalation went member → lead → Dana → you, and nothing else runs until you decide.</>}
             {summary?.outcome && <span className="mt-1 block text-xs text-muted-foreground">You decided in Weave: {summary.outcome.text}</span>}
           </span>
         </motion.section>

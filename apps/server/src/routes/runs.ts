@@ -2,12 +2,22 @@
 import { Hono } from "hono";
 import { streamSSE } from "hono/streaming";
 import { SpliceRequestSchema } from "@fabric/contracts";
-import type { RunEvent } from "@fabric/contracts";
+import type { Run, RunEvent } from "@fabric/contracts";
 import { getRunRow, listSnapshots, mergedEvents, readRun, sql } from "@fabric/db";
 import { hub } from "../services/hub";
 import { runtime } from "../services/runtime";
 import { finalizeRun } from "../services/finalize";
 import { spliceRun } from "../services/splice";
+// Errand capabilities and operation state stay server-side in budget JSON.
+// Project only the public budget and linkage; reuse the already-loaded row.
+function publicRun(run: Run) {
+  const budget = run.budget;
+  const errand = "kind" in budget && budget.kind === "errand" && "sessionId" in budget && typeof budget.sessionId === "string";
+  return {
+    ...run, budget: { costUsd: budget.costUsd, timeS: budget.timeS },
+    ...(errand ? { kind: "errand", sessionId: budget.sessionId } : {}),
+  };
+}
 
 /** One SSE connection tailing a run: replay seq > after, then live. Hub wakes instantly for
  *  same-process emits; the 400 ms poll catches other writers (sim runs in its own process). */
@@ -18,13 +28,13 @@ export const runs = new Hono()
     const out = [];
     for (const { id } of rows) {
       const run = await readRun(runtime().db, id);
-      if (run) out.push(run);
+      if (run) out.push(publicRun(run));
     }
     return c.json(out);
   })
   .get("/runs/:id", async (c) => {
     const run = await readRun(runtime().db, c.req.param("id"));
-    return run ? c.json(run) : c.json({ error: "run not found" }, 404);
+    return run ? c.json(publicRun(run)) : c.json({ error: "run not found" }, 404);
   })
   .get("/runs/:id/events", async (c) => {
     const { db } = runtime();

@@ -3,12 +3,14 @@
 // always derive from step events (RUN-7) — never stored.
 import { asc, desc, eq, sql } from "drizzle-orm";
 import type {
-  ContextSnapshot, Organization, PersonaPoolEntry, Project, Registry, Report, Run, RunEvent,
+  ContextSnapshot, Organization, PersonaPoolEntry, Project, PulseEntry, Registry, Report, Run, RunEvent,
   Session, StudioProfile, StudioTeam, Task, WeaveSnapshot,
 } from "@fabric/contracts";
 import type { Db } from "./db";
 import { agents, artifacts, contextSnapshots, organizations, orgHandoffs, orgSlots, personaPool, projects, reports, runEvents, runs, sessions, tasks, teams, teamMembers, weaveCalendar, weaveItems, weavePresence, weavePulse } from "./schema";
 import { rowToRun } from "./writer";
+import { listMemories } from "./memory";
+import type { MemoryHit } from "./memory";
 import { spliceEvents } from "./splice";
 
 export interface RunRowLike {
@@ -110,6 +112,21 @@ export async function latestRecordingRun(db: Db, key: string): Promise<RunRowLik
 
 // ---- Registry ----
 
+/** "Sep 28", like the seeded workspace memories carry. */
+const day = (d: Date | null) => d?.toLocaleDateString("en-US", { month: "short", day: "numeric" }) ?? "";
+
+/** A memories row as the Studio/chat Memory tabs show it; `id` is what Keep/Forget address. */
+const workspaceMemory = (m: MemoryHit) => ({ text: m.text, source: m.source, when: day(m.eventAt ?? m.createdAt), id: m.id });
+
+/** Dana's Memory tab is the import (MEM), not the seeded JSON — but only once the import exists:
+ * on branches without it, the seeded workspace JSON keeps serving (and the fixtures still match). */
+const withMemories = (r: typeof agents.$inferSelect, memories: MemoryHit[]): StudioProfile => {
+  const p = profileFromRow(r);
+  return r.id === "dana" && memories.length
+    ? { ...p, workspace: { ...p.workspace, memories: memories.map(workspaceMemory) } }
+    : p;
+};
+
 const profileFromRow = (r: typeof agents.$inferSelect): StudioProfile => ({
   agent: {
     id: r.id, name: r.name, role: r.role, avatar: r.avatar ?? undefined, tone: r.tone, summary: r.summary,
@@ -133,7 +150,7 @@ const teamFromRow = (r: typeof teams.$inferSelect, members: (typeof teamMembers.
 });
 
 export async function readRegistry(db: Db): Promise<Registry> {
-  const [agentRows, teamRows, memberRows, orgRows, slotRows, handoffRows, projectRows, sessionRows, poolRows] = await Promise.all([
+  const [agentRows, teamRows, memberRows, orgRows, slotRows, handoffRows, projectRows, sessionRows, poolRows, memoryRows] = await Promise.all([
     db.db.select().from(agents).where(sql`status = 'active'`).orderBy(asc(agents.ord)),
     db.db.select().from(teams).orderBy(asc(teams.ord)),
     db.db.select().from(teamMembers).orderBy(asc(teamMembers.ord)),
@@ -143,6 +160,7 @@ export async function readRegistry(db: Db): Promise<Registry> {
     listProjects(db),
     db.db.select().from(sessions).orderBy(asc(sessions.ord)),
     db.db.select().from(personaPool).orderBy(asc(personaPool.ord)),
+    listMemories(db, { scopeId: "dana", limit: 20 }),
   ]);
   const orgList: Organization[] = orgRows.map((o) => ({
     id: o.id, name: o.name, headId: o.headId,
@@ -156,8 +174,8 @@ export async function readRegistry(db: Db): Promise<Registry> {
   }));
   const poolList: PersonaPoolEntry[] = poolRows.map((p) => ({ id: p.id, name: p.name, role: p.role, avatar: p.avatar }));
   return {
-    agents: agentRows.filter((a) => !a.community).map(profileFromRow),
-    communityAgents: agentRows.filter((a) => a.community).map(profileFromRow),
+    agents: agentRows.filter((a) => !a.community).map((r) => withMemories(r, memoryRows)),
+    communityAgents: agentRows.filter((a) => a.community).map((r) => withMemories(r, memoryRows)),
     teams: teamRows.filter((t) => !t.community).map((t) => teamFromRow(t, memberRows.filter((m) => m.teamId === t.id))),
     communityTeams: teamRows.filter((t) => t.community).map((t) => teamFromRow(t, memberRows.filter((m) => m.teamId === t.id))),
     organizations: orgList,
@@ -170,15 +188,22 @@ export async function readRegistry(db: Db): Promise<Registry> {
 // ---- Weave ----
 
 export async function readWeave(db: Db): Promise<WeaveSnapshot> {
-  const [itemRows, pulseRows, presenceRows, calendarRows] = await Promise.all([
+  const [itemRows, pulseRows, presenceRows, calendarRows, memoryRows] = await Promise.all([
     db.db.select().from(weaveItems).orderBy(asc(weaveItems.ord)),
     db.db.select().from(weavePulse).orderBy(asc(weavePulse.ord)),
     db.db.select().from(weavePresence).orderBy(asc(weavePresence.ord)),
     db.db.select().from(weaveCalendar).orderBy(asc(weaveCalendar.ord)),
+    // The pulse's memory cards are the newest real rows (MEM), so Keep/Forget hit the table;
+    // the seeded entries above keep working unchanged (their entries carry no memoryId).
+    listMemories(db, { scopeId: "dana", limit: 3, recent: true }),
   ]);
+  const memoryPulse: PulseEntry[] = memoryRows.map((m) => ({
+    id: m.id, at: (m.eventAt ?? m.createdAt).toISOString(), kind: "memory", agentId: "dana",
+    text: m.text, source: m.source, memoryId: m.id,
+  }));
   return {
     items: itemRows.map((i) => i.data),
-    pulse: pulseRows.map((p) => p.data),
+    pulse: [...pulseRows.map((p) => p.data), ...memoryPulse],
     presence: presenceRows.map((p) => p.data),
     calendar: calendarRows.map((c) => c.data),
   };

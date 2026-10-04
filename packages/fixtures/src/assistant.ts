@@ -9,7 +9,7 @@ export const dana: ChatAgent = {
   summary: "Your single point of contact. Decides whether to answer, ask, or delegate, and proposes specialists and teams for you to approve.",
   personality: "Warm, organized and direct. Keeps replies short, asks before creating anything, and flags what she handed off and to whom.",
   traits: ["Warm", "Organized", "Proactive", "Discreet"],
-  model: "Sonnet 5.5",
+  model: "GLM 5.3 Flash",
   contextTokens: 2140,
   memory: [
     { label: "Personal preferences", value: "2 items" },
@@ -30,6 +30,7 @@ export const dana: ChatAgent = {
     frames: 73,
     fps: 12,
     still: "/dana/happy-idle-still.webp",
+    working: { strip: "/dana/working-strip.webp", frames: 73, fps: 12 },
   },
 };
 

@@ -2,28 +2,38 @@ import type { CSSProperties } from "react";
 import type { SpriteAvatar } from "@/lib/mock/assistant";
 import { cn } from "@/lib/utils";
 
+type Loop = { strip: string; frames: number; fps: number };
+
+const loopStyle = ({ frames, fps }: Loop) => ({
+  width: `${frames * 100}%`,
+  "--sprite-end": `${-((frames - 1) / frames) * 100}%`,
+  animation: `sprite-strip ${frames / fps}s steps(${frames}, jump-none) infinite alternate`,
+}) as CSSProperties;
+
 /**
- * Round profile container that plays a sprite-strip idle loop.
- * - The still sits underneath, so there is never an empty frame while the strip loads.
+ * Round profile container that plays a sprite-strip loop: the idle loop, or the working loop while `working`.
+ * - The still sits underneath, so there is never an empty frame while a strip loads.
  * - Plays forward then backward (alternate) so the loop has no visible seam.
- * - Reduced motion: the strip is hidden and only the still shows.
+ * - Both strips stay mounted (the inactive one display:none) so switching never waits on a download.
+ * - Reduced motion: the strips are hidden and only the still shows.
  */
-export function AgentAvatar({ avatar, name, className }: { avatar: SpriteAvatar; name: string; className?: string }) {
+export function AgentAvatar({ avatar, name, working = false, className }: { avatar: SpriteAvatar; name: string; working?: boolean; className?: string }) {
   const { strip, frames, fps } = avatar;
-  const animated = strip && frames && fps;
-  const style = animated
-    ? ({
-        width: `${frames * 100}%`,
-        "--sprite-end": `${-((frames - 1) / frames) * 100}%`,
-        animation: `sprite-strip ${frames / fps}s steps(${frames}, jump-none) infinite alternate`,
-      } as CSSProperties)
-    : undefined;
+  const idle: Loop | undefined = strip && frames && fps ? { strip, frames, fps } : undefined;
+  const busy = working && !!avatar.working;
+  const loops = [
+    idle && { key: "idle", loop: idle, active: !busy },
+    avatar.working && { key: "working", loop: avatar.working, active: busy },
+  ].filter((l) => !!l);
   return (
-    <div className={cn("relative size-28 shrink-0 overflow-hidden rounded-full bg-ok-soft shadow-sm", className)} role="img" aria-label={name}>
+    <div className={cn("relative size-28 shrink-0 overflow-hidden rounded-full bg-ok-soft shadow-sm", className)} role="img" aria-label={working ? `${name}, working` : name}>
       <img src={avatar.still} alt="" className="absolute inset-0 size-full object-cover" draggable={false} />
-      {animated && (
-        <img src={strip} alt="" decoding="async" draggable={false} style={style} className="absolute left-0 top-0 h-full max-w-none will-change-transform motion-reduce:hidden" />
-      )}
+      {loops.map(({ key, loop, active }) => (
+        <img
+          key={key} src={loop.strip} alt="" decoding="async" draggable={false} style={loopStyle(loop)}
+          className={cn("absolute left-0 top-0 h-full max-w-none will-change-transform motion-reduce:hidden", !active && "hidden")}
+        />
+      ))}
     </div>
   );
 }

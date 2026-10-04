@@ -4,7 +4,7 @@
 |---|---|
 | Status | v1 — first reconciliation |
 | Date | 2026-10-01 |
-| Compared | `CONCEPT.md`, `PRD.md`, `ARCHITECTURE.md`, `DEMO-SCRIPT.md` ↔ the coded mockup in `apps/web` (Next.js, mock data, no backend) and the earlier Pencil pass `fabric-screens.pen` |
+| Compared | `CONCEPT.md`, `PRD.md`, `ARCHITECTURE.md`, `DEMO-SCRIPT.md` ↔ the coded mockup in `apps/web` (Next.js, mock data, no backend) and the earlier Pencil pass `docs/design/fabric-screens.pen` |
 | Method | Read every file under `apps/web/src`; clicked through every route and every proposal-card branch in a browser; timed the replay; checked each doc section against it |
 
 The coded mockup is now the UI reference. It is **ahead** of the docs in most places (personas, sessions, Agent Studio, Teams, Organizations) and **behind** them in a few demo-critical ones (results message, org handoff edge, replay timing). Each gap has a resolution:
@@ -215,7 +215,7 @@ Unwired controls (no-ops): Search sessions, Start a group chat, voice conversati
 | DATA-6 | Tool names disagree: the inspector says `email.send` (Coder: approval; Validator: blocked) while Studio says `agentmail.send` (Sana: approval). Jonah's Studio tools leave it out, and `team.assign` appears only in Studio. | Fix mock; Docs updated — ARCHITECTURE §9 (canonical list) | Low |
 | DATA-7 | ARCHITECTURE §4's event list leaves out `run.blocked`, which §6 emits. | Docs updated | — |
 | DATA-8 | The repo layout differs from the plan. The root isn't a git repo; `apps/web` is its own repo (one commit plus uncommitted work); there's no `packages/`. The docs sit at the root rather than in `docs/`, and there's an `assets/` folder and a `scripts/build-sprite.sh`. | Docs updated — ARCHITECTURE §13 | — |
-| DATA-9 | The actual stack is Next 16.3.8 (per `apps/web/AGENTS.md`, its APIs differ from older Next), React 19.2, assistant-ui 0.15, shadcn 4 ("radix-nova", neutral), Tailwind 4 and motion 13. | Docs updated — ARCHITECTURE §3 | — |
+| DATA-9 | The actual stack is Next 16.3.8 (per `AGENTS.md`, its APIs differ from older Next), React 19.2, assistant-ui 0.15, shadcn 4 ("radix-nova", neutral), Tailwind 4 and motion 13. | Docs updated — ARCHITECTURE §3 | — |
 | DATA-10 | The avatar pipeline: `scripts/build-sprite.sh` turns an MP4 into a WebP strip plus a still (12 fps, 192 px). Dana has a 73-frame idle loop; everyone else is a still, and reduced motion shows Dana's still too. | Docs updated — ARCHITECTURE §13 | — |
 
 ### 4.11 Visual direction & behaviour
@@ -227,7 +227,7 @@ Unwired controls (no-ops): Search sessions, Start a group chat, voice conversati
 
 ### 4.12 `.pen` vs mockup
 
-`fabric-screens.pen` has 7 frames — Assistant — proposal, Assistant — handoff, Run view, Context inspector, Report, Org view and Components — and predates the coded mockup. Where they differ, the mockup wins, except for ORG-1 and CARD-3, where the `.pen` shows what still has to be built. The `.pen` has:
+`docs/design/fabric-screens.pen` has 7 frames — Assistant — proposal, Assistant — handoff, Run view, Context inspector, Report, Org view and Components — and predates the coded mockup. Where they differ, the mockup wins, except for ORG-1 and CARD-3, where the `.pen` shows what still has to be built. The `.pen` has:
 
 - **Nav:** Assistant / Agents / Teams / Work, with an "Assistant context · 2.1k tokens" chip in the Assistant header.
 - **Handoff card:** View work · Message lead · Pause, plus a rework/criteria footer.

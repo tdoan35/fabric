@@ -18,6 +18,7 @@ const DISPOSITION_LABEL: Record<Disposition, string> = {
 };
 
 export function DispositionChip({ args }: ToolCallMessagePartProps<{ disposition: Disposition; reason: string }>) {
+  if (args.disposition === "handle_directly") return null;
   return (
     <div className="mb-1.5 flex items-center gap-1.5 text-[11px] text-muted-foreground" title={args.reason}>
       <span className="size-1.5 rounded-full bg-foreground/60" />
