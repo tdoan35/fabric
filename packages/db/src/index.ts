@@ -34,6 +34,7 @@ export type { Db } from "./db";
 export { sql } from "drizzle-orm";
 export { createRunWriterWith, emitAt, slugId, rowToRun } from "./writer";
 export { deriveSegments } from "./derive";
+export { openStepsAt, spliceEvents } from "./splice";
 export { importRecording, exportRecording } from "./recordings";
 export { provisionTeam } from "./provision";
 export type { ProvisionTeamInput, ProvisionTeamResult } from "./provision";
