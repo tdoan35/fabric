@@ -102,7 +102,7 @@ export async function finalizeRun(runId: string): Promise<{ reportId: string } |
   }
 
   const outcome = run.outcome ?? "Accepted.";
-  const endedAt = run.ended_at ?? new Date();
+  const endedAt = run.ended_at ? new Date(run.ended_at) : new Date(); // pg hands back strings
   const durationS = run.duration_s != null ? Number(run.duration_s) : (endedAt.getTime() - new Date(run.started_at).getTime()) / 1000;
   await db.db.execute(sql`
     update runs set status = ${status}, ended_at = ${endedAt.toISOString()}, duration_s = ${durationS},

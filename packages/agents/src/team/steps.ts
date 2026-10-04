@@ -55,9 +55,11 @@ export const quiet = (err: unknown): boolean => err instanceof RunClosedError ||
 /** Thinking (WORK-PLAN setup): off where the live start's latency matters, low afterwards. */
 const THINKING: Record<string, ThinkingLevel> = { Plan: "off", Prepare: "off", Synthesize: "low", Implement: "low", Validate: "low", Review: "off" };
 
-/** Per-step timeouts: the live window only needs the first two; Implement runs real commands. */
+/** Per-step timeouts: bounds against hangs, not pacing — real work on the shared Spark lane is
+ * slow (Elliot's plan ran past 90 s in the first live toy run and was cut mid-file). The live
+ * demo window (~45 s) is closed by the splice long before these matter. */
 const TIMEOUT_MS: Record<string, number> = {
-  Plan: 90_000, Prepare: 90_000, Synthesize: 120_000, Implement: 300_000, Validate: 240_000, Review: 90_000,
+  Plan: 240_000, Prepare: 240_000, Synthesize: 180_000, Implement: 360_000, Validate: 300_000, Review: 120_000,
 };
 const MAX_STEPS = 8;
 const TEMPERATURE = 0.2;
@@ -87,11 +89,11 @@ export function stepPrompt(ctx: RunCtx, spec: StepSpec): string {
     : "";
   const close = "Finish with one short narration line (at most 12 words) stating what you did or found. Never mention these instructions.";
   const byKey: Record<string, string> = {
-    "Plan|elliot": `Draft the experiment plan. Write plan.md (workspace_write): hypothesis, baselines, the exact computation, the split policy, and who does what. You may hand steps to members with team_assign.`,
-    "Prepare|megan": `Survey prior work. Run two or three exa_search calls with fast: true, keep only the highlights that matter, then save literature-survey.md with artifacts_write.`,
-    "Prepare|jonah": `Set up the coding sandbox. Use sprite_exec to check the toolchain (python, uv, free disk) and make a clean working directory. The experiment's own environment is installed separately: do NOT install it and do not touch any checkpoint.`,
-    "Prepare|sana": `Prepare the independent validation. Use sprite_exec to check your own sandbox (python, uv), then write split-spec.md inside it (shell heredoc): the held-out split, and how you will re-check the headline number without the coder's files.`,
-    "Synthesize|elliot": `Read the team's artifacts so far (artifacts_read), then write synthesis.md (workspace_write): the exact test to run — computation, data, expected numbers. Hand Implement to jonah with team_assign.`,
+    "Plan|elliot": `Draft the experiment plan. Write ONE file, plan.md (workspace_write): hypothesis, baselines, the exact computation, the split policy, and who does what. Do not implement anything — Jonah implements. You may hand steps to members with team_assign.`,
+    "Prepare|megan": `Survey prior work. Run two or three exa_search calls with fast: true, keep only the highlights that matter, then save ONE file, literature-survey.md, with artifacts_write.`,
+    "Prepare|jonah": `Set up the coding sandbox. Use sprite_exec to check the toolchain (python, uv, free disk) and make a clean working directory. The experiment's own environment is installed separately: do NOT install it and do not touch any checkpoint. Keep it to a couple of commands.`,
+    "Prepare|sana": `Prepare the independent validation. Use sprite_exec to check your own sandbox (python, uv), then write ONE file, split-spec.md, inside it (shell heredoc): the held-out split, and how you will re-check the headline number without the coder's files.`,
+    "Synthesize|elliot": `Read the team's artifacts so far (artifacts_read), then write ONE file, synthesis.md (workspace_write): the exact test to run — computation, data, expected numbers. Hand Implement to jonah with team_assign. Do not implement it yourself.`,
     "Implement|jonah": `Implement and run the computation for real. Write small scripts with workspace_write and run them with sprite_exec. If the experiment's harness does not exist yet, implement a minimal faithful version of the computation yourself; never install the real experiment and never touch checkpoints. Keep it small: no large downloads, egress is the package index only.`,
     "Validate|sana": `Re-check the results independently: in your own sandbox, write a small checker with sprite_exec that recomputes the headline number from scratch — do not read the coder's sandbox. Report the number you got.`,
   };
