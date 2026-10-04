@@ -95,10 +95,20 @@ const post = async (path: string, body: unknown) => {
   return res;
 };
 
-/** One turn: returns the final cumulative snapshot and how long the turn took end to end. */
-async function turn(sessionId: string, messages: unknown[], fixture: boolean): Promise<{ parts: Part[]; ms: number }> {
+/**
+ * When each piece of a turn first reached the client, in ms from the POST: the disposition chip,
+ * the first text, the card (a propose_* part) or the handoff (with its result), and the stream end.
+ */
+interface Timing { disposition?: number; text?: number; card?: number; done: number }
+
+/** One turn: returns the final cumulative snapshot, how long the turn took end to end, and its timing. */
+async function turn(sessionId: string, messages: unknown[], fixture: boolean): Promise<{ parts: Part[]; ms: number; timing: Timing }> {
   const started = Date.now();
   const res = await post("/api/chat", { sessionId, messages, ...(fixture ? { fixture: true } : {}) });
+  const timing: Timing = { done: 0 };
+  const mark = (key: Exclude<keyof Timing, "done">, seen: boolean) => {
+    if (seen && timing[key] === undefined) timing[key] = Date.now() - started;
+  };
   let parts: Part[] = [];
   let buf = "";
   for await (const chunk of res.body!) {
@@ -112,10 +122,14 @@ async function turn(sessionId: string, messages: unknown[], fixture: boolean): P
       if (Array.isArray(snapshot.content)) {
         parts = snapshot.content;
         lastParts = JSON.stringify(parts.map((p) => ({ t: p.type, n: p.toolName, r: p.result !== undefined })));
+        mark("disposition", parts.some((p) => p.toolName === "record_disposition"));
+        mark("text", parts.some((p) => p.type === "text" && !!p.text));
+        mark("card", parts.some((p) => p.toolName === "propose_team" || p.toolName === "propose_specialist" || (p.toolName === "handoff_to_team" && p.result !== undefined)));
       }
     }
   }
-  return { parts, ms: Date.now() - started };
+  timing.done = Date.now() - started;
+  return { parts, ms: timing.done, timing };
 }
 const userMsg = (text: string) => ({ role: "user", content: [{ type: "text", text }] });
 
@@ -316,6 +330,7 @@ const latencies: string[] = [];
 }
 
 // ---- Live phase: the same happy path on the real lane, N times, sequential ----
+const timings: { pass: number; turn: string; timing: Timing }[] = [];
 if (live) {
   info(`9. live · ${times}× the happy path on the model lane (sequential; 8-request lane)`);
   let pass = 0;
@@ -335,6 +350,7 @@ if (live) {
     const members = await q(pooled, "select count(*) as n from team_members where team_id = 'research'");
     const personas = await q(pooled, "select count(*) as n from agents where id in ('elliot','sana')");
     ok(members[0].n === "5" && personas[0].n === "2", `live ${i}: the team, Elliot and Sana exist (5 members)`);
+    timings.push({ pass: i, turn: "idea", timing: t1.timing }, { pass: i, turn: "approve-team", timing: t2.timing }, { pass: i, turn: "approve-specialist", timing: t3.timing });
     const wall = ((Date.now() - t0) / 1000).toFixed(1);
     latencies.push(`live ${i}: idea ${t1.ms} ms · approve-team ${t2.ms} ms · approve-spec ${t3.ms} ms · total ${wall} s`);
     pass++;
@@ -345,6 +361,26 @@ if (live) {
 
 console.log(`\nlatencies:`);
 for (const l of latencies) console.log(`  ${l}`);
+if (timings.length) printTimingTable(timings);
 console.log(`\ncheck:chat PASSED in ${((Date.now() - startedAll) / 1000).toFixed(1)}s · branch ${branch}${live ? " · live" : " · fixture"}`);
 stopAll();
 process.exit(0);
+
+/** The live per-turn timing table (markdown, so it pastes into status/dana.md), plus medians. */
+function printTimingTable(rows: { pass: number; turn: string; timing: Timing }[]) {
+  const sec = (ms?: number) => (ms === undefined ? "—" : `${(ms / 1000).toFixed(1)} s`);
+  const median = (xs: number[]) => {
+    const s = [...xs].sort((a, b) => a - b);
+    return s.length ? (s.length % 2 ? s[(s.length - 1) / 2] : (s[s.length / 2 - 1] + s[s.length / 2]) / 2) : undefined;
+  };
+  const cols = ["disposition", "text", "card", "done"] as const;
+  console.log(`\nlive timing (from the POST; card = propose_* part, or the handoff with its result):\n`);
+  console.log("| pass | turn | disposition | text | card / handoff | done |");
+  console.log("|---|---|---|---|---|---|");
+  for (const r of rows) console.log(`| ${r.pass} | ${r.turn} | ${cols.map((c) => sec(r.timing[c])).join(" | ")} |`);
+  for (const t of [...new Set(rows.map((r) => r.turn))]) {
+    const of = rows.filter((r) => r.turn === t);
+    const med = cols.map((c) => sec(median(of.map((r) => r.timing[c]).filter((v): v is number => v !== undefined))));
+    console.log(`| median | ${t} | ${med.join(" | ")} |`);
+  }
+}
