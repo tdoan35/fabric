@@ -23,18 +23,6 @@ export async function spliceRun(runId: string, t: number): Promise<SpliceResult>
   const recording = await latestRecordingRun(db, key);
   if (!recording) return { ok: false, status: 404, error: `no recording with key ${key}` };
 
-  const team = runtime().team();
-  if (team) {
-    try {
-      await team.cancelRun(runId);
-    } catch (err) {
-      if (err instanceof NotImplementedError) console.log(`[splice] TEAM cancelRun not implemented yet; run ${runId} stays marked running`);
-      else console.log(`[splice] cancelRun failed, continuing: ${String(err)}`);
-    }
-  } else {
-    console.log(`[splice] TEAM runtime not implemented yet; run ${runId} stays marked running`);
-  }
-
   const updated = await db.db.execute(sql`
     update runs set spliced_from_run_id = ${recording.id}, splice_t = ${t},
                      recording_key = ${recording.recording_key}, recording_kind = ${recording.recording_kind},
@@ -43,13 +31,19 @@ export async function spliceRun(runId: string, t: number): Promise<SpliceResult>
     returning id`);
   if (updated.rows.length !== 1) return { ok: false, status: 409, error: `${runId} was already spliced` };
 
+  // The stamp above closes the run: from here every late emit fails with RunClosedError, and the
+  // merged log drops anything after splice_t. So the team is cancelled in the background — the
+  // Fast-forward click doesn't wait for in-flight model calls to unwind.
+  const team = runtime().team();
+  if (team) {
+    void team.cancelRun(runId).catch((err: unknown) => {
+      if (err instanceof NotImplementedError) console.log(`[splice] TEAM cancelRun not implemented yet; run ${runId} stays marked running`);
+      else console.log(`[splice] cancelRun failed, continuing: ${String(err)}`);
+    });
+  }
+
   hub.publishApp({ type: "run.changed", runId });
   const row = (await getRunRow(db, runId))!;
-  return {
-    ok: true,
-    body: {
-      run: rowToRun(row, await mergedEvents(db, row), Date.now()),
-      events: await mergedEvents(db, row),
-    },
-  };
+  const events = await mergedEvents(db, row);
+  return { ok: true, body: { run: rowToRun(row, events, Date.now()), events } };
 }
