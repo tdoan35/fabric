@@ -81,7 +81,7 @@ export function createRunWriterWith(db: Db, hooks: RunWriterHooks = {}): RunWrit
       });
     },
 
-    async startRun(taskId, brief, budget) {
+    async startRun(taskId, brief, budget, opts) {
       const runId = await db.db.transaction(async (tx) => {
         await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${`task:${taskId}`}, 0))`);
         const taskRow = await tx.execute(sql`select team_id from tasks where id = ${taskId}`);
@@ -93,7 +93,7 @@ export function createRunWriterWith(db: Db, hooks: RunWriterHooks = {}): RunWrit
         await tx.execute(sql`
           insert into runs (id, task_id, team_id, n, objective, status, brief, budget, rework_budget, assistant_tokens, started_at)
           values (${id}, ${taskId}, ${teamId}, ${n}, ${brief.objective}, 'running', ${JSON.stringify(brief)}::jsonb,
-                  ${JSON.stringify(budget)}::jsonb, ${budget.rework}, ${brief.tokens}, now())`);
+                  ${JSON.stringify(budget)}::jsonb, ${budget.rework}, ${opts?.assistantTokens ?? brief.tokens}, now())`);
         return id;
       });
       await emitRow(db, hooks, runId, "run.started", undefined, { objective: brief.objective });
