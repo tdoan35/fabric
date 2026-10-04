@@ -27,7 +27,9 @@ async function emitRow(
   const parsed = parseRunEventPayload(type, payload) as Record<string, unknown>;
   for (let attempt = 1; ; attempt++) {
     try {
-      return await db.db.transaction(async (tx) => {
+      // The transaction returns the event; onEvent fires only after it commits, so subscribers
+      // never see a rolled-back row and the SSE wakeup query reads durable data.
+      const event = await db.db.transaction(async (tx) => {
         // Serialize concurrent emits for the same run (TEAM's parallel steps).
         await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${runId}, 0))`);
         const state = await tx.execute(sql`
@@ -46,10 +48,10 @@ async function emitRow(
         if (type === "budget.update" && typeof payload.costUsd === "number") {
           await tx.execute(sql`update runs set cost_usd = greatest(cost_usd, ${payload.costUsd}) where id = ${runId}`);
         }
-        const event: RunEvent = { runId, seq, t, type, actorAgentId, payload: parsed };
-        hooks.onEvent?.(event);
-        return event;
+        return { runId, seq, t, type, actorAgentId, payload: parsed } as RunEvent;
       });
+      hooks.onEvent?.(event);
+      return event;
     } catch (err) {
       if (err instanceof RunClosedError) throw err;
       const notFound = err instanceof Error && /not found/i.test(err.message);
