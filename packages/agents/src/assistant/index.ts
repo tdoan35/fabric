@@ -276,6 +276,9 @@ export function createAssistant(deps: AssistantDeps): Assistant {
               }
             }), {
               sessionId, session, teamName: args.teamName, request: args.request, title: args.title, summary: args.summary,
+            }).catch((err: unknown) => {
+              handoffDone = undefined; // a failed handoff must not poison a retried turn
+              throw err;
             })),
           }),
         };
@@ -357,6 +360,9 @@ export function createAssistant(deps: AssistantDeps): Assistant {
                 args = stored.payload;
               }
               toolParts.push({ type: "tool-call", toolCallId: part.toolCallId, toolName: part.toolName, args, argsText: JSON.stringify(args) });
+            } else if (part.type === "tool-error") {
+              console.error(`[assistant] ${part.toolName} failed:`, part.error instanceof Error ? part.error.message : part.error);
+              if (part.toolName === "handoff_to_team") control.invalid = true; // retry the turn once
             } else if (part.type === "tool-result") {
               const target = toolParts.find((p) => p.toolCallId === part.toolCallId && p.result === undefined);
               if (target) {
