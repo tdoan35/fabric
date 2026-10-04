@@ -39,7 +39,7 @@ export function RootLayout() {
             revalidateRef.current();
           } else if (event.type === "weave.changed") {
             void api.getWeave().then(setWeaveSnapshot).catch((err) => console.warn("[app stream] weave refresh failed", err));
-          } else if (event.type === "task.changed" || event.type === "run.changed") {
+          } else if (event.type === "task.changed" || event.type === "run.changed" || event.type === "schedule.changed") {
             revalidateRef.current();
           } else if (event.type === "session.message") {
             // The open thread appends it (CHAT-14); the sidebar row's status comes with the registry.

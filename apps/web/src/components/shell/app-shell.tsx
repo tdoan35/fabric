@@ -1,6 +1,6 @@
 import { Link, useLocation } from "react-router";
 import { useEffect, useRef, useState } from "react";
-import { Hammer, Briefcase, ChevronRight, Folder, FolderOpen, Archive, Moon, MoreHorizontal, Sun, Pin, PinOff, Trash2, PanelLeftClose, PanelLeftOpen, Search, Settings, Spool, SquareKanban, SquarePen } from "lucide-react";
+import { Briefcase, CalendarClock, ChevronRight, Folder, FolderOpen, Hammer, Archive, Moon, MoreHorizontal, Sun, Pin, PinOff, Trash2, PanelLeftClose, PanelLeftOpen, Search, Settings, Spool, SquareKanban, SquarePen } from "lucide-react";
 import {
   Sidebar, SidebarContent, SidebarFooter, SidebarGroup, SidebarGroupContent, SidebarGroupLabel, SidebarHeader, SidebarInset,
   SidebarMenu, SidebarMenuAction, SidebarMenuBadge, SidebarMenuButton, SidebarMenuItem, SidebarMenuSub, SidebarMenuSubButton, SidebarMenuSubItem, SidebarProvider, useSidebar,
@@ -29,6 +29,7 @@ const nav = [
   { href: "/", label: "New thread", icon: SquarePen, match: (p: string) => p === "/" },
   { href: "/weave", label: "Weave", icon: Spool, match: (p: string) => p.startsWith("/weave"), badge: true },
   { href: "/agents", label: "Agent Studio", icon: Hammer, match: (p: string) => p.startsWith("/agents") },
+  { href: "/schedule", label: "Schedule", icon: CalendarClock, match: (p: string) => p.startsWith("/schedule") },
   { href: "/work", label: "Work", icon: Briefcase, match: (p: string) => p.startsWith("/work") || p.startsWith("/runs") || p.startsWith("/reports") },
 ];
 

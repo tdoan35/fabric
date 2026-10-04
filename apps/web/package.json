@@ -16,9 +16,9 @@
     "electron:dist": "tsc && vite build && electron-builder"
   },
   "dependencies": {
+    "@assistant-ui/react": "^0.15.22",
     "@fabric/contracts": "*",
     "@fabric/fixtures": "*",
-    "@assistant-ui/react": "^0.15.22",
     "@fontsource-variable/atkinson-hyperlegible-next": "^5.3.0",
     "@fontsource-variable/fira-code": "^5.3.0",
     "@fontsource-variable/geist": "^5.3.0",
@@ -31,6 +31,7 @@
     "@fontsource/ibm-plex-mono": "^5.3.0",
     "class-variance-authority": "^0.7.1",
     "cn": "^0.4.0",
+    "croner": "^10.0.1",
     "lucide-react": "^1.49.0",
     "motion": "^13.4.6",
     "radix-ui": "^1.6.7",

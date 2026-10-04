@@ -1,8 +1,11 @@
 import {
-  ChatStreamLineSchema, ContextSnapshotSchema, ProjectSchema, RegistrySchema, ReportSchema,
-  RunEventSchema, RunSchema, SessionMessagesSchema, TaskSchema, WeaveSnapshotSchema,
-  type ChatRequest, type ChatStreamLine, type ContextSnapshot, type FinalizeResponse, type Project, type Registry, type Report, type Run, type RunEvent,
-  type SessionMessages, type SpliceResponse, type Task, type WeaveSnapshot,
+  ChatStreamLineSchema, ContextSnapshotSchema, OccurrenceSchema, ProjectSchema, RegistrySchema, ReportSchema,
+  RunEventSchema, RunSchema, ScheduleFireSchema, ScheduleSchema, SessionMessagesSchema, TaskSchema,
+  WeaveSnapshotSchema,
+  type ChatRequest, type ChatStreamLine, type ContextSnapshot, type FinalizeResponse, type Occurrence,
+  type Project, type Registry, type Report, type Run, type RunEvent, type Schedule, type ScheduleFire,
+  type ScheduleInput, type SchedulePatch, type SessionMessages, type SpliceResponse, type Task,
+  type WeaveSnapshot,
 } from "@fabric/contracts";
 import { z } from "zod";
 
@@ -61,6 +64,7 @@ async function* chatStream(body: ChatRequest, signal?: AbortSignal): AsyncGenera
 }
 const spliceSchema = z.object({ run: RunSchema, events: z.array(RunEventSchema) });
 const finalizeSchema = z.object({ reportId: z.string() });
+const okSchema = z.object({ ok: z.boolean() });
 
 export const httpApi = {
   getRegistry: () => request<Registry>("/registry", RegistrySchema),
@@ -76,6 +80,19 @@ export const httpApi = {
   getReport: (id: string) => request<Report | undefined>(`/reports/${encodeURIComponent(id)}`, ReportSchema, undefined, true),
   spliceRun: (id: string, t: number) => request<SpliceResponse>(`/runs/${encodeURIComponent(id)}/splice`, spliceSchema, json({ t })),
   finalizeSplice: (id: string) => request<FinalizeResponse>(`/runs/${encodeURIComponent(id)}/finalize-splice`, finalizeSchema, json({})),
+  // Schedules (SCH): the routines and the occurrences read model.
+  listSchedules: () => request<Schedule[]>("/schedules", z.array(ScheduleSchema)),
+  createSchedule: (input: ScheduleInput) => request<Schedule>("/schedules", ScheduleSchema, json(input)),
+  updateSchedule: (id: string, patch: SchedulePatch) =>
+    request<Schedule>(`/schedules/${encodeURIComponent(id)}`, ScheduleSchema, { ...json(patch), method: "PATCH" }),
+  deleteSchedule: (id: string) =>
+    request<{ ok: boolean }>(`/schedules/${encodeURIComponent(id)}`, okSchema, { method: "DELETE" }),
+  runScheduleNow: (id: string) =>
+    request<ScheduleFire>(`/schedules/${encodeURIComponent(id)}/run`, ScheduleFireSchema, json({})),
+  skipOccurrence: (id: string, at: string) =>
+    request<ScheduleFire>(`/schedules/${encodeURIComponent(id)}/skip`, ScheduleFireSchema, json({ at })),
+  listOccurrences: (from: string, to: string) =>
+    request<Occurrence[]>(`/schedules/occurrences?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`, z.array(OccurrenceSchema)),
   // Chat (UI-CHAT): Dana's thread. Http mode only; mock mode streams the scripted adapter instead.
   chat: chatStream,
   getSessionMessages: (id: string) => request<SessionMessages>(`/sessions/${encodeURIComponent(id)}/messages`, SessionMessagesSchema),
