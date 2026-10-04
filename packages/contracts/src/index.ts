@@ -3,6 +3,7 @@
 export * from "./domain";
 export * from "./registry";
 export * from "./weave";
+export * from "./schedule";
 export * from "./tools";
 export * from "./events";
 export * from "./api";
