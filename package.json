@@ -2,7 +2,10 @@
   "name": "fabric",
   "private": true,
   "type": "module",
-  "workspaces": ["apps/*", "packages/*"],
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
   "scripts": {
     "dev": "node scripts/dev.mjs",
     "dev:web": "npm run dev -w web",
@@ -12,7 +15,10 @@
     "test": "npm run test --workspaces --if-present",
     "lint": "npm run lint -w web",
     "seed": "npm run seed -w @fabric/db --",
-    "smoke": "node scripts/smoke.mjs"
+    "smoke": "node scripts/smoke.mjs",
+    "sim": "tsx scripts/sim-run.ts",
+    "export-recording": "tsx scripts/export-recording.ts",
+    "check:data": "node scripts/check-data.mjs"
   },
   "devDependencies": {
     "@types/node": "^20",
