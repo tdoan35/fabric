@@ -87,35 +87,62 @@ function LoopScreen({ task, project, loops, run: initialRun, events: initialEven
   const markers = useMemo(() => runMarkers(events), [events]);
   const stops = useMemo(() => markers.filter((mk) => mk.kind === "bounce" || mk.kind === "accept").map((mk) => mk.t), [markers]);
   const clock = useRunClock(run.durationS, start, stops, httpMode && run.status === "running" && !run.recording ? run.startedAt : undefined, !httpMode || !run.recording);
-  const view = useMemo(() => projectRun(run, events, clock.t), [run, events, clock.t]);
+  // A live run's open lanes end at the last fetch's "now"; stretch them to the ticking clock so a
+  // member who is still working reads as working between step events.
+  const liveRun = httpMode && run.status === "running" && !run.recording;
+  const shown = useMemo(() => (!liveRun || clock.max <= run.durationS ? run : {
+    ...run,
+    durationS: clock.max,
+    segments: run.segments.map((s) => (s.end >= run.durationS - 0.5 ? { ...s, end: clock.max } : s)),
+  }), [liveRun, run, clock.max]);
+  const view = useMemo(() => projectRun(shown, events, clock.t), [shown, events, clock.t]);
   const [selected, setSelected] = useState<string>();
   const member = view.members.find((m) => m.agentId === selected);
   const isLatest = run.id === summary.latest?.id;
-  const domain = laneDomain(run, clock.t, (start === "sim" || !!liveZoom) && clock.source === "live");
+  const domain = laneDomain(shown, clock.t, (start === "sim" || !!liveZoom) && clock.source === "live");
 
   useEffect(() => {
     if (!httpMode || run.status !== "running" || run.recording) return;
     let closed = false;
     let retry: ReturnType<typeof setTimeout> | undefined;
+    const refetch: { run?: ReturnType<typeof setTimeout>; snapshots?: ReturnType<typeof setTimeout> } = {};
     const connect = () => {
       if (closed) return;
       const source = new EventSource(streamUrl(`/runs/${encodeURIComponent(run.id)}/stream?after=${lastSeq.current}`));
       sourceRef.current = source;
       source.onopen = () => setStreaming(true);
+      // Bursts (a terminal streaming, four lanes at once) arrive faster than the loop view should
+      // re-render: buffer events and flush them together, and debounce the refetches they trigger.
+      let pending: RunEvent[] = [];
+      let flushTimer: ReturnType<typeof setTimeout> | undefined;
+      const flush = () => {
+        flushTimer = undefined;
+        if (closed || !pending.length) return;
+        const batch = pending;
+        pending = [];
+        setEvents((prior) => [...(prior ?? initialEvents), ...batch]);
+      };
+      const later = (key: "run" | "snapshots", fn: () => void) => {
+        if (refetch[key]) return;
+        refetch[key] = setTimeout(() => { refetch[key] = undefined; if (!closed) fn(); }, 400);
+      };
       source.addEventListener("run", (message) => {
         const parsed = RunEventSchema.safeParse(JSON.parse((message as MessageEvent).data));
         if (!parsed.success) { console.warn("[run stream] invalid event", parsed.error.issues); return; }
         const event = parsed.data;
         if (event.seq <= lastSeq.current) return;
         lastSeq.current = event.seq;
-        setEvents((prior) => [...(prior ?? initialEvents), event]);
+        pending.push(event);
+        flushTimer ??= setTimeout(flush, 200);
         if (event.type === "step.started" || event.type === "step.finished") {
-          void api.getRun(run.id).then((next) => { if (!closed && next) setRun(next); });
+          later("run", () => void api.getRun(run.id).then((next) => { if (!closed && next) setRun(next); }));
         }
         if (event.type === "context.snapshot") {
-          void api.getSnapshots(run.id).then((next) => { if (!closed) setSnapshots(next); });
+          later("snapshots", () => void api.getSnapshots(run.id).then((next) => { if (!closed) setSnapshots(next); }));
         }
         if (event.type === "run.finished") {
+          if (flushTimer) clearTimeout(flushTimer);
+          flush();
           source.close(); setStreaming(false);
           void api.getRun(run.id).then((next) => { if (!closed && next) setRun(next); });
         }
@@ -123,7 +150,12 @@ function LoopScreen({ task, project, loops, run: initialRun, events: initialEven
       source.onerror = () => { source.close(); setStreaming(false); if (!closed) retry = setTimeout(connect, 1000); };
     };
     connect();
-    return () => { closed = true; sourceRef.current?.close(); setStreaming(false); if (retry) clearTimeout(retry); };
+    return () => {
+      closed = true; sourceRef.current?.close(); setStreaming(false);
+      if (retry) clearTimeout(retry);
+      if (refetch.run) clearTimeout(refetch.run);
+      if (refetch.snapshots) clearTimeout(refetch.snapshots);
+    };
   }, [run.id, run.status, run.recording, initialEvents]);
 
   const fastForward = useCallback(async () => {
@@ -199,7 +231,7 @@ function LoopScreen({ task, project, loops, run: initialRun, events: initialEven
             {/* The live start replays the loop's beginning, so today's asks about it would be out of place. */}
             {isLatest && start !== "sim" && <WaitingOnYou summary={summary} />}
 
-            <Stats run={run} view={view} t={clock.t} summary={isLatest ? summary : undefined} />
+            <Stats run={shown} view={view} t={clock.t} summary={isLatest ? summary : undefined} />
 
             <section className={cn(card, "overflow-hidden")}>
               <div className="px-4 pb-3 pt-4">
@@ -213,11 +245,11 @@ function LoopScreen({ task, project, loops, run: initialRun, events: initialEven
                 <h2 className="text-sm font-medium">Who did what</h2>
                 <span className="ml-auto"><LanesLegend /></span>
               </div>
-              <Lanes run={run} team={team} view={view} t={clock.t} domain={domain} selected={selected} onSelect={(id) => setSelected((s) => (s === id ? undefined : id))} />
+              <Lanes run={shown} team={team} view={view} t={clock.t} domain={domain} selected={selected} onSelect={(id) => setSelected((s) => (s === id ? undefined : id))} />
               <Transport clock={{ ...clock, fastForward: () => { void fastForward(); } }} max={clock.max} markers={markers} start={run.recording?.spliceT !== undefined ? "end" : start} />
             </section>
 
-            <Callouts run={run} view={view} report={report} summary={isLatest ? summary : undefined} />
+            <Callouts run={shown} view={view} report={report} summary={isLatest ? summary : undefined} />
 
             {view.artifacts.length > 0 && (
               <section>
@@ -237,7 +269,7 @@ function LoopScreen({ task, project, loops, run: initialRun, events: initialEven
             <AnimatePresence mode="wait" initial={false}>
               <motion.div key={member?.agentId ?? "brief"} className="min-h-0 flex-1 overflow-y-auto" initial={{ opacity: 0, x: 8 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: -8 }} transition={{ duration: 0.16 }}>
                 {member
-                  ? <Inspector member={member} run={run} view={view} t={clock.t} snapshots={snapshots} onClose={() => setSelected(undefined)} />
+                  ? <Inspector member={member} run={shown} view={view} t={clock.t} snapshots={snapshots} onClose={() => setSelected(undefined)} />
                   : <BriefPanel run={run} criteria={view.criteria} teamName={team.name} />}
               </motion.div>
             </AnimatePresence>
