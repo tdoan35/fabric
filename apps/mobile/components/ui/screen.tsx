@@ -1,13 +1,18 @@
 import type { PropsWithChildren } from "react";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { StyleSheet } from "react-native";
-import { theme } from "@/lib/theme";
+import { AuroraBackground } from "./aurora";
 
-/** Full-height dark surface below any native header / tab bar. */
+/** Full-height surface below any native header / tab bar, over the web's aurora backdrop. */
 export function Screen({ children }: PropsWithChildren) {
-  return <SafeAreaView style={styles.screen} edges={["left", "right", "bottom"]}>{children}</SafeAreaView>;
+  return (
+    <SafeAreaView style={styles.screen} edges={["left", "right", "bottom"]}>
+      <AuroraBackground />
+      {children}
+    </SafeAreaView>
+  );
 }
 
 const styles = StyleSheet.create({
-  screen: { flex: 1, backgroundColor: theme.colors.background, paddingHorizontal: 16 },
+  screen: { flex: 1, backgroundColor: "#020617", paddingHorizontal: 16 },
 });

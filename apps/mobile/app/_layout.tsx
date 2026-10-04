@@ -35,7 +35,8 @@ export default function RootLayout() {
         <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
         <Stack.Screen name="weave/[id]" options={{ title: "Weave" }} />
         <Stack.Screen name="report/[id]" options={{ title: "Report" }} />
-        <Stack.Screen name="chat" options={{ title: "Dana" }} />
+        <Stack.Screen name="thread/[id]" options={{ title: "Thread" }} />
+        <Stack.Screen name="threads" options={{ title: "Threads" }} />
         <Stack.Screen name="debug" options={{ title: "Debug" }} />
       </Stack>
     </ThemeProvider>
