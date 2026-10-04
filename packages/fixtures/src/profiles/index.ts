@@ -1,12 +1,13 @@
 // Seed profiles (WORK-PLAN §4.8): the exact world each branch resets to.
 // `demo` is the pre-approval state (SEED-1 clean); `lived-in` is today's mock world.
 // Both derive from the same fixtures the web's mock mode reads, so lived-in matches the mock.
-import type { ContextSnapshot, InboxItem, Organization, PersonaPoolEntry, Presence, Project, PulseEntry, Run, RunEvent, Session, StudioProfile, StudioTeam, Task } from "@fabric/contracts";
+import type { ContextSnapshot, InboxItem, Organization, PersonaPoolEntry, Presence, Project, PulseEntry, Run, RunEvent, Schedule, ScheduleFire, Session, StudioProfile, StudioTeam, Task } from "@fabric/contracts";
 import { communityProfiles, elliot, myProfiles, sana } from "../studio";
 import { communityTeams, organizations, studioTeams } from "../teams";
 import { projects, sessions } from "../sessions";
 import { allSnapshots, runEventsById, runs, tasks } from "../work";
 import { calendarEvents, inboxSeed, presenceSeed, pulseSeed } from "../weave";
+import { scheduleFires, scheduleSessions, schedules as allSchedules } from "../schedules";
 
 /** A loop the seed inserts as-is (the recorded 135M one comes from its bundle import instead). */
 export interface SeededRun {
@@ -30,6 +31,9 @@ export interface SeedWorld {
   /** Recording bundle keys to import; `attach` optionally links the recording to an existing task. */
   recordings: { key: string; attachTaskId?: string }[];
   weave: { items: InboxItem[]; pulse: PulseEntry[]; presence: Presence[]; calendar: typeof calendarEvents };
+  /** SCH: the seeded routines and their past fires. Demo keeps Dana's digest only (SEED-1: no Research Team). */
+  schedules: Schedule[];
+  scheduleFires: ScheduleFire[];
 }
 
 /** D3/CARD-8: approving the team and specialist authorizes the handoff — no approval of its own. */
@@ -112,7 +116,7 @@ export function buildDemoWorld(): SeedWorld {
       },
     ],
     projects,
-    sessions: sessions.filter((s) => s.id !== "p1" && s.id !== "s9"), // no Elliot / Research Team threads
+    sessions: [...sessions.filter((s) => s.id !== "p1" && s.id !== "s9"), scheduleSessions[0]], // no Elliot / Research Team threads; the digest thread is fine
     tasks: [], // §4.8: no tasks before approval
     runs: [],
     recordings: [{ key: "ngram-135m" }], // taskless: nothing behind it can play yet
@@ -124,6 +128,8 @@ export function buildDemoWorld(): SeedWorld {
       presence: presenceSeed.filter((p) => agentIds.has(p.agentId) && !absentTeamAgents.has(p.agentId) && (!p.itemId || itemIds.has(p.itemId))),
       calendar: calendarEvents.filter((e) => !LEAK.test(e.title) && !TASK_REF.test(e.title)),
     },
+    schedules: allSchedules.slice(0, 1), // Dana's digest; the sweep and pulse would leak the Research Team
+    scheduleFires: scheduleFires.filter((f) => f.scheduleId === "morning-digest"),
   };
 }
 
@@ -140,10 +146,12 @@ export function buildLivedInWorld(): SeedWorld {
     communityTeams,
     organizations,
     projects,
-    sessions,
+    sessions: [...sessions, ...scheduleSessions],
     tasks,
     runs: seededRuns,
     recordings: [{ key: "ngram-135m", attachTaskId: "ngram-135m" }],
     weave: { items: inboxSeed, pulse: pulseSeed, presence: presenceSeed, calendar: calendarEvents },
+    schedules: allSchedules,
+    scheduleFires,
   };
 }
