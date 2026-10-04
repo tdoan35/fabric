@@ -1,6 +1,6 @@
 import { data, useLoaderData, type LoaderFunctionArgs } from "react-router";
 import { TaskScreen } from "@/components/work/loop-view";
-import { api } from "@/lib/api";
+import { api, httpMode } from "@/lib/api";
 import type { ClockStart } from "@/lib/use-run-clock";
 
 /** `?loop=N` picks a loop (the latest by default); `?live=1` plays a recorded loop as the live start. */
@@ -14,9 +14,9 @@ export async function taskLoader({ params, request }: LoaderFunctionArgs) {
   const [events, snapshots, report] = run
     ? await Promise.all([api.getRunEvents(run.id), api.getSnapshots(run.id), run.reportId ? api.getReport(run.reportId) : undefined])
     : [[], [], undefined];
-  const start: ClockStart = run && search.get("live") === "1" && run.recorded ? "sim"
-    : run && (run.status === "running" || run.status === "blocked") ? "now" : "end";
-  return { task, project: projects.find((p) => p.id === task.projectId)!, loops, run, events, snapshots, report, start };
+  const start: ClockStart = !httpMode && run && search.get("live") === "1" && run.recorded ? "sim"
+    : run && (run.status === "running" || (!httpMode && run.status === "blocked")) ? "now" : "end";
+  return { task, project: projects.find((p) => p.id === task.projectId)!, loops, run, events, snapshots, report, start, liveZoom: search.get("live") === "1" };
 }
 
 export function TaskPage() {

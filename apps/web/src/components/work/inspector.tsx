@@ -4,7 +4,7 @@ import { policyStyle } from "@/components/chat/assistant-hero";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Face, NameRole, agentOf } from "@/components/weave/parts";
-import { profileById } from "@/lib/mock/studio";
+import { profileById } from "@/lib/registry";
 import { fmtClock, fmtSpan, type MemberState, type MemberView, type RunView } from "@/lib/run-state";
 import type { ContextSection, ContextSnapshot, Run } from "@/lib/types";
 import { cn } from "@/lib/utils";
@@ -36,6 +36,7 @@ function Terminal({ lines }: { lines: MemberView["lines"] }) {
 
 /** The text a context section actually contained, rebuilt from the same sources the run used (RUN-5). */
 function sectionText(section: ContextSection, ctx: { agentId: string; run: Run; snap: ContextSnapshot; artifacts: RunView["artifacts"] }) {
+  if (section.content !== undefined) return section.content;
   const { brief } = ctx.run;
   switch (section.label) {
     case "Soul / identity":
@@ -69,6 +70,7 @@ export function Inspector({ member, run, view, t, snapshots, onClose }: {
 }) {
   const a = agentOf(member.agentId);
   const snap = snapshots.filter((s) => s.agentId === member.agentId && s.assembledAtS <= t).sort((x, y) => y.assembledAtS - x.assembledAtS)[0];
+  const sandbox = snap?.sandbox ?? SANDBOX[member.agentId];
   const term = member.lines.filter((l) => l.kind === "term");
   const msgs = member.lines.filter((l) => l.kind === "msg");
   const denied = view.denied.filter((d) => d.by === member.agentId);
@@ -84,7 +86,7 @@ export function Inspector({ member, run, view, t, snapshots, onClose }: {
           <Face id={member.agentId} size="size-9" />
           <div className="min-w-0 flex-1">
             <NameRole id={member.agentId} className="block text-sm" />
-            <div className="truncate text-xs text-muted-foreground">{origin ?? "Existing agent"}{SANDBOX[member.agentId] && " · Sprite sandbox"}</div>
+            <div className="truncate text-xs text-muted-foreground">{origin ?? "Existing agent"}{sandbox && " · Sprite sandbox"}</div>
           </div>
           <span className={cn("shrink-0 rounded-full px-2 py-0.5 text-[11px] font-medium", STATE_PILL[member.state])}>{pillText}</span>
         </div>
@@ -97,7 +99,7 @@ export function Inspector({ member, run, view, t, snapshots, onClose }: {
         </TabsList>
         <div className="min-h-0 flex-1 overflow-y-auto p-4">
           <TabsContent value="activity" className="mt-0 space-y-3">
-            {SANDBOX[member.agentId] && <div className="font-mono text-[11px] text-muted-foreground">{SANDBOX[member.agentId]}</div>}
+            {sandbox && <div className="font-mono text-[11px] text-muted-foreground">{sandbox}</div>}
             {term.length > 0 && <Terminal lines={term} />}
             {msgs.length > 0 && (
               <ul className="space-y-2 text-xs">
