@@ -49,9 +49,8 @@ async function emitRow(
     } catch (err) {
       const notFound = err instanceof Error && /not found/i.test(err.message);
       if (attempt >= 5 || notFound) throw err;
-      const { promise, resolve } = Promise.withResolvers<void>();
-      setTimeout(resolve, 25 * attempt);
-      await promise;
+      // Executor form, not Promise.withResolvers: consumers type-check this source under ES2023 libs.
+      await new Promise<void>((resolve) => setTimeout(resolve, 25 * attempt));
     }
   }
 }
@@ -153,7 +152,7 @@ export function rowToRun(row: RunRowLike, events: Parameters<typeof deriveSegmen
     n: Number(row.n),
     objective: row.objective,
     status: row.status as Run["status"],
-    startedAt: new Date(row.started_at).toISOString(),
+    startedAt: row.started_at_text ?? new Date(row.started_at).toISOString(),
     recorded: row.recorded,
     durationS: Math.round(durationS),
     etaS: row.eta_s != null ? Number(row.eta_s) : undefined,

@@ -16,15 +16,16 @@ export interface RunRowLike {
   rework_budget: number; assistant_tokens: number; outcome: string | null; report_id: string | null;
   cost_usd: string; eta_s: string | null; duration_s: string | null; recorded: boolean;
   recording_key: string | null; recording_kind: string | null; spliced_from_run_id: string | null;
-  splice_t: string | null; finalized_at: Date | null; started_at: Date; ended_at: Date | null;
+  splice_t: string | null; finalized_at: Date | null; started_at: Date; started_at_text: string | null; ended_at: Date | null;
 }
 
 const eventFromRow = (r: { runId: string; seq: number; t: string; type: RunEvent["type"]; actorAgentId: string | null; payload: Record<string, unknown> }): RunEvent => ({
   runId: r.runId, seq: Number(r.seq), t: Number(r.t), type: r.type, actorAgentId: r.actorAgentId ?? undefined, payload: r.payload,
 });
 
+/** The mock's order (sortEvents): by t, then by the source seq. */
 export async function listStoredEvents(db: Db, runId: string): Promise<RunEvent[]> {
-  const rows = await db.db.select().from(runEvents).where(eq(runEvents.runId, runId)).orderBy(asc(runEvents.seq));
+  const rows = await db.db.select().from(runEvents).where(eq(runEvents.runId, runId)).orderBy(asc(runEvents.t), asc(runEvents.seq));
   return rows.map(eventFromRow);
 }
 

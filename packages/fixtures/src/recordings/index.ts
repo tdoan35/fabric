@@ -24,8 +24,9 @@ export interface RecordingBundle {
     brief: Brief;
     outcome?: string;
   };
-  /** In playback order; `t` is seconds from `run.startedAt`. */
-  events: Omit<RunEvent, "runId" | "seq">[];
+  /** In playback order; `t` is seconds from `run.startedAt`. `seqHint` preserves the source seqs
+   *  (the mock's are creation-ordered, so the imported log equals the fixture log exactly). */
+  events: (Omit<RunEvent, "runId" | "seq"> & { seqHint: number })[];
   /** `idHint` preserves the source snapshot ids when the import target is free. */
   snapshots: (Omit<ContextSnapshot, "id" | "runId"> & { idHint: string })[];
   artifacts: { name: string; by: string; contentType: string; content: string }[];
