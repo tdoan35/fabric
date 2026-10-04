@@ -1,16 +1,12 @@
 import { useEffect, useSyncExternalStore } from "react";
-import { RegistrySchema, type Registry } from "@fabric/contracts";
+import type { Registry } from "@fabric/contracts";
 
-import { apiBase } from "@/lib/api";
+import { httpApi } from "@/lib/api";
 
 /**
- * Agent names for "Name · Role" display (D1). The M0 httpApi has no getRegistry, so this fetches
- * /api/registry locally — mirrored on apps/web/src/lib/api/http.ts (same schema, dev-only
- * safeParse warning). Requested for lib/api.ts in docs/status/mobile-weave.md; if it lands there
- * this module keeps the cache/hook and calls httpApi.getRegistry instead.
- *
- * The Weave list must not block on the registry: names fall back to the persona slug and the
- * fetch retries on the next mount until it succeeds.
+ * Agent names for "Name · Role" display (D1), over `httpApi.getRegistry` (same validation as web's
+ * http.ts). The Weave list must not block on the registry: names fall back to the persona slug and
+ * the fetch retries on the next mount until it succeeds.
  */
 
 export type PersonMap = Readonly<Record<string, { name: string; role: string }>>;
@@ -38,14 +34,7 @@ function ensure(): Promise<void> {
   if (pending) return pending;
   const run = (async () => {
     try {
-      const response = await fetch(`${apiBase}/api/registry`);
-      if (!response.ok) throw new Error(`${response.status} ${response.statusText}`);
-      const value: unknown = await response.json();
-      if (__DEV__) {
-        const checked = RegistrySchema.safeParse(value);
-        if (!checked.success) console.warn("[api] /registry contract mismatch", checked.error.issues);
-      }
-      const registry = value as Registry;
+      const registry: Registry = await httpApi.getRegistry();
       const next: Record<string, { name: string; role: string }> = {};
       for (const profile of [...registry.agents, ...registry.communityAgents]) {
         next[profile.agent.id] = { name: profile.agent.name, role: profile.agent.role };

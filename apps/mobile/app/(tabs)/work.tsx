@@ -1,6 +1,6 @@
 import { useMemo } from "react";
 import { ActivityIndicator, RefreshControl, ScrollView, StyleSheet, Text, View } from "react-native";
-import type { Run, Task } from "@fabric/contracts";
+import type { Project, Run, Task } from "@fabric/contracts";
 
 import { EmptyState, ErrorState, Screen } from "@/components/ui";
 import { httpApi } from "@/lib/api";
@@ -10,12 +10,12 @@ import { latestRunOf } from "@/components/work/format";
 import { TaskRow } from "@/components/work/task-row";
 
 interface WorkData {
+  projects: Project[] | undefined;
   tasks: Task[];
   runs: Run[];
 }
 
-/** Tasks grouped by project, in the order the server lists them. The project's name needs
- * GET /api/projects, which lib/api doesn't expose yet (filed in docs/status/mobile-work.md). */
+/** Tasks grouped by project, in the order the server lists them. */
 function groupByProject(
   tasks: Task[],
   runsById: Map<string, Run>,
@@ -47,7 +47,13 @@ const lastActivity = (task: Task, runsById: Map<string, Run>): string => {
 
 export default function WorkTab() {
   const { data, error, loading, refresh } = usePoll<WorkData>(
-    () => Promise.all([httpApi.listTasks(), httpApi.listRuns()]).then(([tasks, runs]) => ({ tasks, runs })),
+    () =>
+      Promise.all([
+        // Names only: a failed /projects fetch degrades to id headers, never blocks the tab.
+        httpApi.listProjects().catch(() => undefined),
+        httpApi.listTasks(),
+        httpApi.listRuns(),
+      ]).then(([projects, tasks, runs]) => ({ projects, tasks, runs })),
   );
   const groups = useMemo(() => {
     if (!data) return [];
@@ -75,7 +81,7 @@ export default function WorkTab() {
         {groups.map((group) => (
           <View key={group.projectId} style={styles.group}>
             <Text style={styles.project}>
-              {group.projectId}
+              {data?.projects?.find((project) => project.id === group.projectId)?.name ?? group.projectId}
               <Text style={styles.count}> · {group.tasks.length}</Text>
             </Text>
             {group.tasks.map((task) => (

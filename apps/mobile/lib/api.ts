@@ -2,8 +2,8 @@
 // dev-only validation warnings, and the same "404 → undefined" behaviour for single resources.
 // The base URL comes from EXPO_PUBLIC_API_URL (inlined by Metro; see .env.example).
 import {
-  ReportSchema, RunSchema, SessionMessagesSchema, TaskSchema, WeaveSnapshotSchema,
-  type Report, type Run, type SessionMessages, type Task, type WeaveSnapshot,
+  ProjectSchema, RegistrySchema, ReportSchema, RunSchema, SessionMessagesSchema, TaskSchema, WeaveSnapshotSchema,
+  type Project, type Registry, type Report, type Run, type SessionMessages, type Task, type WeaveSnapshot,
 } from "@fabric/contracts";
 import { z } from "zod";
 
@@ -24,9 +24,12 @@ async function request<T>(path: string, schema: z.ZodType, init?: RequestInit, m
   return value as T;
 }
 
-/** The M0 surface (MOBILE-PLAN §2). Chat (POST /api/chat) and SSE (/api/stream) arrive with M1. */
+/** The M0 surface (MOBILE-PLAN §2) plus `getRegistry`/`listProjects`, closing the Requests in
+ * docs/status/mobile-weave.md and mobile-work.md. Chat (POST /api/chat) and SSE (/api/stream) arrive with M1. */
 export const httpApi = {
+  getRegistry: () => request<Registry>("/registry", RegistrySchema),
   getWeave: () => request<WeaveSnapshot>("/weave", WeaveSnapshotSchema),
+  listProjects: () => request<Project[]>("/projects", z.array(ProjectSchema)),
   listTasks: () => request<Task[]>("/tasks", z.array(TaskSchema)),
   listRuns: () => request<Run[]>("/runs", z.array(RunSchema)),
   getRun: (id: string) => request<Run | undefined>(`/runs/${encodeURIComponent(id)}`, RunSchema, undefined, true),
