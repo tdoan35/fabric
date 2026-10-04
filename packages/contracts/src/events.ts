@@ -54,6 +54,7 @@ export const AppEventSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("task.changed"), taskId: z.string() }),
   z.object({ type: z.literal("run.changed"), runId: z.string() }),
   z.object({ type: z.literal("weave.changed") }),
+  z.object({ type: z.literal("schedule.changed") }),
   z.object({ type: z.literal("session.message"), sessionId: z.string(), messageId: z.string() }),
 ]);
 export type AppEvent = z.infer<typeof AppEventSchema>;

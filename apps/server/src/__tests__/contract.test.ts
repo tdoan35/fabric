@@ -5,11 +5,15 @@
 import { createDb, sql } from "@fabric/db";
 import { afterAll, describe, expect, it } from "vitest";
 import { Hono } from "hono";
+import { AppEventSchema, ContextSnapshotSchema, ProjectSchema, ReportSchema, RunEventSchema, RunSchema, TaskSchema } from "@fabric/contracts";
+import {
+  OccurrenceSchema, ScheduleFireSchema, ScheduleInputSchema, SchedulePatchSchema, ScheduleSchema,
+} from "@fabric/contracts";
+import type { ContextSnapshot, Project, Registry, Report, Run, RunEvent, Schedule, Task, WeaveSnapshot } from "@fabric/contracts";
 import { cors } from "hono/cors";
-import { ContextSnapshotSchema, ProjectSchema, ReportSchema, RunEventSchema, RunSchema, TaskSchema } from "@fabric/contracts";
-import type { ContextSnapshot, Project, Registry, Report, Run, RunEvent, Task, WeaveSnapshot } from "@fabric/contracts";
 import { report as reportFixture, run as run135, runEvents as events135, snapshots as snapshots135 } from "@fabric/fixtures/run";
 import { projects as projectsFixture, sessions as sessionsFixture } from "@fabric/fixtures/sessions";
+import { scheduleSessions as scheduleSessionsFixture } from "@fabric/fixtures/schedules";
 import { runs as runsFixture, tasks as tasksFixture } from "@fabric/fixtures/work";
 import { calendarEvents, inboxSeed, presenceSeed, pulseSeed } from "@fabric/fixtures/weave";
 import { communityProfiles, myProfiles } from "@fabric/fixtures/studio";
@@ -102,6 +106,44 @@ describe("contract: every DATA GET validates", () => {
   });
 });
 
+// Schedule (SCH, additive under contracts-v1): the new schemas and the event member. Pure — no DB.
+describe("contract: schedule schemas", () => {
+  const recurrence = { freq: "weekdays" as const, time: "08:00" };
+  const schedule: Schedule = {
+    id: "morning-digest", title: "Morning digest", kind: "assistant", agentId: "dana",
+    prompt: "Summarize what changed since yesterday.", recurrence, cron: "0 8 * * 1-5",
+    tz: "America/Los_Angeles", durationMin: 30, enabled: true, sessionId: "sched-morning-digest",
+    createdAt: "2026-10-02T11:20:00-07:00",
+  };
+
+  it("ScheduleSchema, ScheduleFireSchema and OccurrenceSchema parse their shapes", () => {
+    expect(ScheduleSchema.parse(schedule)).toBeTruthy();
+    expect(ScheduleFireSchema.parse({
+      id: "fire-1", scheduleId: schedule.id, scheduledFor: "2026-10-05T08:00:00-07:00",
+      firedAt: "2026-10-05T08:00:03-07:00", status: "fired", messageId: "msg-9",
+    })).toBeTruthy();
+    expect(OccurrenceSchema.parse({
+      scheduleId: schedule.id, at: "2026-10-05T08:00:00-07:00", end: "2026-10-05T08:30:00-07:00",
+      agentId: "dana", title: schedule.title, kind: "assistant", state: "posted",
+      sessionId: schedule.sessionId, messageId: "msg-9",
+    })).toBeTruthy();
+  });
+
+  it("ScheduleInputSchema validates create; SchedulePatchSchema takes any subset", () => {
+    expect(ScheduleInputSchema.parse({
+      title: "Weekly literature sweep", kind: "team", teamId: "research",
+      prompt: "Sweep the literature.", recurrence: { freq: "weekly", time: "09:00", days: [1] },
+    })).toBeTruthy();
+    expect(() => ScheduleInputSchema.parse({ title: "x", kind: "team", prompt: "", recurrence })).toThrow();
+    expect(SchedulePatchSchema.parse({ enabled: false })).toBeTruthy();
+    expect(SchedulePatchSchema.parse({ durationMin: 60 })).toBeTruthy();
+  });
+
+  it("AppEventSchema parses schedule.changed", () => {
+    expect(AppEventSchema.parse({ type: "schedule.changed" })).toEqual({ type: "schedule.changed" });
+  });
+});
+
 // Lived-in parity: the server returns exactly what the mock api does, except where a settled
 // decision adds a field (status/data.md Deviations): D3 makes Dana's handoff_to_team allowed,
 // D9 labels the report and recording `illustrative`, and a running loop's durationS is "now".
@@ -180,7 +222,8 @@ describe.skipIf(profile !== "lived-in")("lived-in matches the mock world", () =>
     expect(reg.teams).toEqual(studioTeams);
     expect(reg.communityTeams).toEqual(communityTeams);
     expect(reg.organizations).toEqual(orgsFixture);
-    expect(reg.sessions).toEqual(sessionsFixture);
+    // SCH: the seeded routines' threads are part of both worlds.
+    expect(reg.sessions).toEqual([...sessionsFixture, ...scheduleSessionsFixture]);
   });
 });
 

@@ -6,8 +6,13 @@ import { sessions } from "@fabric/fixtures/sessions";
 import { inboxSeed, pulseSeed, presenceSeed, calendarEvents } from "@fabric/fixtures/weave";
 import { projects, type Project } from "../mock/sessions";
 import { allSnapshots, runEventsById, runs, tasks } from "../mock/work";
-import type { ContextSnapshot, Report, Run, RunEvent, Task } from "../types";
+import {
+  mockCreateSchedule, mockDeleteSchedule, mockOccurrences, mockRunNow, mockSchedules,
+  mockScheduleSessions, mockSkipOccurrence, mockUpdateSchedule,
+} from "../mock/schedule";
+import type { Occurrence, Schedule, ScheduleFire, ScheduleInput, SchedulePatch } from "@fabric/contracts";
 import type { Registry, WeaveSnapshot } from "@fabric/contracts";
+import type { ContextSnapshot, Report, Run, RunEvent, Task } from "../types";
 
 const delay = <T,>(v: T, ms = 120) => new Promise<T>((r) => setTimeout(() => r(v), ms));
 const bundle = recordings["ngram-135m"];
@@ -20,7 +25,8 @@ const bundledRuns = runs.map((r) => r.id === recordingId ? {
   recorded: r.recorded, segments: r.segments, brief: bundle.run.brief, reportId: recordingReport.id,
 } : r);
 
-const registry: Registry = { agents: myProfiles, communityAgents: communityProfiles, teams: studioTeams, communityTeams, organizations, projects, sessions, personaPool: [] };
+// The routines' threads are part of the seeded world (SCH), so the sidebar matches the server.
+const registry: Registry = { agents: myProfiles, communityAgents: communityProfiles, teams: studioTeams, communityTeams, organizations, projects, sessions: [...sessions, ...mockScheduleSessions], personaPool: [] };
 const weaveSnapshot: WeaveSnapshot = { items: inboxSeed, pulse: pulseSeed, presence: presenceSeed, calendar: calendarEvents };
 export const mockApi = {
   getRegistry: (): Promise<Registry> => delay(registry),
@@ -44,4 +50,23 @@ export const mockApi = {
   getSnapshots: (runId: string): Promise<ContextSnapshot[]> =>
     delay(runId === recordingId ? recordingSnapshots : allSnapshots.filter((s) => s.runId === runId)),
   getReport: (id: string): Promise<Report | undefined> => delay(id === recordingReport.id ? recordingReport : undefined),
+  // Schedules (SCH): the in-memory store in lib/mock/schedule, seeded from the fixtures.
+  listSchedules: (): Promise<Schedule[]> => delay(mockSchedules()),
+  createSchedule: (input: ScheduleInput): Promise<Schedule> => delay(mockCreateSchedule(input)),
+  updateSchedule: (id: string, patch: SchedulePatch): Promise<Schedule> => {
+    const next = mockUpdateSchedule(id, patch);
+    if (!next) return Promise.reject(new Error("schedule not found"));
+    return delay(next);
+  },
+  deleteSchedule: (id: string): Promise<{ ok: boolean }> => delay({ ok: mockDeleteSchedule(id) }),
+  runScheduleNow: (id: string): Promise<ScheduleFire> => {
+    const fire = mockRunNow(id);
+    return fire ? delay(fire) : Promise.reject(new Error("schedule not found"));
+  },
+  skipOccurrence: (id: string, at: string): Promise<ScheduleFire> => {
+    const fire = mockSkipOccurrence(id, at);
+    return fire ? delay(fire) : Promise.reject(new Error("that occurrence is already claimed"));
+  },
+  listOccurrences: (from: string, to: string): Promise<Occurrence[]> =>
+    delay(mockOccurrences(new Date(from), new Date(to), bundledRuns)),
 };

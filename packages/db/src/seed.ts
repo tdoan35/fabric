@@ -51,7 +51,7 @@ const started = Date.now();
 const db: Db = createDb(urls.pooled);
 
 const TABLES = [
-  "weave_calendar", "weave_presence", "weave_pulse", "weave_items",
+  "schedule_fires", "schedules", "weave_calendar", "weave_presence", "weave_pulse", "weave_items",
   "proposals", "dispositions", "chat_messages", "sessions",
   "reports", "artifacts", "context_snapshots", "run_events", "runs", "tasks", "projects",
   "org_handoffs", "org_slots", "organizations", "team_members", "teams", "persona_pool",
@@ -155,6 +155,20 @@ await insertAll(schema.weavePulse as PgTable, world.weave.pulse.map((entry, i) =
 await insertAll(schema.weavePresence as PgTable, world.weave.presence.map((p, i) => ({ agentId: p.agentId, ord: i, data: p })));
 await insertAll(schema.weaveCalendar as PgTable, world.weave.calendar.map((e, i) => ({ id: e.id, ord: i, data: e })));
 
+
+// ---- schedules (SCH): the routines and their past fires; createdAt = the fixture's, so the
+// catch-up sweep never backfills "missed" over the seeded week ----
+await insertAll(schema.schedules as PgTable, world.schedules.map((s) => ({
+  id: s.id, title: s.title, kind: s.kind, agentId: s.agentId, teamId: s.teamId ?? null,
+  projectId: s.projectId ?? null, prompt: s.prompt, recurrence: s.recurrence, cron: s.cron,
+  tz: s.tz, durationMin: s.durationMin, enabled: s.enabled, sessionId: s.sessionId,
+  createdAt: new Date(s.createdAt),
+})));
+await insertAll(schema.scheduleFires as PgTable, world.scheduleFires.map((f) => ({
+  id: f.id, scheduleId: f.scheduleId, scheduledFor: new Date(f.scheduledFor),
+  firedAt: f.firedAt ? new Date(f.firedAt) : null, status: f.status,
+  runId: f.runId ?? null, taskId: f.taskId ?? null, messageId: f.messageId ?? null, error: f.error ?? null,
+})));
 await db.db.insert(schema.seedState).values({ profile });
 await db.close();
 console.log(`seeded profile ${profile}${branch ? ` on branch ${branch}` : ""} in ${((Date.now() - started) / 1000).toFixed(1)}s`);

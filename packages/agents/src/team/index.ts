@@ -1,14 +1,9 @@
-// TEAM owns this folder: the data-driven team workflow (WORK-PLAN §5.3 TEAM).
-import { NotImplementedError } from "@fabric/contracts";
-import type { RunWriter } from "@fabric/db";
-
-export interface TeamRuntime {
-  /** Runs the loop's team workflow in the background; returns once it has started. */
-  startTeamRun(runId: string): Promise<void>;
-  /** Used by splice (D5). */
-  cancelRun(runId: string): Promise<void>;
-}
-
-export function createTeamRuntime(_deps: { writer: RunWriter }): TeamRuntime {
-  throw new NotImplementedError("TEAM", "createTeamRuntime");
-}
+// TEAM owns this folder: the data-driven team workflow (WORK-PLAN §5.3 TEAM), over the real
+// services — CTX context, TOOLS tools, the llm meter — writing every event through RunWriter.
+// S3 verdict (recorded in status/team.md): plain async orchestration (the fallback), no Mastra.
+export { createTeamRuntime } from "./engine";
+export { bounceOutcome, planPasses, stepLabel, stepKind } from "./labels";
+export type { TeamRuntime, TeamRuntimeDeps, TeamRunOptions } from "./engine";
+export type { Pass, StagePlan } from "./labels";
+export { stepPrompt } from "./steps";
+export type { RunCtx, StepSpec } from "./steps";

@@ -21,7 +21,8 @@
     "llm:check": "tsx scripts/llm-check.ts",
     "export-recording": "tsx scripts/export-recording.ts",
     "check:data": "node scripts/check-data.mjs",
-    "check:tools": "tsx scripts/check-tools.ts"
+    "check:tools": "tsx scripts/check-tools.ts",
+    "check:team": "tsx scripts/check-team.ts"
   },
   "devDependencies": {
     "@types/node": "^20",
