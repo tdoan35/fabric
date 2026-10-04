@@ -39,7 +39,7 @@ CONCEPT §10 lists "Mobile-first" as a non-goal. This plan doesn't challenge tha
 
 ### M0: must-have today (~2–3 h)
 
-The app is a tab bar (expo-router `(tabs)`) with **Weave · Work** tabs and a pushed **Report** screen.
+The app is a tab bar (expo-router `(tabs)`) with **Chat · Weave · Work** tabs and pushed **Report**, **Threads** and **Thread** screens. It opens on **Chat**: a new thread (the web's `/`), with the agent hero, greeting and suggestion chips.
 
 | Screen | Data | Shows | Interactions |
 |---|---|---|---|
@@ -75,7 +75,7 @@ The app is a tab bar (expo-router `(tabs)`) with **Weave · Work** tabs and a pu
 
 ```text
 apps/mobile (Expo Go, expo-router, TS)
-  app/(tabs)/weave.tsx, work.tsx     app/weave/[id].tsx   app/report/[id].tsx   (M1: app/chat.tsx)
+  app/(tabs)/index.tsx (Chat: new thread), weave.tsx, work.tsx   app/threads.tsx   app/thread/[id].tsx   app/weave/[id].tsx   app/report/[id].tsx
   lib/api.ts      ── mirrors httpApi in apps/web/src/lib/api/http.ts, validates with @fabric/contracts
   lib/use-poll.ts ── focus-aware polling        lib/theme.ts ── tokens copied from web globals.css
         │  fetch (expo/fetch for streaming)
@@ -87,7 +87,7 @@ apps/server :8787  ── /api/weave · /api/tasks · /api/runs · /api/reports/
 - **Contracts reuse:** `"@fabric/contracts": "file:../../packages/contracts"` (or a Metro `watchFolders` entry for `packages/contracts`). Its only dependency is zod, and its `exports` point at `src/index.ts`, which Metro transpiles. Check the `domain.ts` imports for anything web-only before relying on them.
 - **API client:** one function per endpoint with the same names as `httpApi` (`getWeave`, `listTasks`, `listRuns`, `getReport`, `getSessionMessages`, `chatStream`). The base URL is `EXPO_PUBLIC_API_URL` (e.g. `http://192.168.x.x:8787`). Every response is validated with zod, the same as web, so contract drift shows up loudly.
 - **Offline mode (optional):** `EXPO_PUBLIC_API_MODE=mock` serves `@fabric/fixtures` data, mirroring web's L0. Only do this if `packages/fixtures` imports cleanly in RN (no `node:` modules). Otherwise skip it; the web stays the L0 fallback.
-- **Styling:** RN `StyleSheet` plus a `theme.ts` with the color tokens and radius from `apps/web/src/styles/globals.css`, dark first. Persona portraits come from the same assets as web, if they're plain images. No NativeWind or aurora effects today.
+- **Styling:** RN `StyleSheet` plus a `theme.ts` with the color tokens and radius from `apps/web/src/styles/globals.css`, dark first. Persona portraits come from the same assets as web, if they're plain images. No NativeWind. The web's dark aurora backdrop is ported in `components/ui/aurora.tsx` (`react-native-svg` gradients, drifting layers) and sits behind every `Screen`.
 - **No server changes in M0.** Native fetch isn't subject to CORS, so `corsOrigins` in `apps/server/src/env.ts` doesn't matter to the phone.
 
 ---

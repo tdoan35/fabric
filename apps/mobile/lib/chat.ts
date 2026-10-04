@@ -20,6 +20,12 @@ export type FetchLike = typeof globalThis.fetch;
  */
 export const DEMO_SESSION_ID = "c1";
 
+/** A fresh thread id, the web's format (apps/web/src/lib/chat/session.ts newSessionId). The server
+ * creates the session row on the first turn, so a minted id has no history to fetch. */
+export function newSessionId(): string {
+  return `t-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
+}
+
 const dev = typeof __DEV__ !== "undefined" && __DEV__;
 
 /** The thread as the server reads it (http-assistant.ts toWire): role + text/tool-call parts only.
