@@ -65,7 +65,15 @@ export function runtime(): Runtime {
     db,
     writer,
     team: () => team(),
-    assistant: lazyStep("DANA", () => createAssistant({ writer, team: team() ?? notYetTeam })),
+    assistant: lazyStep("DANA", () =>
+      createAssistant({
+        writer,
+        team: team() ?? notYetTeam,
+        db,
+        publish: (e) => hub.publishApp(e),
+        mode: env.DANA_MODE === "fixture" ? "fixture" : "live",
+        recordingKey: env.DEMO_RECORDING_KEY,
+      })),
   };
   return instance;
 }

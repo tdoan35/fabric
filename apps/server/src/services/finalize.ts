@@ -145,22 +145,23 @@ export async function finalizeRun(runId: string): Promise<{ reportId: string } |
       values (${itemId}, ${(ord.rows[0] as { ord: string }).ord}, 'result', 'dana', ${task.id}, ${endedAt.toISOString()}, ${JSON.stringify(item)}::jsonb)`);
   }
 
-  // ---- Dana's results message (CHAT-14); the DANA stub logs one line and we still announce ----
+  // ---- Dana's results message (CHAT-14): the real message id, so session.message points at it ----
   const sessionId = task?.sessionId;
   if (sessionId && report) {
     const assistant = runtime().assistant();
+    let messageId = `results-${reportId}`;
     if (assistant) {
       try {
-        await assistant.postResultsMessage(sessionId, {
+        ({ messageId } = await assistant.postResultsMessage(sessionId, {
           reportId, runId, taskId: task!.id, title: report.title, summary: report.summary, rows: report.results,
-        });
+        }));
       } catch (err) {
         console.log(`[finalize] postResultsMessage unavailable: ${err instanceof NotImplementedError ? err.message : String(err)}`);
       }
     } else {
       console.log("[finalize] DANA not implemented yet; skipping postResultsMessage");
     }
-    hub.publishApp({ type: "session.message", sessionId, messageId: `results-${reportId}` });
+    hub.publishApp({ type: "session.message", sessionId, messageId });
   }
 
   // ---- the report email (P1-1): only when AgentMail is explicitly on ----

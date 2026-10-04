@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Folders are owned separately: llm/ and assistant/ DANA · team/ TEAM · context/ CTX.",
+  "description": "Folders are owned separately: llm/ and assistant/ DANA \u00b7 team/ TEAM \u00b7 context/ CTX.",
   "exports": {
     "./llm": "./src/llm/index.ts",
     "./assistant": "./src/assistant/index.ts",
@@ -25,10 +25,10 @@
     "ai": "^7.0.127",
     "js-tiktoken": "^1.0.21",
     "zod": "^4.6.5",
-    "@ai-sdk/provider": "^4.0.21"
+    "@ai-sdk/provider": "^4.0.21",
+    "@fabric/fixtures": "*"
   },
   "devDependencies": {
-    "@fabric/fixtures": "*",
     "vitest": "^5.0.3"
   }
 }
