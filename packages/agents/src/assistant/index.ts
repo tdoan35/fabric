@@ -270,12 +270,14 @@ export function createAssistant(deps: AssistantDeps): Assistant {
 
         const m = deps.modelFor?.(dana ?? fallbackDana()) ?? model(dana?.agent.model ?? "", { thinking: "off", meter: { agentId: "dana", step: "chat" } });
         const attempt = async function* (): AsyncGenerator<ChatStreamLine> {
+          const turnAbort = new AbortController();
           const stream = streamText({
             model: m,
             system,
             messages,
             tools,
             temperature: TEMPERATURE,
+            abortSignal: turnAbort.signal,
             stopWhen: stepCountIs(MAX_STEPS),
             // DANA 2: record_disposition is forced as the first call of every turn; later steps choose freely.
             prepareStep: ({ stepNumber }) => prepareDispositionFirstStep(stepNumber),
@@ -284,6 +286,9 @@ export function createAssistant(deps: AssistantDeps): Assistant {
           let text = "";
           let anchor = 0; // non-disposition tool parts that came before the text
           let dispositionSeen = false;
+          // Contract turn-enders (§4.3): a propose_* call (human decision pending) and a completed
+          // handoff. Live models sometimes keep going past them; Dana's turn ends there.
+          let terminal = false;
           // The disposition part is always rendered first (the contract shape, and what the mock
           // yields), whatever order the model produced text and calls in. `anchor` counts the
           // non-disposition tool parts that preceded the text, so later calls land after it.
@@ -307,6 +312,7 @@ export function createAssistant(deps: AssistantDeps): Assistant {
             } else if (part.type === "tool-call") {
               if (part.toolName === "search_registry") continue; // internal: never streamed
               if (part.toolName === "record_disposition") dispositionSeen = true;
+              if (part.toolName === "propose_team" || part.toolName === "propose_specialist") terminal = true;
               let args: unknown = part.input;
               if (part.toolName === "propose_team" || part.toolName === "propose_specialist") {
                 // Store the pending row now, and stream the enriched payload (proposalId, supersedes).
@@ -326,6 +332,7 @@ export function createAssistant(deps: AssistantDeps): Assistant {
                 if (target.toolName === "handoff_to_team" && isHandoffPayload(part.output)) {
                   target.args = part.output; // the card reads the real ids and personas
                   target.argsText = JSON.stringify(part.output);
+                  terminal = true;
                 }
               }
             } else {
@@ -334,6 +341,10 @@ export function createAssistant(deps: AssistantDeps): Assistant {
             // Hold everything back until the disposition call has landed, so a retried turn never
             // streams text without one (the UI replaces content per line either way).
             if (dispositionSeen) yield snapshot();
+            if (terminal) {
+              turnAbort.abort(); // the turn is complete; nothing may follow the card or the handoff
+              break;
+            }
           }
         };
 

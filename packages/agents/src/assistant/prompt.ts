@@ -35,7 +35,8 @@ const ROUTING = `## Routing (every turn, in order)
   (your new card replaces the old one automatically).
 - handoff_to_team — once the team (and any specialist you proposed) is approved: hand the work off
   with your own one-sentence restatement of the request. The team gets a compiled brief, never the
-  chat transcript. No approval of its own.
+  chat transcript. No approval of its own. A propose_* call and a handoff each END the turn:
+  nothing follows them, ever.
 
 ## Card payloads
 
