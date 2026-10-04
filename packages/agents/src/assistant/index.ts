@@ -9,10 +9,9 @@ import type { ToolSet } from "ai";
 import { z } from "zod";
 import { NotImplementedError } from "@fabric/contracts";
 import type {
-  AppEvent, ChatPart, ChatRequest, ChatStreamLine, ChatToolCallPart, HandoffPayload, Proposal,
-  PersonaPoolEntry, ResultsPayload, RosterEntry, SessionMessages, StudioProfile, TeamProposal, ThreadMessage,
+  AppEvent, ChatPart, ChatStreamLine, ChatToolCallPart, HandoffPayload, Proposal, ResultsPayload,
+  SessionMessages, StudioProfile, ThreadMessage,
 } from "@fabric/contracts";
-import { readRegistry } from "@fabric/db";
 import type { Db, RunWriter } from "@fabric/db";
 import { createInbox } from "@fabric/integrations";
 import type { LanguageModel } from "../llm";
@@ -26,12 +25,12 @@ import type { FixtureDeps } from "./fixture";
 import { runHandoff } from "./handoff";
 import type { HandoffDeps, HandoffInput } from "./handoff";
 import {
-  ensureSession, getSession, getProfile, insertMessage, listMessages, listPersonaPool, listProfiles,
-  listProposals, pendingFor, recordDisposition, setProposalStatus, setToolResult, storeProposal,
-  touchSession,
+  ensureSession, getSession, getProfile, insertMessage, listMessages, listProposals, pendingFor,
+  readDanaView, recordDisposition, setProposalStatus, setToolResult, storeProposal, touchSession,
 } from "./store";
-import type { SessionRow, StoredProposal } from "./store";
-import { applyApproval } from "./teams";
+import type { SessionRow } from "./store";
+import { applyApproval, specialistCard, teamCard } from "./teams";
+import type { SpecialistChoice, TeamChoice, World } from "./teams";
 import { prepareDispositionFirstStep, withForcedDisposition } from "./stream";
 import type { AttemptControl } from "./stream";
 import { statusAfterDecision } from "./transitions";
@@ -89,31 +88,24 @@ const searchSchema = z.object({
   query: z.string().describe("What capability you need, e.g. 'coding', 'research team', 'free persona'"),
 });
 
-const rosterSchema = z.object({
-  agentId: z.string().describe("Persona slug from search_registry, or a pool persona id for a new one"),
-  name: z.string(),
-  role: z.string().optional(),
-  status: z.enum(["new", "existing"]),
-});
+// Cards: the model picks only the name, the purpose and who; teamCard/specialistCard fill the rest
+// from the definition approval provisions. Entries also accept the stored card's object shape, which
+// is what the model sees of its earlier cards in the thread.
+const memberSchema = z.union([z.string(), z.object({ agentId: z.string().optional(), name: z.string().optional() })]);
 
 const proposeTeamSchema = z.object({
-  kind: z.literal("team"),
   name: z.string(),
-  purpose: z.string(),
-  roster: z.array(rosterSchema),
-  workflow: z.array(z.object({ label: z.string(), agentIds: z.array(z.string()), gate: z.boolean().optional() })).optional(),
-  reworkBudget: z.number().int().min(0).max(5).optional(),
-  criteria: z.array(z.string()).optional(),
-  leadDefaults: z.array(z.object({ label: z.string(), value: z.string(), why: z.string() })).optional(),
+  purpose: z.string().describe("One sentence"),
+  roster: z.array(memberSchema).min(1).describe("Member ids, lead first: existing agents, and a free persona for each new member"),
 });
 
 const proposeSpecialistSchema = z.object({
-  kind: z.literal("specialist"),
-  name: z.string(),
-  purpose: z.string(),
-  rows: z.array(z.object({ label: z.string(), value: z.string(), why: z.string() })),
-  persona: z.object({ id: z.string(), name: z.string(), role: z.string().optional() }).optional()
-    .describe("The pool portrait Ty will see; pick one from search_registry when you can"),
+  name: z.string().describe("The role, e.g. Validator"),
+  purpose: z.string().describe("One sentence"),
+  persona: z.union([z.string(), z.object({ id: z.string().optional(), name: z.string().optional() })]).optional()
+    .describe("The free persona's id"),
+  rows: z.array(z.object({ label: z.string(), value: z.string(), why: z.string() })).optional()
+    .describe("Only for a role with no template; the server fills a known role's rows"),
 });
 
 const handoffSchema = z.object({
@@ -192,8 +184,8 @@ export function createAssistant(deps: AssistantDeps): Assistant {
         const next = statusAfterDecision(row, d.decision);
         if (next === "approved") {
           await setProposalStatus(db, row.id, next);
-          const pool = await listPersonaPool(db);
-          await applyApproval(db, { row, pool, onInbox: (agentId) => void inboxFor(agentId) });
+          const { world } = await readDanaView(db);
+          await applyApproval(db, { row, world, onInbox: (agentId) => void inboxFor(agentId) });
           publish({ type: "registry.changed" });
         } else if (next === "declined") {
           await setProposalStatus(db, row.id, next);
@@ -205,7 +197,7 @@ export function createAssistant(deps: AssistantDeps): Assistant {
         const ctx: FixtureDeps = {
           sessionId, session, delta,
           pending: [],
-          profiles: [], pool: [],
+          world: { agents: [], pool: [] },
           disposition: async (args, toolCallId) => {
             const result = await recordDisposition(db, sessionId, args);
             return { type: "tool-call", toolCallId, toolName: "record_disposition", args, argsText: JSON.stringify(args), result };
@@ -214,23 +206,22 @@ export function createAssistant(deps: AssistantDeps): Assistant {
           handoff: (input: HandoffInput) => runHandoff(handoffDeps(async (i) => fixtureBrief(i)), input),
         };
         return (async function* () {
-          ctx.pending = (await listProposals(db, sessionId)).filter((p) => p.status === "pending");
-          ctx.profiles = await listProfiles(db);
-          ctx.pool = await listPersonaPool(db);
+          const [proposals, view] = await Promise.all([listProposals(db, sessionId), readDanaView(db)]);
+          ctx.pending = proposals.filter((p) => p.status === "pending");
+          ctx.world = view.world;
           yield* fixtureTurn(ctx);
         })();
       }
 
       async function* liveLines(sessionId: string, session: SessionRow | undefined, delta: ThreadDelta): AsyncGenerator<ChatStreamLine> {
-        const active = await activeToolsFor(delta, await listProposals(db, sessionId));
-        const dana = await getProfile(db, "dana");
-        const registry = await readRegistry(db);
-        const system = buildSystemPrompt(dana ?? fallbackDana(), {
-          agents: registry.agents.map((a) => ({ id: a.agent.id, name: a.agent.name, role: a.agent.role, summary: a.agent.summary })),
-          teams: registry.teams.map((t) => ({ id: t.id, name: t.name, purpose: t.purpose, members: t.members.map((m) => m.agentId) })),
-          personaPool: registry.personaPool.map((p) => ({ id: p.id, name: p.name, role: p.role })),
-        });
-        const messages = toModelMessages(await listMessages(db, sessionId));
+        // Independent reads, one round trip each, in parallel: they sit in front of the first token.
+        const [proposals, dana, view, thread] = await Promise.all([
+          listProposals(db, sessionId), getProfile(db, "dana"), readDanaView(db), listMessages(db, sessionId),
+        ]);
+        const active = activeToolsFor(delta, proposals);
+        const { world } = view;
+        const system = buildSystemPrompt(dana ?? fallbackDana(), view.registry);
+        const messages = toModelMessages(thread);
 
         const tools: ToolSet = {
           record_disposition: tool({
@@ -243,18 +234,18 @@ export function createAssistant(deps: AssistantDeps): Assistant {
             inputSchema: searchSchema,
             execute: async ({ query }) => {
               // ~8 rows: return the whole compact registry and flag what matched (ARCH §5).
-              const r = await readRegistry(db);
+              const r = (await readDanaView(db)).registry;
               const q = query.toLowerCase();
               const hit = (s: string) => s.toLowerCase().includes(q);
               return {
-                agents: r.agents.map((a) => ({ id: a.agent.id, name: a.agent.name, role: a.agent.role, summary: a.agent.summary, match: hit(`${a.agent.name} ${a.agent.role} ${a.agent.summary}`) })),
-                teams: r.teams.map((t) => ({ id: t.id, name: t.name, purpose: t.purpose, members: t.members.map((m) => m.agentId), match: hit(`${t.name} ${t.purpose}`) })),
-                personaPool: r.personaPool.map((p) => ({ id: p.id, name: p.name, role: p.role, match: hit(`${p.name} ${p.role}`) })),
+                agents: r.agents.map((a) => ({ ...a, match: hit(`${a.name} ${a.role} ${a.summary}`) })),
+                teams: r.teams.map((t) => ({ ...t, match: hit(`${t.name} ${t.purpose}`) })),
+                personaPool: r.personaPool.map((p) => ({ ...p, match: hit(`${p.name} ${p.role}`) })),
               };
             },
           }),
           propose_team: tool({
-            description: "Propose a new team as a card Ty approves. Ends your turn; the decision arrives as the tool result.",
+            description: "Propose a new team as a card Ty approves; the workflow, budget and criteria are filled in for you. Ends your turn; the decision arrives as the tool result.",
             inputSchema: proposeTeamSchema,
           }),
           propose_specialist: tool({
@@ -343,22 +334,33 @@ export function createAssistant(deps: AssistantDeps): Assistant {
                 turnAbort.abort();
                 break;
               }
-              if (part.toolName === "record_disposition") dispositionSeen = true;
-              if (part.toolName === "propose_team" || part.toolName === "propose_specialist") terminal = true;
+              const isCard = part.toolName === "propose_team" || part.toolName === "propose_specialist";
               // One part per tool per turn: a duplicated call of a name already on the message is
               // dropped, not streamed and not stored (the lane repeats calls when loaded).
               if (toolParts.some((p) => p.toolName === part.toolName)) continue;
               let args: unknown = part.input;
-              if (part.toolName === "propose_team" || part.toolName === "propose_specialist") {
-                // Store the pending row now, and stream the enriched payload (proposalId, supersedes).
+              if (isCard) {
+                // The server fills the card from the definition approval provisions (teamCard /
+                // specialistCard); input that fails the schema, or a roster nobody can join, makes
+                // the turn unusable: retry it once.
+                const payload = part.invalid ? undefined : cardFor(part.toolName, part.input, world);
+                if (!payload) {
+                  console.warn(`[assistant] unusable ${part.toolName} input: ${JSON.stringify(part.input).slice(0, 200)}`);
+                  control.invalid = true;
+                  turnAbort.abort();
+                  break;
+                }
+                // Store the pending row now, and stream the stored payload (proposalId, supersedes).
                 const stored = await storeProposal(db, {
                   sessionId,
                   toolCallId: part.toolCallId,
                   kind: part.toolName === "propose_team" ? "team" : "specialist",
-                  payload: enrichProposalArgs(part.input, part.toolName, registry.personaPool),
+                  payload,
                 });
                 args = stored.payload;
+                terminal = true;
               }
+              if (part.toolName === "record_disposition") dispositionSeen = true;
               toolParts.push({ type: "tool-call", toolCallId: part.toolCallId, toolName: part.toolName, args, argsText: JSON.stringify(args) });
             } else if (part.type === "tool-error") {
               console.error(`[assistant] ${part.toolName} failed:`, part.error instanceof Error ? part.error.message : part.error);
@@ -430,7 +432,7 @@ const copy = (p: ChatToolCallPart): ChatToolCallPart => ({ ...p });
  * after a team approval the next card is the missing specialist; after the specialist approval the
  * turn hands off. Anything else in the thread keeps every tool.
  */
-async function activeToolsFor(delta: ThreadDelta, proposals: { kind: "team" | "specialist" }[]): Promise<string[] | undefined> {
+function activeToolsFor(delta: ThreadDelta, proposals: { kind: "team" | "specialist" }[]): string[] | undefined {
   const last = delta.decisions[delta.decisions.length - 1];
   if (!last) return undefined;
   if (last.toolName === "propose_specialist" && last.decision === "approved") {
@@ -446,24 +448,13 @@ function isHandoffPayload(result: unknown): result is HandoffPayload {
   return !!result && typeof result === "object" && typeof (result as HandoffPayload).runId === "string" && Array.isArray((result as HandoffPayload).members);
 }
 
-/** Fills what the model can't know: roster roles/avatars from the registry, the persona from the pool. */
-function enrichProposalArgs(
-  args: unknown,
-  toolName: string,
-  pool: PersonaPoolEntry[],
-): Proposal {
+/** The card a propose_* call stands for, or undefined when its roster resolves to nobody. */
+function cardFor(toolName: string, input: unknown, world: World): Proposal | undefined {
   if (toolName === "propose_team") {
-    const team = args as TeamProposal;
-    const roster: RosterEntry[] = team.roster.map((r) => {
-      const persona = pool.find((p) => p.id === r.agentId);
-      return { ...r, role: r.role ?? persona?.role, avatar: r.avatar ?? persona?.avatar?.still };
-    });
-    return { ...team, roster };
+    const card = teamCard(input as TeamChoice, world);
+    return card.roster.length ? card : undefined;
   }
-  const spec = args as Exclude<Proposal, TeamProposal>;
-  const picked = spec.persona
-    ?? (pool[0] ? { id: pool[0].id, name: pool[0].name, role: pool[0].role, avatar: pool[0].avatar.still } : undefined);
-  return picked ? { ...spec, persona: picked } : { ...spec };
+  return specialistCard(input as SpecialistChoice, world);
 }
 
 function fallbackDana(): StudioProfile {

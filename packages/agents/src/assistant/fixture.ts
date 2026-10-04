@@ -1,13 +1,12 @@
 // Scripted Dana (DANA 6, RUN-12): the same branches as the web mock's mockAssistant, the same
 // stream shape, and the same REAL side effects (dispositions, proposal rows, approvals, task, run).
-// The payloads are the enriched card data (CARD-1, D1): real agent ids and roles, personas from
-// the pool, workflow, budget, criteria and lead defaults. packages/fixtures/src/chat.ts and the
-// web mock stay untouched; UI-CHAT renders the new fields.
+// The payloads are the enriched card data (CARD-1, D1), built by the same teamCard/specialistCard
+// as live turns: real agent ids and roles, personas from the pool, workflow, budget, criteria and
+// lead defaults. packages/fixtures/src/chat.ts and the web mock stay untouched.
 import type {
-  ChatPart, ChatStreamLine, DispositionArgs, HandoffPayload, PersonaPoolEntry, Proposal,
-  ProposalDecision, RosterEntry, SpecialistProposal, StudioProfile, TeamProposal,
+  ChatPart, ChatStreamLine, DispositionArgs, HandoffPayload, Proposal, SpecialistProposal, TeamProposal,
 } from "@fabric/contracts";
-import { specialistProposal as specialistRows } from "@fabric/fixtures/chat";
+import { specialistProposal as VALIDATOR } from "@fabric/fixtures/chat";
 import { studioTeams } from "@fabric/fixtures/teams";
 import { STAYED } from "@fabric/fixtures/run";
 import type { Brief } from "@fabric/contracts";
@@ -15,6 +14,8 @@ import { countTokens, preferenceItems, renderBrief } from "../context";
 import type { BriefInput } from "../context";
 import type { HandoffInput } from "./handoff";
 import type { SessionRow, StoredProposal } from "./store";
+import { specialistCard, teamCard } from "./teams";
+import type { World } from "./teams";
 import type { DecisionDelta, ThreadDelta } from "./thread";
 
 const RESEARCH = studioTeams.find((t) => t.id === "research")!;
@@ -41,13 +42,6 @@ const RESTATEMENT =
 const HANDOFF_SUMMARY = "Brief compiled from your request and the team definition — not your chat transcript.";
 const TASK_TITLE = "n-gram fusion on a 135M model";
 
-const LEAD_DEFAULTS: TeamProposal["leadDefaults"] = [
-  { label: "Tools", value: "artifacts.read · workspace.write · team.assign", why: "Plans and assigns the work; doesn't run code himself" },
-  { label: "Memory", value: "Team-scoped · no personal memory", why: "Sees project facts, never yours" },
-  { label: "Model", value: "Sonnet 5.5", why: "Planning-heavy work at moderate length" },
-  { label: "Rework budget", value: "2 bounces, then it escalates to you", why: "Bounded autonomy: exhaustion blocks, it never loops" },
-];
-
 /** What the fixture turn needs from the server: state plus its side-effect hooks. */
 export interface FixtureDeps {
   sessionId: string;
@@ -55,8 +49,8 @@ export interface FixtureDeps {
   delta: ThreadDelta;
   /** The session's pending proposals, newest last. */
   pending: StoredProposal[];
-  profiles: StudioProfile[];
-  pool: PersonaPoolEntry[];
+  /** Who exists and who is free: what the cards resolve against (the same builders as live turns). */
+  world: World;
   disposition(args: DispositionArgs, toolCallId: string): Promise<ChatPart>;
   propose(input: { toolCallId: string; kind: "team" | "specialist"; payload: Proposal }): Promise<Proposal>;
   handoff(input: HandoffInput): Promise<HandoffPayload>;
@@ -64,51 +58,22 @@ export interface FixtureDeps {
 
 let n = 0;
 const id = (prefix: string) => `call-${prefix}-${++n}`;
-function roster(ctx: FixtureDeps, members: typeof RESEARCH.members): RosterEntry[] {
-  const byId = new Map(ctx.profiles.map((p) => [p.agent.id, p]));
-  const poolById = new Map(ctx.pool.map((p) => [p.id, p]));
-  return members.map((m) => {
-    const known = byId.get(m.agentId);
-    const persona = poolById.get(m.agentId);
-    return {
-      agentId: m.agentId,
-      name: known?.agent.name ?? persona?.name ?? m.agentId,
-      role: known?.agent.role ?? persona?.role ?? m.duty,
-      status: known ? "existing" : "new",
-      avatar: (known?.agent.avatar ?? persona?.avatar)?.still,
-    };
-  });
-}
 
-/** The team card (CARD-1): everything from the canonical Research Team definition. */
+/** The team card (CARD-1): the canonical Research Team minus Sana, who joins on her own card. */
 function teamPayload(ctx: FixtureDeps, changes: { supersedes?: string; reworkBudget?: number } = {}): TeamProposal {
-  return {
-    kind: "team",
+  const card = teamCard({
     name: RESEARCH.name,
     purpose: RESEARCH.purpose,
-    roster: roster(ctx, RESEARCH.members.filter((m) => m.agentId !== "sana")),
-    workflow: RESEARCH.workflow.map((s) => ({ label: s.label, agentIds: s.agentIds, gate: s.gate })),
-    reworkBudget: changes.reworkBudget ?? RESEARCH.reworkBudget,
-    criteria: RESEARCH.criteria,
-    leadDefaults: LEAD_DEFAULTS,
-    ...(changes.supersedes ? { supersedes: changes.supersedes } : {}),
-  };
+    roster: RESEARCH.members.filter((m) => m.agentId !== "sana").map((m) => m.agentId),
+    reworkBudget: changes.reworkBudget,
+  }, ctx.world);
+  return { ...card, ...(changes.supersedes ? { supersedes: changes.supersedes } : {}) };
 }
 
 /** The specialist card: the Validator, with the pool persona Dana picked (D1). */
 function specialistPayload(ctx: FixtureDeps, changes: { supersedes?: string } = {}): SpecialistProposal {
-  const pooled = ctx.pool.find((p) => p.id === "sana");
-  const known = ctx.profiles.find((p) => p.agent.id === "sana");
-  const persona = pooled
-    ? { id: pooled.id, name: pooled.name, role: pooled.role, avatar: pooled.avatar.still }
-    : known
-      ? { id: known.agent.id, name: known.agent.name, role: known.agent.role, avatar: known.agent.avatar?.still ?? "" }
-      : undefined;
-  return {
-    ...specialistRows,
-    persona,
-    ...(changes.supersedes ? { supersedes: changes.supersedes } : {}),
-  };
+  const card = specialistCard({ name: VALIDATOR.name, purpose: VALIDATOR.purpose, persona: "sana" }, ctx.world);
+  return { ...card, ...(changes.supersedes ? { supersedes: changes.supersedes } : {}) };
 }
 
 async function* typeOut(prefix: ChatPart[], text: string): AsyncGenerator<ChatStreamLine> {

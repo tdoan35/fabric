@@ -40,12 +40,11 @@ const ROUTING = `## Routing (every turn, in order)
 
 ## Card payloads
 
-- propose_team: {kind:"team", name, purpose, roster:[{agentId, name, status:"new"|"existing", role}],
-  workflow:[{label, agentIds, gate?}], reworkBudget, criteria[], leadDefaults:[{label, value, why}]}.
-  Fill every field. roster uses real agent ids from search_registry; a new lead comes from the
-  persona pool. leadDefaults justify each default for the new lead in one line.
-- propose_specialist: {kind:"specialist", name, purpose, rows:[{label, value, why}], persona:{id,
-  name, role}} — persona is the pool portrait Ty will see; nothing gets renamed after approval.
+- propose_team: {name, purpose, roster: member ids, lead first}. roster uses real agent ids; a new
+  member comes from the persona pool. The workflow, rework budget, criteria and lead defaults are
+  filled in for you from the team's definition, so the card shows exactly what approval creates.
+- propose_specialist: {name: the role, purpose, persona: a pool persona's id} — persona is the pool
+  portrait Ty will see; nothing gets renamed after approval. A known role's rows are filled in.
 
 ## Worked examples
 
