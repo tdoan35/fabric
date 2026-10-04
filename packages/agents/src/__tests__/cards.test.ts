@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { buildDemoWorld } from "@fabric/fixtures/profiles";
-import { specialistProposal as validator } from "@fabric/fixtures/chat";
+import { specialistProposal as validator, teamProposal as scriptedTeam } from "@fabric/fixtures/chat";
 import type { TeamProposal } from "@fabric/contracts";
 import { resolveTeam, specialistCard, teamCard } from "../assistant/teams";
 import type { World } from "../assistant/teams";
@@ -109,5 +109,22 @@ describe("specialistCard", () => {
     const rows = [{ label: "Tools", value: "R", why: "stats" }];
     expect(specialistCard({ name: "Statistician", purpose: "x", persona: "elliot", rows }, world).rows).toEqual(rows);
     expect(specialistCard({ name: "Statistician", purpose: "x", persona: "elliot" }, world).rows.length).toBeGreaterThan(0);
+  });
+});
+
+// One source for the cards: the web mock streams @fabric/fixtures/chat as-is, and scripted Dana
+// builds its cards from the same choices. On the demo seed they must come out identical, so offline
+// mode shows exactly the cards the live demo does.
+describe("the scripted payloads", () => {
+  const withoutId = <T extends { proposalId?: string }>({ proposalId: _, ...rest }: T) => rest;
+
+  it("are the team card the server builds on the demo seed", () => {
+    const card = teamCard({ name: scriptedTeam.name, purpose: scriptedTeam.purpose, roster: scriptedTeam.roster.map((r) => r.agentId) }, world);
+    expect(card).toEqual(withoutId(scriptedTeam));
+  });
+
+  it("are the specialist card the server builds on the demo seed", () => {
+    const card = specialistCard({ name: validator.name, purpose: validator.purpose, persona: validator.persona?.id }, world);
+    expect(card).toEqual(withoutId(validator));
   });
 });

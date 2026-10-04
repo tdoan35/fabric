@@ -10,7 +10,7 @@
 import type {
   PersonaPoolEntry, ProposalRow, RosterEntry, SpecialistProposal, StudioProfile, StudioTeam, TeamProposal,
 } from "@fabric/contracts";
-import { specialistProposal as validatorTemplate } from "@fabric/fixtures/chat";
+import { LEAD_DEFAULTS, reworkBudgetRow, specialistProposal as validatorTemplate } from "@fabric/fixtures/chat";
 import { myProfiles } from "@fabric/fixtures/studio";
 import { studioTeams } from "@fabric/fixtures/teams";
 import { provisionTeam, slugId, sql } from "@fabric/db";
@@ -154,14 +154,7 @@ export function resolveTeam(choice: TeamChoice, world: World): ResolvedTeam {
   return { definition, templates };
 }
 
-/** The Research Lead's defaults, as the demo script shows them (CARD-1); the rework row follows the budget. */
-const LEAD_DEFAULTS: ProposalRow[] = [
-  { label: "Tools", value: "artifacts.read · workspace.write · team.assign", why: "Plans and assigns the work; doesn't run code himself" },
-  { label: "Memory", value: "Team-scoped · no personal memory", why: "Sees project facts, never yours" },
-  { label: "Model", value: "Sonnet 5.5", why: "Planning-heavy work at moderate length" },
-];
-
-/** Any other new lead's defaults. */
+/** Any other new lead's defaults (the Research Lead's, LEAD_DEFAULTS, are the scripted card's: @fabric/fixtures/chat). */
 const DEFAULT_LEAD_DEFAULTS: ProposalRow[] = [
   { label: "Tools", value: "artifacts.read · workspace.write · team.assign", why: "Plans and assigns the work; doesn't run code" },
   { label: "Memory", value: "Team-scoped · no personal memory", why: "Sees project facts, never yours" },
@@ -186,9 +179,7 @@ export function teamCard(choice: TeamChoice, world: World): TeamProposal {
   });
   const lead = d.members.find((m) => m.lead);
   const newLead = lead && !world.agents.some((a) => a.id === lead.agentId);
-  const budgetRow: ProposalRow = {
-    label: "Rework budget", value: `${d.reworkBudget} bounces, then it escalates to you`, why: "Bounded autonomy: exhaustion blocks, it never loops",
-  };
+  const budgetRow = reworkBudgetRow(d.reworkBudget);
   return {
     kind: "team",
     name: d.name,
