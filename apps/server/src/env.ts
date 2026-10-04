@@ -47,6 +47,8 @@ export const env = z.object({
   DEMO_RECORDING_KEY: z.string().default("ngram-135m"),
   OWNER_EMAIL: z.string().optional(),
   SEED_PROFILE: z.enum(["demo", "lived-in"]).default("demo"),
+  /** SCH: the 30s routines tick. Tests set off; the server defaults to on. */
+  SCHEDULER: z.enum(["on", "off"]).default("on"),
 }).parse(process.env);
 
 export const corsOrigins = env.CORS_ORIGINS

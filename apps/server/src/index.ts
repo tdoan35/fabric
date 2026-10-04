@@ -9,6 +9,8 @@ import { dev } from "./routes/dev";
 import { registry } from "./routes/registry";
 import { reports } from "./routes/reports";
 import { runs } from "./routes/runs";
+import { schedules } from "./routes/schedules";
+import { startScheduler } from "./services/scheduler";
 import { stream } from "./routes/stream";
 import { weave } from "./routes/weave";
 import { work } from "./routes/work";
@@ -17,7 +19,7 @@ const api = new Hono()
   .get("/health", (c) => c.json({ ok: true }))
   .route("/", registry)
   .route("/", work)
-  .route("/", runs)
+  .route("/", schedules)
   .route("/", reports)
   .route("/", weave)
   .route("/", stream)
@@ -33,3 +35,5 @@ app.route("/api", api);
 serve({ fetch: app.fetch, port: env.PORT }, (info) => {
   console.log(`fabric server on http://localhost:${info.port} · CORS ${corsOrigins.join(", ")}`);
 });
+
+startScheduler();
