@@ -210,8 +210,8 @@ describe("forced first record_disposition", () => {
     // The retry policy itself is what matters here: streamText raised on attempt 1 (forced call
     // missing), attempt 2 carries the call. Assert via the wire-level calls the mock recorded.
     // Mirrors the live attempt(): nothing yields until record_disposition has been called, and a
-    // ToolChoiceViolationError before anything streamed ends the attempt for the retry to take over.
-    const attempt = async function* () {
+    // ToolChoiceViolationError before anything streamed marks the attempt invalid for the retry.
+    const attempt = async function* (control: { invalid: boolean }) {
       const stream = streamText({
         model: mock,
         messages: [{ role: "user", content: "hi" }],
@@ -228,6 +228,7 @@ describe("forced first record_disposition", () => {
         if (!(err instanceof ToolChoiceViolationError)) throw err;
       }
       if (dispositionSeen) yield { content: [{ type: "text" as const, text: "ok" }] };
+      else control.invalid = true;
     };
     for await (const line of withForcedDisposition(attempt)) lines.push(JSON.stringify(line.content));
     expect(mock.doStreamCalls.length).toBeGreaterThanOrEqual(2); // the violation was retried, not failed
@@ -235,11 +236,14 @@ describe("forced first record_disposition", () => {
     expect(lines.length).toBeGreaterThan(0);
   });
 
-  it("withForcedDisposition retries the turn exactly once when no line ever lands", async () => {
+  it("withForcedDisposition retries the turn exactly once when the attempt is invalid", async () => {
     let attempts = 0;
-    const attempt = async function* () {
+    const attempt = async function* (control: { invalid: boolean }) {
       attempts++;
-      if (attempts === 1) return; // no record_disposition: nothing is yielded
+      if (attempts === 1) {
+        control.invalid = true; // no record_disposition: nothing is yielded
+        return;
+      }
       yield { content: [{ type: "text" as const, text: "retry" }] };
     };
     let retries = 0;
@@ -254,7 +258,7 @@ describe("forced first record_disposition", () => {
 
   it("withForcedDisposition gives up after one retry rather than looping", async () => {
     let attempts = 0;
-    const attempt = async function* () { attempts++; /* never yields */ };
+    const attempt = async function* (control: { invalid: boolean }) { attempts++; control.invalid = true; };
     const out = [];
     for await (const line of withForcedDisposition(attempt)) out.push(line);
     expect(attempts).toBe(2);

@@ -33,6 +33,7 @@ import {
 import type { SessionRow, StoredProposal } from "./store";
 import { applyApproval } from "./teams";
 import { prepareDispositionFirstStep, withForcedDisposition } from "./stream";
+import type { AttemptControl } from "./stream";
 import { statusAfterDecision } from "./transitions";
 import { diffThread, parseIncoming, toModelMessages } from "./thread";
 import type { DecisionDelta, ThreadDelta } from "./thread";
@@ -270,7 +271,8 @@ export function createAssistant(deps: AssistantDeps): Assistant {
         };
 
         const m = deps.modelFor?.(dana ?? fallbackDana()) ?? model(dana?.agent.model ?? "", { thinking: "off", meter: { agentId: "dana", step: "chat" } });
-        const attempt = async function* (): AsyncGenerator<ChatStreamLine> {
+        const allowed = active ?? Object.keys(tools);
+        const attempt = async function* (control: AttemptControl): AsyncGenerator<ChatStreamLine> {
           let yielded = false;
           const turnAbort = new AbortController();
           const stream = streamText({
@@ -315,6 +317,13 @@ export function createAssistant(deps: AssistantDeps): Assistant {
               text += part.text;
             } else if (part.type === "tool-call") {
               if (part.toolName === "search_registry") continue; // internal: never streamed
+              if (!allowed.includes(part.toolName)) {
+                // The lane occasionally emits a tool the turn didn't offer (seen with activeTools
+                // narrowed): the turn can't be used as-is. Retry it once (DANA 2).
+                control.invalid = true;
+                turnAbort.abort();
+                break;
+              }
               if (part.toolName === "record_disposition") dispositionSeen = true;
               if (part.toolName === "propose_team" || part.toolName === "propose_specialist") terminal = true;
               let args: unknown = part.input;
@@ -363,10 +372,11 @@ export function createAssistant(deps: AssistantDeps): Assistant {
             if (yielded || !(err instanceof ToolChoiceViolationError)) throw err;
             console.warn(`[assistant] step 0 ignored the forced record_disposition; retrying: ${err.message}`);
           }
+          if (!dispositionSeen) control.invalid = true; // nothing usable came out of this attempt
         };
 
         yield* withForcedDisposition(attempt, () =>
-          console.warn(`[assistant] no record_disposition in the first attempt for ${sessionId}; retrying the turn`));
+          console.warn(`[assistant] unusable first attempt for ${sessionId} (no disposition, or a disallowed tool call); retrying the turn`));
       }
     },
 
