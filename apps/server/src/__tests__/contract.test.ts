@@ -13,6 +13,7 @@ import type { ContextSnapshot, Project, Registry, Report, Run, RunEvent, Schedul
 import { cors } from "hono/cors";
 import { report as reportFixture, run as run135, runEvents as events135, snapshots as snapshots135 } from "@fabric/fixtures/run";
 import { projects as projectsFixture, sessions as sessionsFixture } from "@fabric/fixtures/sessions";
+import { scheduleSessions as scheduleSessionsFixture } from "@fabric/fixtures/schedules";
 import { runs as runsFixture, tasks as tasksFixture } from "@fabric/fixtures/work";
 import { calendarEvents, inboxSeed, presenceSeed, pulseSeed } from "@fabric/fixtures/weave";
 import { communityProfiles, myProfiles } from "@fabric/fixtures/studio";
@@ -221,7 +222,8 @@ describe.skipIf(profile !== "lived-in")("lived-in matches the mock world", () =>
     expect(reg.teams).toEqual(studioTeams);
     expect(reg.communityTeams).toEqual(communityTeams);
     expect(reg.organizations).toEqual(orgsFixture);
-    expect(reg.sessions).toEqual(sessionsFixture);
+    // SCH: the seeded routines' threads are part of both worlds.
+    expect(reg.sessions).toEqual([...sessionsFixture, ...scheduleSessionsFixture]);
   });
 });
 
