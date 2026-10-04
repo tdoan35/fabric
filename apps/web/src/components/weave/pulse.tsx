@@ -177,7 +177,9 @@ function MemoryCard({ entry }: { entry: MemoryEntry }) {
       </div>
       <p className={cn("mt-2 text-sm", entry.decision === "forgotten" && "text-muted-foreground line-through")}>“{entry.text}”</p>
       <div className="mt-2 flex items-center gap-2 text-xs text-muted-foreground">
-        <span>From {entry.source}. Only {name} loads it; it never reaches Dana's memory.</span>
+        <span>{entry.memoryId
+          ? <>From {entry.source}. About you; {name} uses it when it's relevant.</>
+          : <>From {entry.source}. Only {name} loads it; it never reaches Dana's memory.</>}</span>
         <span className="ml-auto flex shrink-0 gap-1">
           {entry.decision
             ? <>

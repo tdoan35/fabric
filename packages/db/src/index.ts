@@ -43,6 +43,8 @@ export {
   getRunRow, latestRecordingRun, listProjects, listRuns, listSnapshots, listStoredEvents, listTasks,
   mergedEvents, readArtifact, readRegistry, readReport, readRun, readTask, readWeave,
 } from "./read";
+export { decideMemory, listMemories, searchMemories, upsertMemories } from "./memory";
+export type { MemoryHit, MemoryList, MemorySearch, MemoryUpsert } from "./memory";
 export type { RunRowLike } from "./read";
 export * as schema from "./schema";
 export type { AgentToolRow } from "./schema";

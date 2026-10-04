@@ -44,4 +44,6 @@ export const mockApi = {
   getSnapshots: (runId: string): Promise<ContextSnapshot[]> =>
     delay(runId === recordingId ? recordingSnapshots : allSnapshots.filter((s) => s.runId === runId)),
   getReport: (id: string): Promise<Report | undefined> => delay(id === recordingReport.id ? recordingReport : undefined),
+  /** No-op offline: mock memory decisions stay client-side (the mock pulse rows have no memoryId). */
+  decideMemory: (): Promise<{ ok: true }> => delay({ ok: true }),
 };

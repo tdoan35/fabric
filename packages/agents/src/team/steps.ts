@@ -257,7 +257,8 @@ export async function criteriaChecks(ctx: RunCtx, agent: StudioProfile, spec: St
       `Which criteria can you verify, and do they pass?`,
     ].join("\n\n"),
     temperature: TEMPERATURE,
-    maxOutputTokens: 500,
+    // Claude (Neon lane) writes ~1.2k tokens of notes for four criteria; a capped object fails the schema.
+    maxOutputTokens: 2000,
     abortSignal: stepAbort.signal,
   });
   const raced = await raceBail(ctx, run, 90_000, () => stepAbort.abort());

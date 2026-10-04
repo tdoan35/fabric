@@ -1,7 +1,7 @@
 import { useSyncExternalStore } from "react";
 import { WEAVE_NOW, inboxSeed as fixtureItems, presenceSeed, pulseSeed, calendarEvents as fixtureCalendar, dayMarkers as fixtureMarkers, type InboxItem, type ItemKind, type Presence, type PulseEntry, type UpdateEntry } from "./mock/weave";
 import type { CalendarEvent, WeaveSnapshot } from "@fabric/contracts";
-import { httpMode } from "./api";
+import { api, httpMode } from "./api";
 
 /**
  * Weave's state lives in a module-level store rather than in the page, so the sidebar's
@@ -157,6 +157,13 @@ export const weave = {
     set({ ...state, entries: patchEntry(entryId, (e) => (e.kind === "update" ? { ...e, replies: [...(e.replies ?? []), { text, at }] } satisfies UpdateEntry : e)) });
   },
   decideMemory(entryId: string, decision: "kept" | "forgotten" | undefined) {
+    // Real rows (the pulse cards carry a memoryId) write through to the server: Keep pins,
+    // Forget soft-deletes. Seeded mock rows stay client-only.
+    const entry = state.entries.find((e) => e.id === entryId);
+    if (entry?.kind === "memory" && entry.memoryId && decision) {
+      void api.decideMemory(entry.memoryId, decision).catch((err: unknown) =>
+        console.warn(`[weave] memory decision failed: ${err instanceof Error ? err.message : err}`));
+    }
     set({ ...state, entries: patchEntry(entryId, (e) => (e.kind === "memory" ? { ...e, decision } : e)) });
   },
 };

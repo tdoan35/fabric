@@ -4,7 +4,11 @@ import type {
   AgentWorkspace, Brief, CalendarEvent, ChatAgent, ContextSection, InboxItem, PulseEntry, Presence, Project, Task,
   Report, RunEventPayloads, RunEventType, RunSegment, SpriteAvatar, ToolPolicy, WorkflowStage,
 } from "@fabric/contracts";
-import { pgTable, text, integer, boolean, numeric, jsonb, timestamp, primaryKey, index } from "drizzle-orm/pg-core";
+import { customType, pgTable, text, integer, real, boolean, numeric, jsonb, timestamp, primaryKey, index, vector } from "drizzle-orm/pg-core";
+import { sql } from "drizzle-orm";
+
+/** Postgres `tsvector`; only written by the generated column, never by callers. */
+const tsvector = customType<{ data: string }>({ dataType: () => "tsvector" });
 
 const ts = (name: string) => timestamp(name, { withTimezone: true });
 
@@ -295,6 +299,31 @@ export const seedState = pgTable("seed_state", {
   profile: text("profile").notNull(),
   seededAt: ts("seeded_at").notNull().defaultNow(),
 });
+
+// ---- Memory (the Mnemosyne import; CONCEPT §2.9 scopes. Seed never truncates it.) ----
+
+/** pgvector column; the importer and recall hand raw 384-d arrays / '[…]' literals. */
+export const memories = pgTable("memories", {
+  /** `mnemo:<source table>:<origin id>` for imported rows: stable, so re-imports upsert. */
+  id: text("id").primaryKey(),
+  scope: text("scope").notNull().default("personal"), // personal | agent | team | run (CONCEPT §2.9)
+  scopeId: text("scope_id").notNull().default("dana"),
+  kind: text("kind").notNull(), // canonical | episode | instruction | preference | context | …
+  text: text("text").notNull(),
+  source: text("source").notNull().default(""), // e.g. "Mnemosyne · canonical/task:progress"
+  importance: real("importance").notNull().default(0.5),
+  pinned: boolean("pinned").notNull().default(false),
+  /** Rows a regex pass flagged (phone, email, address, credentials): never recalled or listed. */
+  sensitive: boolean("sensitive").notNull().default(false),
+  /** When the memory is about (the origin's event time), vs when the row landed. */
+  eventAt: ts("event_at"),
+  createdAt: ts("created_at").notNull().defaultNow(),
+  /** Set by a Forget decision; recall and lists exclude it. */
+  forgottenAt: ts("forgotten_at"),
+  embedding: vector("embedding", { dimensions: 384 }),
+  /** Generated full-text index over `text` (replaces Mnemosyne's FTS5). */
+  tsv: tsvector("tsv").generatedAlwaysAs(sql`to_tsvector('english', text)`),
+}, (t) => [index("memories_tsv_idx").using("gin", t.tsv)]);
 
 // ---- payload typing helpers (not tables) ----
 

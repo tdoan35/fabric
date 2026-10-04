@@ -7,9 +7,10 @@ import { Button } from "@/components/ui/button";
 import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { APPROVALS, EFFORTS, MODELS } from "@/lib/mock/options";
+import { APPROVALS, MODELS } from "@/lib/mock/options";
 import { demoMode } from "@/lib/chat/demo";
 import { disarmFixture, useFixtureArmed } from "@/lib/chat/fixture";
+import { EFFORT_LABELS, setChatEffort, setChatModel, useModelChoice, type Effort } from "@/lib/chat/model-choice";
 
 // D7: the demo build never offers Full auto.
 const approvals = demoMode ? APPROVALS.filter((a) => a.id !== "auto") : APPROVALS;
@@ -38,29 +39,33 @@ function ApprovalPicker() {
   );
 }
 
+// Sent with every chat turn (lib/chat/model-choice): Dana runs on the pick, or on her own model.
 function ModelPicker() {
-  const [model, setModel] = useState(MODELS[2].name);
-  const [effort, setEffort] = useState("Medium");
+  const { model, effort } = useModelChoice();
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
         <Button variant="ghost" size="sm" className="h-8 gap-1 px-2 text-xs hover:text-foreground" aria-label="Model and reasoning effort">
-          <span>{model}</span><span className="hidden text-muted-foreground @md/composer:inline">{effort}</span><ChevronDown className="size-3 text-muted-foreground" />
+          <span>{model ?? "Agent default"}</span><span className="hidden text-muted-foreground @md/composer:inline">{EFFORT_LABELS[effort]}</span><ChevronDown className="size-3 text-muted-foreground" />
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" side="top" className="min-w-56">
         <DropdownMenuLabel className="text-xs text-muted-foreground">Model</DropdownMenuLabel>
+        <DropdownMenuItem onSelect={(e) => { e.preventDefault(); setChatModel(null); }} className="justify-between">
+          <span>Agent default<span className="ml-2 text-xs text-muted-foreground">Set in Studio</span></span>
+          {model === null && <Check className="size-3.5" />}
+        </DropdownMenuItem>
         {MODELS.map((m) => (
-          <DropdownMenuItem key={m.id} onSelect={(e) => { e.preventDefault(); setModel(m.name); }} className="justify-between">
+          <DropdownMenuItem key={m.id} onSelect={(e) => { e.preventDefault(); setChatModel(m.name); }} className="justify-between">
             <span>{m.name}<span className="ml-2 text-xs text-muted-foreground">{m.note}</span></span>
             {m.name === model && <Check className="size-3.5" />}
           </DropdownMenuItem>
         ))}
         <DropdownMenuSeparator />
         <DropdownMenuLabel className="text-xs text-muted-foreground">Reasoning effort</DropdownMenuLabel>
-        {EFFORTS.map((e) => (
-          <DropdownMenuItem key={e} onSelect={(ev) => { ev.preventDefault(); setEffort(e); }} className="justify-between">
-            {e}{e === effort && <Check className="size-3.5" />}
+        {(Object.keys(EFFORT_LABELS) as Effort[]).map((e) => (
+          <DropdownMenuItem key={e} onSelect={(ev) => { ev.preventDefault(); setChatEffort(e); }} className="justify-between">
+            {EFFORT_LABELS[e]}{e === effort && <Check className="size-3.5" />}
           </DropdownMenuItem>
         ))}
       </DropdownMenuContent>

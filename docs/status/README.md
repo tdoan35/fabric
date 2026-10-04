@@ -1,6 +1,6 @@
 # Agent status files
 
-One file per workstream, written only by that agent: `status/<code>.md` (data, dana, team, ctx, tools, lab, ui-chat, ui-work, ops).
+One file per workstream, written only by that agent: `docs/status/<code>.md` (data, dana, team, ctx, tools, lab, ui-chat, ui-work, ops).
 The integrator reads them at every checkpoint (WORK-PLAN §5.1). Template:
 
 ```markdown

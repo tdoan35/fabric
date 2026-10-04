@@ -1,9 +1,9 @@
-// Sprites (S2): Jonah's and Sana's sandboxes, via the @fly/sprites SDK. The two Sprites are
-// pre-created (8 CPU, 8 GiB, no GPU); attaching is just a client handle — the machine boots on
-// the first exec, which is the cold start we measure. The egress policy (package index + model
-// host only) is enforced by the Sprite itself, DNS-based, and applied here idempotently.
+// Sprites (S2): Jonah/Sana use the package/model DNS allowlist. Dana's dedicated
+// browser Sprite permits public-web DNS; its setup service enforces public-only browser
+// egress with a validating proxy and an unprivileged browser UID firewall.
 import { createInterface } from "node:readline";
-import { SpritesClient } from "@fly/sprites";
+import { setTimeout as delay } from "node:timers/promises";
+import { ExecError, SpritesClient } from "@fly/sprites";
 import type { Sprite } from "@fly/sprites";
 import type { NetworkPolicy } from "@fly/sprites";
 import { env } from "./env";
@@ -25,6 +25,7 @@ export const SPRITE_WORKDIR = "/root";
 const spriteNameFor = (agentId: string): string | undefined => {
   if (agentId === "jonah") return env("SPRITE_CODER") ?? "fabric-coder";
   if (agentId === "sana") return env("SPRITE_VALIDATOR") ?? "fabric-validator";
+  if (agentId === "dana") return env("SPRITE_ASSISTANT") ?? "fabric-assistant";
   return undefined;
 };
 
@@ -50,16 +51,60 @@ export function egressAllowed(host: string): boolean {
   return EGRESS_ALLOWLIST.some((d) => h === d || h.endsWith(`.${d}`));
 }
 
-const desiredPolicy = (): NetworkPolicy => ({
-  rules: [...EGRESS_ALLOWLIST.map((domain) => ({ domain, action: "allow" as const }))],
+const isDanaSprite = (sprite: Sprite): boolean => sprite.name === spriteNameFor("dana")
+  && sprite.name !== spriteNameFor("jonah") && sprite.name !== spriteNameFor("sana");
+
+const desiredPolicy = (sprite: Sprite): NetworkPolicy => ({
+  // SDK policies match DNS names only, not destination CIDRs. This rule is not an
+  // SSRF boundary: Dana's browser service supplies the actual IP-level restriction.
+  rules: isDanaSprite(sprite)
+    ? [{ domain: "*", action: "allow" }]
+    : EGRESS_ALLOWLIST.map((domain) => ({ domain, action: "allow" as const })),
 });
 
-/** Applies the allowlist unless it is already in force. Safe to call before every exec. */
+/** Applies the identity-specific DNS policy; unknown Sprites keep the restricted policy. */
 export async function ensureEgressPolicy(sprite: Sprite): Promise<void> {
   const current = await sprite.getNetworkPolicy();
-  const want = JSON.stringify(desiredPolicy().rules);
-  const have = JSON.stringify([...current.rules].sort((a, b) => String(a.domain).localeCompare(String(b.domain))));
-  if (want !== have) await sprite.updateNetworkPolicy(desiredPolicy());
+  const policy = desiredPolicy(sprite);
+  const canonical = (rules: NetworkPolicy["rules"]) => JSON.stringify(
+    [...rules].sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b))),
+  );
+  if (canonical(policy.rules) !== canonical(current.rules)) await sprite.updateNetworkPolicy(policy);
+}
+
+/** Wake the already provisioned service, never install packages on the errand hot path. */
+export async function ensureDanaBrowser(signal?: AbortSignal): Promise<Sprite> {
+  const sprite = spriteFor("dana")!;
+  if (!isDanaSprite(sprite)) throw new Error("SPRITE_ASSISTANT must be distinct from Jonah's and Sana's Sprite names");
+  await ensureEgressPolicy(sprite);
+  const health = async () => {
+    try {
+      await sprite.execFile("curl", [
+        "-fsS", "--max-time", "2", "http://127.0.0.1:9223/health",
+      ], { timeout: 5000, signal });
+      return true;
+    } catch (error) {
+      if (!(error instanceof ExecError)) throw error;
+      return false;
+    }
+  };
+  if (await health()) return sprite;
+  try {
+    await sprite.getService("dana-browser");
+    const stream = await sprite.startService("dana-browser", "1s");
+    for await (const item of stream) {
+      if (item.type === "error") throw new Error(item.data);
+    }
+  } catch (error) {
+    throw new Error("Dana browser service unavailable; run bash scripts/setup-dana-sprite.sh", { cause: error });
+  }
+  const deadline = Date.now() + 40_000;
+  while (Date.now() < deadline) {
+    signal?.throwIfAborted();
+    if (await health()) return sprite;
+    await delay(500, undefined, { signal });
+  }
+  throw new Error("Dana headed browser did not become ready within 40 seconds");
 }
 
 export interface SpriteExecResult {
@@ -113,7 +158,7 @@ export async function execInSprite(sprite: Sprite, command: string, opts: Sprite
   const output = chunks.join("\n");
   // A failed fetch to a host outside the allowlist is the sandbox doing its job: report it as a
   // denied network.fetch so the Tools tab shows the enforcement (S2's blocked-fetch check).
-  const blockedHosts = killed ? [] : [...new Set([...command.matchAll(URL_RE)].map((m) => m[1].split(":")[0]))]
+  const blockedHosts = killed || isDanaSprite(sprite) ? [] : [...new Set([...command.matchAll(URL_RE)].map((m) => m[1].split(":")[0]))]
     .filter((h) => !egressAllowed(h) && NET_FAIL.test(output));
   return { exitCode: killed ? 124 : exitCode, tail: output.slice(-2000), blockedHosts };
 }

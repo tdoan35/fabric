@@ -12,7 +12,7 @@ loadRootEnv();
 import { generateText, streamText, tool as aiTool } from "ai";
 import type { LanguageModel } from "@fabric/agents/llm";
 import { z } from "zod";
-import { model, runCostUsd, runUsages } from "@fabric/agents/llm";
+import { model, providerName, runCostUsd, runUsages } from "@fabric/agents/llm";
 import { compileBrief, countTokens, renderBrief } from "@fabric/agents/context";
 import { studioTeams } from "@fabric/fixtures/teams";
 import { profileById } from "@fabric/fixtures/studio";
@@ -70,6 +70,8 @@ async function step1ThinkingLevels() {
     const reasoning = result.usage.outputTokenDetails?.reasoningTokens ?? 0;
     console.log(`   ${level.padEnd(8)} ${s(latency).padStart(7)}   ${String(result.usage.inputTokens ?? "?")}/${String(result.usage.outputTokens ?? "?").padEnd(10)} ${reasoning}`);
     if (level === "off") check("thinking off yields zero reasoning tokens", reasoning === 0, `reasoning=${reasoning}, out=${result.usage.outputTokens}`);
+    // Neon's Sonnet/Opus 5 think adaptively: at low/medium effort they may skip reasoning on a short prompt.
+    else if (providerName() === "neon") console.log(`    INFO  thinking ${level} (adaptive) — reasoning=${reasoning}`);
     else if (level === "low" || level === "medium") check(`thinking ${level} reasoned`, reasoning > 0, `reasoning=${reasoning} (unit tests pin the request body)`);
   }
 }

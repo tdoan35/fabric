@@ -364,6 +364,12 @@ const latencies: string[] = [];
 const timings: { pass: number; turn: string; timing: Timing }[] = [];
 if (live) {
   info(`9. live · ${times}× the happy path on the model lane (sequential; 8-request lane)`);
+  await seed();
+  const alternativeIdea = "I've noticed that the latest open-source models from deepseek and qwen are converging around a similar idea: engrams. I thought of an experiment idea: graft an n-gram lookup table onto a smaller open model, keeping the table on NAND instead of RAM.";
+  const alternative = await turn("live-engram-phrasing", [userMsg(alternativeIdea)], false);
+  assertTurnShape(alternative.parts, "propose_team", "live: alternative engram phrasing", false);
+  ok(toolPart(alternative.parts, "record_disposition")?.args?.disposition === "propose_team", "alternative engram idea routes to propose_team");
+  ok(!alternative.parts.some((part) => part.toolName === "browser_task"), "experiment idea does not start a browser errand");
   let pass = 0;
   for (let i = 1; i <= times; i++) {
     await seed();
@@ -391,6 +397,31 @@ if (live) {
     info(`   pass ${pass}/${times} (${wall} s)`);
   }
   ok(pass === times, `live: ${pass}/${times} complete happy paths`);
+
+  // ---- MEM: recall grounds a "right now" question, and the prompt stays free of sensitive rows ----
+  // Run with FABRIC_DEBUG_PROMPT=1 so the server logs each turn's system prompt (memory-gate checks
+  // grep it). Needs a branch the import ran on (`npm run memory:import -- --branch <name>`).
+  info("10. live · memory: the DGX question, grounded in the task:progress facts");
+  // No re-seed here: the world from the passes above is fine (Dana + the import are what this turn
+  // needs), and a truncate this soon after live traffic has deadlocked against the server's
+  // runs/run_events reads (40P01, twice).
+  const tq = await turn("live-mem", [userMsg("what's running on my DGX Spark right now?")], false);
+  latencies.push(`live-mem: dgx question ${tq.ms} ms`);
+  ok(tq.parts[0]?.toolName === "record_disposition" && tq.parts[0].result?.recorded === true, "memory turn: disposition first, recorded");
+  const answer = tq.parts.filter((p) => p.type === "text").map((p) => p.text ?? "").join(" ");
+  ok(/DGX|Spark/i.test(answer), `the answer addresses the DGX Spark: "${answer.slice(0, 90)}"`);
+  ok(/GLM|Qwen|DeepSeek|MiMo|TP2|ds41|glm53/i.test(answer), `the answer is grounded in the task:progress canonical facts: "${answer.slice(0, 140)}"`);
+  const promptLogs = serverLogs.split("[assistant] system prompt");
+  ok(promptLogs.length > 1, "the system prompt was logged (start the server with FABRIC_DEBUG_PROMPT=1)");
+  ok(promptLogs.slice(1).some((p) => p.includes("What you remember about Ty")), "the prompt carries the memory section");
+  const memDb = createDb(pooled);
+  const sensitive = (await memDb.db.execute(sql.raw("select text from memories where sensitive"))).rows as { text: string }[];
+  await memDb.close();
+  ok(sensitive.length > 0, `the branch holds ${sensitive.length} sensitive rows to check against`);
+  for (const [i, row] of sensitive.entries()) {
+    const marker = row.text.replace(/\s+/g, " ").trim().slice(0, 30);
+    ok(!serverLogs.includes(marker), `sensitive row ${i + 1}/${sensitive.length} never appears in the prompt or logs (text withheld)`);
+  }
 }
 
 console.log(`\nlatencies:`);
@@ -400,7 +431,7 @@ console.log(`\ncheck:chat PASSED in ${((Date.now() - startedAll) / 1000).toFixed
 stopAll();
 process.exit(0);
 
-/** The live per-turn timing table (markdown, so it pastes into status/dana.md), plus medians. */
+/** The live per-turn timing table (markdown, so it pastes into docs/status/dana.md), plus medians. */
 function printTimingTable(rows: { pass: number; turn: string; timing: Timing }[]) {
   const sec = (ms?: number) => (ms === undefined ? "—" : `${(ms / 1000).toFixed(1)} s`);
   const median = (xs: number[]) => {

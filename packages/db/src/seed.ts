@@ -56,6 +56,7 @@ const TABLES = [
   "reports", "artifacts", "context_snapshots", "run_events", "runs", "tasks", "projects",
   "org_handoffs", "org_slots", "organizations", "team_members", "teams", "persona_pool",
   "agent_memories", "agents", "seed_state",
+  // `memories` is deliberately absent: re-seeding must not wipe the Mnemosyne import (docs/status/memory.md).
 ];
 await db.db.execute(sql.raw(`truncate table ${TABLES.map((t) => `public.${t}`).join(", ")} restart identity cascade`));
 

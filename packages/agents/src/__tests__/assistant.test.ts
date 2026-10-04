@@ -1,15 +1,15 @@
 // DANA unit tests (WORK-PLAN §5.3 DANA "Done when"): the thread-diff logic, the proposal state
-// transitions, and the forced first record_disposition call. No network, no database: the model
+// transitions, and the first record_disposition call (asked for, not forced). No network, no database: the model
 // is the AI SDK's MockLanguageModelV4 and the pure modules are exercised directly.
 import { describe, expect, it } from "vitest";
-import { ToolChoiceViolationError, stepCountIs, streamText, tool } from "ai";
+import { stepCountIs, streamText, tool } from "ai";
 import type { ToolSet } from "ai";
 import { MockLanguageModelV4 } from "ai/test";
 import { z } from "zod";
 import type { LanguageModelV4StreamPart } from "@ai-sdk/provider";
 import type { ChatPart, ThreadMessage } from "@fabric/contracts";
 import { diffThread, parseIncoming, toModelMessages } from "../assistant/thread";
-import { prepareDispositionFirstStep, withForcedDisposition } from "../assistant/stream";
+import { fallbackDisposition, withOneRetry } from "../assistant/stream";
 import { statusAfterDecision, transitionOnReproposal, type ProposalLike } from "../assistant/transitions";
 
 const storedMsg = (id: string, role: "user" | "assistant", content: ChatPart[]): ThreadMessage => ({
@@ -143,112 +143,46 @@ describe("proposal transitions", () => {
   });
 });
 
-// ---- the forced first call (DANA 2) ----
+// ---- the first call (DANA 2): asked for, not forced ----
 
-describe("forced first record_disposition", () => {
-  it("prepareStep forces the tool on step 0 and frees later steps", () => {
-    expect(prepareDispositionFirstStep(0)).toEqual({ toolChoice: { type: "tool", toolName: "record_disposition" } });
-    expect(prepareDispositionFirstStep(1)).toEqual({});
-    expect(prepareDispositionFirstStep(4)).toEqual({});
-  });
-
+describe("record_disposition first, not forced", () => {
   const usage = { inputTokens: { total: 3, noCache: undefined, cacheRead: undefined, cacheWrite: undefined }, outputTokens: { total: 5, text: undefined, reasoning: undefined } };
   const finish = { type: "finish" as const, usage, finishReason: { unified: "stop" as const, raw: "stop" as const } };
   const streamOf = (parts: LanguageModelV4StreamPart[]) => ({ stream: new ReadableStream<LanguageModelV4StreamPart>({ start(c) { for (const p of parts) c.enqueue(p); c.close(); } }) });
 
-  it("streamText sends the forced toolChoice on step 0 and auto on the next step", async () => {
+  it("a model that answers without record_disposition still finishes the turn (no tool choice forced)", async () => {
     const mock = new MockLanguageModelV4({
-      doStream: [
-        streamOf([
-          { type: "tool-call", toolCallId: "c1", toolName: "record_disposition", input: JSON.stringify({ disposition: "handle_directly", reason: "simple question" }) },
-          finish,
-        ]),
-        streamOf([{ type: "text-start", id: "t" }, { type: "text-delta", id: "t", delta: "An n-gram is a run of n tokens." }, { type: "text-end", id: "t" }, finish]),
-      ],
+      doStream: [streamOf([{ type: "text-start", id: "t" }, { type: "text-delta", id: "t", delta: "391" }, { type: "text-end", id: "t" }, finish])],
     });
-    const recorded: unknown[] = [];
     const tools: ToolSet = {
-      record_disposition: tool({
-        inputSchema: z.object({ disposition: z.string(), reason: z.string() }),
-        execute: async (args) => { recorded.push(args); return { recorded: true }; },
-      }),
+      record_disposition: tool({ inputSchema: z.object({ disposition: z.string(), reason: z.string() }), execute: async () => ({ recorded: true }) }),
     };
-    const result = streamText({
-      model: mock,
-      messages: [{ role: "user", content: "what's an n-gram?" }],
-      tools,
-      stopWhen: stepCountIs(6),
-      prepareStep: ({ stepNumber }) => prepareDispositionFirstStep(stepNumber),
-    });
-    const text = await result.text;
-    expect(text).toContain("n-gram");
-    expect(recorded).toEqual([{ disposition: "handle_directly", reason: "simple question" }]);
-    expect(mock.doStreamCalls[0].toolChoice).toEqual({ type: "tool", toolName: "record_disposition" });
-    expect(mock.doStreamCalls[1].toolChoice).toEqual({ type: "auto" });
+    const result = streamText({ model: mock, messages: [{ role: "user", content: "17*23?" }], tools, stopWhen: stepCountIs(6) });
+    expect(await result.text).toBe("391");
+    expect(mock.doStreamCalls[0].toolChoice).toEqual({ type: "auto" });
   });
 
-  it("a step-0 response that ignores the forced tool choice is swallowed and retried once", async () => {
-    // Seen on the Spark lane: the model skips the forced call, streamText raises
-    // ToolChoiceViolationError, and the turn reruns from scratch (DANA 2 "retry the turn once").
-    const mock = new MockLanguageModelV4({
-      doStream: [
-        streamOf([{ type: "text-start", id: "t" }, { type: "text-delta", id: "t", delta: "no tool call" }, { type: "text-end", id: "t" }, finish]),
-        streamOf([
-          { type: "tool-call", toolCallId: "c1", toolName: "record_disposition", input: JSON.stringify({ disposition: "handle_directly", reason: "retry" }) },
-          finish,
-        ]),
-      ],
-    });
-    const recorded: unknown[] = [];
-    const tools: ToolSet = {
-      record_disposition: tool({
-        inputSchema: z.object({ disposition: z.string(), reason: z.string() }),
-        execute: async (args) => { recorded.push(args); return { recorded: true }; },
-      }),
-    };
-    const lines: string[] = [];
-    // The retry policy itself is what matters here: streamText raised on attempt 1 (forced call
-    // missing), attempt 2 carries the call. Assert via the wire-level calls the mock recorded.
-    // Mirrors the live attempt(): nothing yields until record_disposition has been called, and a
-    // ToolChoiceViolationError before anything streamed marks the attempt invalid for the retry.
-    const attempt = async function* (control: { invalid: boolean }) {
-      const stream = streamText({
-        model: mock,
-        messages: [{ role: "user", content: "hi" }],
-        tools,
-        stopWhen: stepCountIs(6),
-        prepareStep: ({ stepNumber }) => prepareDispositionFirstStep(stepNumber),
-      });
-      let dispositionSeen = false;
-      try {
-        for await (const part of stream.fullStream) {
-          if (part.type === "tool-call" && part.toolName === "record_disposition") dispositionSeen = true;
-        }
-      } catch (err) {
-        if (!(err instanceof ToolChoiceViolationError)) throw err;
-      }
-      if (dispositionSeen) yield { content: [{ type: "text" as const, text: "ok" }] };
-      else control.invalid = true;
-    };
-    for await (const line of withForcedDisposition(attempt)) lines.push(JSON.stringify(line.content));
-    expect(mock.doStreamCalls.length).toBeGreaterThanOrEqual(2); // the violation was retried, not failed
-    expect(recorded).toEqual([{ disposition: "handle_directly", reason: "retry" }]);
-    expect(lines.length).toBeGreaterThan(0);
+  it("fallbackDisposition infers the routing from the turn's tool calls", () => {
+    expect(fallbackDisposition([]).disposition).toBe("handle_directly");
+    expect(fallbackDisposition(["propose_team"]).disposition).toBe("propose_team");
+    expect(fallbackDisposition(["propose_specialist"]).disposition).toBe("propose_specialist");
+    expect(fallbackDisposition(["propose_team", "handoff_to_team"]).disposition).toBe("delegate_team");
+    expect(fallbackDisposition([]).reason.length).toBeGreaterThan(3);
   });
 
-  it("withForcedDisposition retries the turn exactly once when the attempt is invalid", async () => {
+  it("withOneRetry retries the turn exactly once when the attempt is invalid", async () => {
     let attempts = 0;
     const attempt = async function* (control: { invalid: boolean }) {
       attempts++;
       if (attempts === 1) {
-        control.invalid = true; // no record_disposition: nothing is yielded
+        control.invalid = true; // an unusable attempt: nothing is yielded
         return;
       }
       yield { content: [{ type: "text" as const, text: "retry" }] };
     };
     let retries = 0;
     const out: string[] = [];
-    for await (const line of withForcedDisposition(attempt, () => retries++)) {
+    for await (const line of withOneRetry(attempt, () => retries++)) {
       out.push(JSON.stringify(line.content));
     }
     expect(attempts).toBe(2);
@@ -256,11 +190,11 @@ describe("forced first record_disposition", () => {
     expect(out).toEqual([JSON.stringify([{ type: "text", text: "retry" }])]);
   });
 
-  it("withForcedDisposition gives up after one retry rather than looping", async () => {
+  it("withOneRetry gives up after one retry rather than looping", async () => {
     let attempts = 0;
     const attempt = async function* (control: { invalid: boolean }) { attempts++; control.invalid = true; };
     const out = [];
-    for await (const line of withForcedDisposition(attempt)) out.push(line);
+    for await (const line of withOneRetry(attempt)) out.push(line);
     expect(attempts).toBe(2);
     expect(out).toEqual([]);
   });

@@ -29,6 +29,13 @@
       "when": 1791056470995,
       "tag": "0003_overconfident_magma",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1791146429133,
+      "tag": "0004_memories",
+      "breakpoints": true
     }
   ]
 }

@@ -55,5 +55,13 @@ export const AppEventSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("run.changed"), runId: z.string() }),
   z.object({ type: z.literal("weave.changed") }),
   z.object({ type: z.literal("session.message"), sessionId: z.string(), messageId: z.string() }),
+  z.object({
+    type: z.literal("session.desktop"),
+    sessionId: z.string(),
+    url: z.string().nullable(),
+    runId: z.string().nullable(),
+    screenshotArtifactId: z.string().nullable().optional(),
+    replay: z.boolean().optional(),
+  }),
 ]);
 export type AppEvent = z.infer<typeof AppEventSchema>;

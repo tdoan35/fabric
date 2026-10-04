@@ -61,6 +61,7 @@ async function* chatStream(body: ChatRequest, signal?: AbortSignal): AsyncGenera
 }
 const spliceSchema = z.object({ run: RunSchema, events: z.array(RunEventSchema) });
 const finalizeSchema = z.object({ reportId: z.string() });
+const decisionSchema = z.object({ ok: z.boolean(), id: z.string(), decision: z.enum(["kept", "forgotten"]) });
 
 export const httpApi = {
   getRegistry: () => request<Registry>("/registry", RegistrySchema),
@@ -76,6 +77,9 @@ export const httpApi = {
   getReport: (id: string) => request<Report | undefined>(`/reports/${encodeURIComponent(id)}`, ReportSchema, undefined, true),
   spliceRun: (id: string, t: number) => request<SpliceResponse>(`/runs/${encodeURIComponent(id)}/splice`, spliceSchema, json({ t })),
   finalizeSplice: (id: string) => request<FinalizeResponse>(`/runs/${encodeURIComponent(id)}/finalize-splice`, finalizeSchema, json({})),
+  // MEM: Keep pins a memory, Forget soft-deletes it (POST /memories/:id/decision).
+  decideMemory: (id: string, decision: "kept" | "forgotten") =>
+    request<{ ok: boolean }>(`/memories/${encodeURIComponent(id)}/decision`, decisionSchema, json({ decision })),
   // Chat (UI-CHAT): Dana's thread. Http mode only; mock mode streams the scripted adapter instead.
   chat: chatStream,
   getSessionMessages: (id: string) => request<SessionMessages>(`/sessions/${encodeURIComponent(id)}/messages`, SessionMessagesSchema),

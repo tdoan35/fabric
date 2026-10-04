@@ -158,6 +158,12 @@ export const ChatRequestSchema = z.object({
   messages: z.array(z.unknown()),
   /** Scripted Dana for this turn (RUN-12). The `x-fabric-fixture: 1` header does the same. */
   fixture: z.boolean().optional(),
+  /** The composer's model picker, as a display name ("Opus 5.5"). Absent: Dana's registry model. */
+  model: z.string().optional(),
+  /** The composer's reasoning effort. Absent: off (Dana's latency default). */
+  effort: z.enum(["off", "low", "medium", "high", "xhigh"]).optional(),
+  /** Incognito threads skip personal-memory recall entirely (CONCEPT §2.9). Additive. */
+  incognito: z.boolean().optional(),
 });
 export type ChatRequest = z.infer<typeof ChatRequestSchema>;
 

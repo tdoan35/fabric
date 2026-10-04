@@ -26,7 +26,7 @@
 1. Read §0–§4, then your workstream in §5.3, then the doc sections it lists. Nothing else is required reading.
 2. Work only in the paths you own (§3.3). If you need a change somewhere else, write it under **Requests** in your status file and pick up other work meanwhile.
 3. The contracts (§4) freeze at Checkpoint 0. If you need one changed, file a request. The integrator decides and changes `packages/contracts` themselves.
-4. Keep `status/<code>.md` current (template in §7.6). It holds what's done, what's next, what's blocked, spike results and requests.
+4. Keep `docs/status/<code>.md` current (template in §7.6). It holds what's done, what's next, what's blocked, spike results and requests.
 5. **Don't break mock mode.** `VITE_API_MODE=mock` must keep rendering today's mockup, because it's the L0 fallback and the offline mode.
 6. Commit small, rebase on `main` at every checkpoint, and never commit `.env`.
 
@@ -40,7 +40,7 @@
 
 | Topic | Docs say | The mockup today | Fix in |
 |---|---|---|---|
-| Web stack | Next.js 16 (`src/app`) — ARCH §2, §3, §13; PRD header | Vite 8 + React Router 8 data router: loaders in `src/router.tsx`, route components in `src/routes/`. SPA, no server rendering. `apps/web/AGENTS.md` is current | ARCH §2–3, §13; PRD header; DATA-9 |
+| Web stack | Next.js 16 (`src/app`) — ARCH §2, §3, §13; PRD header | Vite 8 + React Router 8 data router: loaders in `src/router.tsx`, route components in `src/routes/`. SPA, no server rendering. `AGENTS.md` is current | ARCH §2–3, §13; PRD header; DATA-9 |
 | Desktop | — | The same build runs in a frameless **Electron** shell: `electron/main.mjs`, origin `app://fabric`, custom title bar, saved zoom. `npm run electron:dev / electron:start / electron:dist`; an AppImage is in `release/` | ARCH §3, §13 |
 | Shell | Search · New session · Agent Studio · Teams · Work | Sidebar: **New thread · Weave** (amber count of open asks) **· Agent Studio · Work**. Projects, each linking to its board; Threads with presence rings. **Title-bar tabs**: each tab keeps its own location and chat. **Settings** dialog with session defaults, fonts and connectors | CONCEPT §8.5; PRD §8 |
 | Teams, Orgs | `/teams` screen | Inside Agent Studio at `/agents?view=teams` and `?view=orgs`; `/teams` redirects | PRD §8; ARCH §13 |
@@ -77,7 +77,7 @@
 | D1 | Agents display as "Name · Role" everywhere. Dana names a new specialist **on the proposal card**, choosing from a persona pool of existing portraits (Elliot for the lead, Sana for the validator), so nothing gets renamed after approval | NAME-1/2, CONCEPT A-1 |
 | D2 | Proposals are **human tools**, the pattern the mockup already uses. Dana's turn ends on `propose_*`, and the next request carries `{decision}`. The server creates rows only for a pending proposal it stored itself. Mastra's `requireApproval` is used only if S4 turns up a reason | ARCH §5, §15 |
 | D3 | Approving the team and the specialist authorizes the handoff. `handoff_to_team` has no approval of its own | CARD-8 |
-| D4 | The backend is a **separate TypeScript server** (Hono, with Mastra embedded) on `:8787`. For the demo it runs locally against Neon. Both the web and Electron builds reach it only through `src/lib/api`, as `apps/web/AGENTS.md` requires | ARCH §2 |
+| D4 | The backend is a **separate TypeScript server** (Hono, with Mastra embedded) on `:8787`. For the demo it runs locally against Neon. Both the web and Electron builds reach it only through `src/lib/api`, as `AGENTS.md` requires | ARCH §2 |
 | D5 | **Splice:** on Fast-forward the live run is cancelled, and its event log continues from the recording at the same elapsed `t`. URL, task and loop stay the live ones, and the badge reads `Replay · 600×`. Reaching the end runs the same finalize step a real finish would | RUN-2, ARCH §8 |
 | D6 | **Two seed profiles:** `demo` is the pre-approval state with SEED-1 clean; `lived-in` is today's mock world, used for development and phase 2 | SEED-1 |
 | D7 | The demo build (`VITE_DEMO=1`) hides group chat, Full auto, voice, the 1M context meter and the unwired Create buttons, and locks "Runs on" to Sprite | CHAT-6/7/9/10, AGT-9 |
@@ -129,7 +129,7 @@ fabric/
   package.json, tsconfig.base.json, .gitignore, .env.example     FND
   WORK-PLAN.md                                                   integrator
   CONCEPT.md PRD.md ARCHITECTURE.md DEMO-SCRIPT.md MOCKUP-GAPS.md OPS
-  status/<code>.md                                               each agent, its own file only
+  docs/status/<code>.md                                               each agent, its own file only
   packages/contracts/                                            FND, then integrator only
   packages/fixtures/                                             FND moves files in; DATA owns profiles/ and recordings/
   packages/db/                                                   DATA
@@ -328,7 +328,7 @@ These follow ARCH §12's numbering, plus S0 and S-LAB. Each one ends with pass o
 | # | Spike | Owner | Pass | If it fails |
 |---|---|---|---|---|
 | S0 | Neon Postgres, Drizzle migrations, branches | DATA | Migrate and seed a fresh branch in under a minute | — (must pass) |
-| S1 | Model providers from Mastra (§2.1 item 5) | DANA | **Spark** (checked by the integrator, Oct 3): a forced tool call takes 3.6 s; streaming gives a first chunk in 0.4 s, delivers the tool call in pieces and reports `usage`. Routing is correct at every thinking level: off (`enable_thinking: false`) 4.8 s, `medium` 5.9 s, `low` 14.3 s, default `xhigh` 55 s. So Dana runs with thinking off and specialists start at `medium` (thinking controls are in DANA step 1). The lane allows only 8 requests at once. **Through Mastra (step 3, Oct 3): pass, but use plain AI SDK.** `@mastra/core` 1.74 takes `model()`'s output, yet ignores per-call tools and temperature and re-forces `toolChoice: "required"` on every loop step (5 calls for one forced tool call). So DANA and TEAM call the AI SDK (`ai` 7) directly, and TEAM orchestrates with plain async code (S3's fallback) unless it finds a reason to revisit; details in `status/llm-ctx.md`. **OpenRouter:** key valid, every mock model listed with tools, `usage.cost` returned. **Neon Gateway:** needs a paid plan or the hackathon credits; check `GET /v1/models` at the venue and request any missing model | Spark down → `LLM_PROVIDER=openrouter`. Gateway not enabled at the venue → stay on Spark (reachable over the tailnet) or OpenRouter, and drop the Gateway claim from the deck |
+| S1 | Model providers from Mastra (§2.1 item 5) | DANA | **Spark** (checked by the integrator, Oct 3): a forced tool call takes 3.6 s; streaming gives a first chunk in 0.4 s, delivers the tool call in pieces and reports `usage`. Routing is correct at every thinking level: off (`enable_thinking: false`) 4.8 s, `medium` 5.9 s, `low` 14.3 s, default `xhigh` 55 s. So Dana runs with thinking off and specialists start at `medium` (thinking controls are in DANA step 1). The lane allows only 8 requests at once. **Through Mastra (step 3, Oct 3): pass, but use plain AI SDK.** `@mastra/core` 1.74 takes `model()`'s output, yet ignores per-call tools and temperature and re-forces `toolChoice: "required"` on every loop step (5 calls for one forced tool call). So DANA and TEAM call the AI SDK (`ai` 7) directly, and TEAM orchestrates with plain async code (S3's fallback) unless it finds a reason to revisit; details in `docs/status/llm-ctx.md`. **OpenRouter:** key valid, every mock model listed with tools, `usage.cost` returned. **Neon Gateway:** needs a paid plan or the hackathon credits; check `GET /v1/models` at the venue and request any missing model | Spark down → `LLM_PROVIDER=openrouter`. Gateway not enabled at the venue → stay on Spark (reachable over the tailnet) or OpenRouter, and drop the Gateway claim from the deck |
 | S2 | Sprites from Node | TOOLS | The integrator already created `fabric-coder` and `fabric-validator` (org `ty-thanh-doan`) and confirmed the token through the REST API. Use the `@fly/sprites` SDK to attach to them, stream `exec` output, use its filesystem, and have the egress policy block a fetch. Cold start measured | Sprite CLI over `child_process` |
 | S3 | Mastra workflow | TEAM | Parallel steps, a rework loop, cancel, and `.stream()` events mapped onto run events | Plain async orchestration (`Promise.all` plus a loop), which is fine for the demo |
 | S4 | Chat stream ↔ assistant-ui | UI-CHAT with DANA | The NDJSON adapter renders the cards, and a human result round-trip creates rows | Scripted Dana for the card turns |
@@ -356,7 +356,7 @@ Each section can be pasted into an agent as its brief.
 4. **`packages/fixtures`:** move the data-only mock modules (`run`, `work`, `teams`, `studio`, `assistant`, `sessions`, `weave`, `suggestions`, plus the proposal objects from `chat`). Leave shims at the old paths. `options.ts` stays in the web app because it imports icons.
 5. **Scaffolds** for `packages/db`, `packages/agents` and `packages/integrations`, exporting the §4.6 interfaces as stubs.
 6. **`apps/server`:** Hono app with `env.ts` (zod; every integration optional behind a flag), CORS (§4.2), `/api/health`, and every route in §4.2 mounted from a per-owner file that returns 501 for now. Dev command runs `tsx watch`.
-7. `vite.config.ts` reads `VITE_PORT`. Add `.env.example` and `status/README.md` with the template from §7.6.
+7. `vite.config.ts` reads `VITE_PORT`. Add `.env.example` and `docs/status/README.md` with the template from §7.6.
 
 **Status:** done Sat Oct 3 (tag `contracts-v1`). `npm run electron:dev -w web` was not re-run headlessly; check it when you restart your session.
 
@@ -637,7 +637,7 @@ One agent at a time. The integrator writes the agent's prompt, the owner runs it
 - **Paths:** an agent edits the paths of its step's workstreams (§3.3) plus its status file. If the step can't be done without touching another path, it may, and says so in the status file.
 - **Contracts:** additive changes (new optional fields, new schemas, new routes) are allowed, each in its own commit prefixed `contracts:` and listed under Requests in the status file for review. Anything breaking: stop and ask.
 - **Later steps are stubs** that throw `NotImplementedError`. Code that calls one catches it, logs one line and carries on, so each step can be tested on its own.
-- **Handoff:** `status/<code>.md` (template §7.6) plus three sections: *How to verify* (exact commands), *Deviations* from this plan, and *Notes for the next step*.
+- **Handoff:** `docs/status/<code>.md` (template §7.6) plus three sections: *How to verify* (exact commands), *Deviations* from this plan, and *Notes for the next step*.
 
 | # | Step (branch) | Covers | Effort | Unlocks | Target |
 |---|---|---|---|---|---|
@@ -673,7 +673,7 @@ neon link --project-id solitary-meadow-39146227 --branch ws-data -y
 
 ### 7.2 Launch prompt (fill in the code)
 
-> You are the **<CODE>** agent for Fabric. Read `WORK-PLAN.md` §0–§4 and your section in §5.3 in full, then the doc sections it lists. Work only in the paths you own. The contracts in `packages/contracts` are frozen: if you need a change, write it under Requests in `status/<code>.md` and work on something else until the integrator answers. Record spike results in your status file. Keep mock mode working. Commit in small steps on `ws/<code>`, and rebase on `main` when a checkpoint is announced. Use your ports and Neon branch from §4.9.
+> You are the **<CODE>** agent for Fabric. Read `WORK-PLAN.md` §0–§4 and your section in §5.3 in full, then the doc sections it lists. Work only in the paths you own. The contracts in `packages/contracts` are frozen: if you need a change, write it under Requests in `docs/status/<code>.md` and work on something else until the integrator answers. Record spike results in your status file. Keep mock mode working. Commit in small steps on `ws/<code>`, and rebase on `main` when a checkpoint is announced. Use your ports and Neon branch from §4.9.
 
 ### 7.3 Merge order at each checkpoint
 
@@ -713,7 +713,7 @@ Nine worktrees (CTX and OPS as their own agents) also works with the ownership m
 | CTX (if separate) | **Medium** | Well-specified pure functions with tests |
 | OPS (if separate) | **Low** | Runbook and smoke scripts. Use Medium if it does the docs refresh |
 
-### 7.6 Status file template (`status/<code>.md`)
+### 7.6 Status file template (`docs/status/<code>.md`)
 
 ```markdown
 # <CODE> status — updated <time>

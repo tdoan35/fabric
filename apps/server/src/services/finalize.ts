@@ -61,6 +61,11 @@ export async function finalizeRun(runId: string): Promise<{ reportId: string } |
   const { db } = runtime();
   const run = await getRunRow(db, runId);
   if (!run || run.finalized_at) return run?.report_id ? { reportId: run.report_id } : null;
+  // Errands report through the compact browser result, not a research-team report/email.
+  if ("kind" in run.budget && run.budget.kind === "errand") {
+    await db.db.execute(sql`update runs set finalized_at = now() where id = ${runId} and finalized_at is null`);
+    return null;
+  }
 
   const events = await mergedEvents(db, run);
   const status =

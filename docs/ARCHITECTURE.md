@@ -47,7 +47,7 @@
 | Layer | Choice | Why / note |
 |---|---|---|
 | Language | TypeScript end to end | Mastra, Assistant UI, `@fly/sprites`, `agentmail`, `exa-js` are all TS. |
-| Web | Next.js 16.3 + React 19.2 + Assistant UI 0.15 + shadcn/ui 4 ("radix-nova", neutral) + Tailwind 4 + motion; Geist | **The coded mockup in `apps/web` is the UI reference**: mock data behind `src/lib/api` (§15). Cards render by tool name through `MessagePrimitive.Parts` (`tools.by_name`). Approval cards currently use assistant-ui human tool results; map them to Mastra approvals starting from `assistant-ui/mastra-hitl` (spike 4). Next 16 differs from older Next, so read `apps/web/AGENTS.md` first. `fabric-screens.pen` is the earlier design pass and is out of date (`MOCKUP-GAPS.md` §4.12). |
+| Web | Next.js 16.3 + React 19.2 + Assistant UI 0.15 + shadcn/ui 4 ("radix-nova", neutral) + Tailwind 4 + motion; Geist | **The coded mockup in `apps/web` is the UI reference**: mock data behind `src/lib/api` (§15). Cards render by tool name through `MessagePrimitive.Parts` (`tools.by_name`). Approval cards currently use assistant-ui human tool results; map them to Mastra approvals starting from `assistant-ui/mastra-hitl` (spike 4). Next 16 differs from older Next, so read `AGENTS.md` first. `docs/design/fabric-screens.pen` is the earlier design pass and is out of date (`MOCKUP-GAPS.md` §4.12). |
 | Agent runtime | Mastra (agents, workflows, tool approval, observability) | `parallel`, `dountil`, `branch`, `suspend`/`resume`; agents as workflow steps. |
 | DB | Neon Postgres (`@mastra/pg` for Mastra storage; own tables for Fabric) | One database. Registry is small enough to skip pgvector. |
 | LLM | Neon AI Gateway via OpenAI-compatible endpoint or `@neon/ai-sdk-provider` | [UNVERIFIED: tool calling, `usage`, catalog.] See §12 spike 1. |
@@ -84,6 +84,13 @@ agents        + avatar, tagline, summary, personality, traits[],                
                 connectors jsonb,   -- [{name, note, status: connected|available}]
                 origin, author?, installs?, is_default
 agent_memories(agent_id, text, source, created_at)                                  [seed; no write path in the demo]
+memories(id mnemo:<table>:<origin>, scope personal|agent|team|run, scope_id, kind,
+         text, source, importance, pinned, sensitive, event_at, created_at, forgotten_at,
+         embedding vector(384), tsv tsvector generated + GIN)                       [DB: the Mnemosyne import]
+                                      -- personal memory (CONCEPT §2.9). Import: scripts/import-mnemosyne.ts
+                                      -- (read-only SQLite source, PII rules, bge-small embeddings). Recall:
+                                      -- searchMemories weights 0.5·semantic + 0.3·lexical + 0.2·importance;
+                                      -- Keep pins, Forget sets forgotten_at. Never seeded/truncated.
 team_members  + duty                -- what this agent does on this team                 [DB]
 teams         + tagline, origin,
                 workflow jsonb,     -- [{label, agent_ids[], note, gate?}]; >1 agent = parallel; gate = review that can send work back to the lead
@@ -101,7 +108,7 @@ reports(id, run_id, title, intro, summary, results jsonb, caveats text[],
         provenance jsonb, made_by text[], emailed bool)   -- or artifacts(kind='report', content)   [DB]
 ```
 
-Cut from the demo: memory scope tables (the Studio Memory tab reads static `agent_memories`), registry embeddings, capability tokens.
+Cut from the demo: agent-scope/team-scope/run-scope memory tables (personal memory is live — the `memories` import above; the Studio Memory tab reads it), registry embeddings, capability tokens.
 
 ### Event types (`run_events.type`)
 `run.started` · `step.started/finished/failed` · `agent.message` · `tool.call/result/denied` · `context.snapshot` · `handoff` · `review.verdict` · `rework.requested` · `budget.update` · `artifact.created` · `run.blocked` · `run.finished`
@@ -166,6 +173,7 @@ assembleContext({ agentDef, brief, teamKnowledge?, artifactRefs, toolPolicies })
 - One function builds every specialist's context. It writes a `context_snapshots` row and emits `context.snapshot` before the model is called.
 - Sections in the UI: **Identity/soul · Task brief · Tools & policy · User preferences · Artifact references · Team knowledge** (each with token count and source).
 - Main assistant gets the same treatment, so the inspector can show "Assistant: N tokens" beside "Coder: M tokens".
+- **Dana's recall (MEM).** Each live turn runs `recallForDana` in the same `Promise.all` as her other reads: the newest user text is embedded with `Xenova/bge-small-en-v1.5` (384-d, q8, `cls`, normalized; the embedder is a lazy singleton warmed at server boot, ~20–50 ms warm) and `searchMemories` scores her `personal/dana` rows with `0.5·(1−cosine) + 0.3·normalized ts_rank_cd + 0.2·importance` (+ pinned boost), `forgotten_at IS NULL`, sensitive rows never served. The top ≤ 6 items render as a `## What you remember about Ty` prompt section, and count into `runs.assistant_tokens`; the handoff records Dana's own `context_snapshots` row (its **Personal memory** row is labelled `Mnemosyne · N items`). Incognito threads skip recall entirely; a recall failure never blocks a turn. Specialists never see any of it — their snapshots keep listing personal memory under **not loaded**.
 - Token counts: from Gateway `usage` if present; otherwise tokenizer estimates at assembly time, flagged as estimates.
 - Where the sections come from in the mockup:
   - *Soul / identity* is the agent's `SOUL.md` plus `IDENTITY.md`.
@@ -245,9 +253,12 @@ The inspector shows each tool as `allowed / approval / blocked`, and one blocked
 ## 13. Repo layout (actual as of Oct 1, then planned)
 
 ```text
-fabric/                        # root is not a git repo yet: docs are untracked
-  CONCEPT.md PRD.md ARCHITECTURE.md DEMO-SCRIPT.md MOCKUP-GAPS.md
-  fabric-screens.pen           # earlier Pencil design pass
+fabric/
+  AGENTS.md CLAUDE.md          # agent conventions; CLAUDE.md points at AGENTS.md
+  docs/
+    CONCEPT.md PRD.md ARCHITECTURE.md DEMO-SCRIPT.md MOCKUP-GAPS.md
+    status/                    # per-agent status files (WORK-PLAN §7.6)
+    design/fabric-screens.pen  # earlier Pencil design pass
   assets/                      # source art: agent PNGs, Dana's idle MP4
   scripts/build-sprite.sh      # MP4 → WebP sprite strip + still (12 fps, 192 px)
   apps/web/                    # Next.js mockup, its own git repo (1 commit + uncommitted work)

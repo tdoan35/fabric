@@ -249,7 +249,8 @@ async function reviewStep(ctx: RunCtx, gate: Stage, reviewCount: number): Promis
         "Your verdict, your reasoning, and the criteria you verified yourself.",
       ].filter(Boolean).join("\n\n"),
       temperature: 0.2,
-      maxOutputTokens: 600,
+      // Room for Claude's per-criterion notes (Neon lane); a capped object fails the schema.
+      maxOutputTokens: 2000,
       abortSignal: abort.signal,
     });
     const raced = await raceBail(ctx, call, 90_000, () => abort.abort());

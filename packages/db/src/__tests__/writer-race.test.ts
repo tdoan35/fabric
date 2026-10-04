@@ -27,7 +27,7 @@ describe.skipIf(!maybeDb)("RunWriter id stamping under concurrency", () => {
     await db.db.execute(sql`delete from runs where task_id = ${taskId}`);
     await db.db.execute(sql`delete from tasks where id = ${taskId}`);
     await db.close();
-  });
+  }, 30_000);
 
   it("~10 concurrent saveSnapshot and saveArtifact calls get distinct, gap-free ids", async () => {
     const run = await writer.startRun(taskId, {
@@ -52,5 +52,5 @@ describe.skipIf(!maybeDb)("RunWriter id stamping under concurrency", () => {
     expect(snapNs).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
     const events = await db.db.execute(sql`select seq from run_events where run_id = ${run.id} order by seq`);
     expect(new Set((events.rows as { seq: number }[]).map((r) => r.seq)).size).toBe(events.rows.length);
-  }, 20_000);
+  }, 90_000); // ~40 serialized transactions × ~6 round trips: ~30 s at 120 ms RTT (a laptop far from us-east-2)
 });

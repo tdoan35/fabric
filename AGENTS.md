@@ -1,6 +1,6 @@
 # Fabric web
 
-Vite + React Router (data router) single-page app. No server rendering — the backend is a separate service (see `../../ARCHITECTURE.md`), reached only through `src/lib/api`. Keep it that way so the same build can ship to the web and inside Electron.
+Vite + React Router (data router) single-page app. No server rendering — the backend is a separate service (see `docs/ARCHITECTURE.md`), reached only through `src/lib/api`. Keep it that way so the same build can ship to the web and inside Electron.
 
 - Routes: `src/router.tsx`; route components live in `src/routes/`.
 - Navigation: `Link` / `useLocation` / `useSearchParams` / `useParams` from `react-router`.

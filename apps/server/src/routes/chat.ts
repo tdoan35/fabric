@@ -3,6 +3,8 @@
 // x-fabric-fixture header turns on scripted Dana for the turn (RUN-12), like `fixture: true`.
 import { Hono } from "hono";
 import { ChatRequestSchema } from "@fabric/contracts";
+import { readSessionDesktop } from "@fabric/agents/assistant";
+import { sql } from "@fabric/db";
 import { runtime } from "../services/runtime";
 
 export const chat = new Hono()
@@ -29,6 +31,13 @@ export const chat = new Hono()
       },
     });
     return c.body(stream, 200, { "Content-Type": "application/x-ndjson; charset=utf-8", "Cache-Control": "no-cache" });
+  })
+  .get("/sessions/:id", async (c) => {
+    const { db } = runtime();
+    const sessionId = c.req.param("id");
+    const row = (await db.db.execute(sql`select id, title, agent_id as "agentId" from sessions where id = ${sessionId}`)).rows[0];
+    if (!row) return c.json({ error: "session not found" }, 404);
+    return c.json({ ...row, desktop: await readSessionDesktop(db, sessionId) });
   })
   .get("/sessions/:id/messages", async (c) => {
     const assistant = runtime().assistant();

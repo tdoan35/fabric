@@ -7,6 +7,7 @@ import type { ChatPart } from "@fabric/contracts";
 import { httpApi } from "@/lib/api";
 import { mockAssistant, mockContext } from "@/lib/mock/chat";
 import { takeFixture } from "./fixture";
+import { modelChoiceFields } from "./model-choice";
 import { markSent, toRuntimePart } from "./session";
 
 /** The thread as the server reads it: text and tool-call parts only. */
@@ -23,7 +24,7 @@ export function toWire(messages: readonly ThreadMessage[]) {
   }));
 }
 
-export function httpAssistant(sessionId: string): ChatModelAdapter {
+export function httpAssistant(sessionId: string, opts: { incognito?: boolean } = {}): ChatModelAdapter {
   return {
     async *run(options) {
       // Phase 1 serves Dana only: direct and team chats with anyone else keep the mock placeholder.
@@ -34,7 +35,7 @@ export function httpAssistant(sessionId: string): ChatModelAdapter {
       const fixture = takeFixture();
       markSent(sessionId);
       let any = false;
-      for await (const line of httpApi.chat({ sessionId, messages: toWire(options.messages), ...(fixture ? { fixture: true } : {}) }, options.abortSignal)) {
+      for await (const line of httpApi.chat({ sessionId, messages: toWire(options.messages), ...modelChoiceFields(), ...(opts.incognito ? { incognito: true } : {}), ...(fixture ? { fixture: true } : {}) }, options.abortSignal)) {
         any = true;
         yield { content: line.content.map(toRuntimePart) };
       }

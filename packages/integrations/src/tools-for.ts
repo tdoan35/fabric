@@ -14,6 +14,7 @@ import { artifactsReadTool, artifactsWriteTool } from "./tools/artifacts";
 import { exaSearchTool } from "./tools/exa-tool";
 import { networkFetchTool } from "./tools/net";
 import { spriteExecTool, workspaceWriteTool } from "./tools/sprite";
+import { browserTaskTool, type BrowserDeps } from "./tools/browser";
 
 export interface ToolsForCtx {
   runId: string;
@@ -21,6 +22,8 @@ export interface ToolsForCtx {
   writer: RunWriter;
   /** Additive (§5.3 TOOLS 6): artifacts.read lists/reads the run's artifacts by name. */
   db?: Db;
+  /** Dana's private browser configuration; never applied to specialist tool sets. */
+  browser?: Omit<BrowserDeps, "writer" | "runId" | "actor" | "step"> | ((agent: StudioProfile) => Omit<BrowserDeps, "writer" | "runId" | "actor" | "step">);
 }
 
 /** The §4.6 interface, with `tools` keyed for providers (see names.ts). */
@@ -47,11 +50,15 @@ export function toolsFor(agent: StudioProfile, ctx: ToolsForCtx): AgentTools {
   put("exa.search", (p) => exaSearchTool(p, tctx));
   put("agentmail.send", (p) => agentMailSendTool(p, tctx));
   put("network.fetch", (p) => networkFetchTool(p, tctx));
+  if (agent.agent.id === "dana" && ctx.browser) {
+    const config = typeof ctx.browser === "function" ? ctx.browser(agent) : ctx.browser;
+    put("browser.task", (p) => browserTaskTool(p, tctx, config));
+  }
   // team.assign is TEAM's: teamAssignTool(agent, policy, ctx, itsCallback) builds it.
 
   return {
     tools,
     policies: [...row.entries()].map(([name, policy]) => ({ name, policy })),
-    sandbox: sandboxIdFor(agent.agent.id) ? `sprite/${sandboxIdFor(agent.agent.id)} · egress: package index + model host only` : undefined,
+    sandbox: sandboxIdFor(agent.agent.id) ? `sprite/${sandboxIdFor(agent.agent.id)} · egress: ${agent.agent.id === "dana" ? "public web; private/metadata denied for browser" : "package index + model host only"}` : undefined,
   };
 }

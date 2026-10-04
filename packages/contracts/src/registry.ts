@@ -47,8 +47,9 @@ export interface AgentWorkspace {
   files: { name: WorkspaceFileName; body: string }[];
   skills: { name: string; description: string }[];
   connectors: { name: string; note: string; status: "connected" | "available" }[];
-  /** Long-term memories. Empty for a freshly added profile. */
-  memories: { text: string; source: string; when: string }[];
+  /** Long-term memories. Empty for a freshly added profile. `id` set on rows backed by the
+   * memories table (the Mnemosyne import): that's what Keep/Forget address. */
+  memories: { text: string; source: string; when: string; id?: string }[];
 }
 
 export interface StudioProfile {
