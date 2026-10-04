@@ -5,6 +5,7 @@ import { cors } from "hono/cors";
 import { logger } from "hono/logger";
 import { corsOrigins, env } from "./env";
 import { chat } from "./routes/chat";
+import { dev } from "./routes/dev";
 import { registry } from "./routes/registry";
 import { reports } from "./routes/reports";
 import { runs } from "./routes/runs";
@@ -21,6 +22,8 @@ const api = new Hono()
   .route("/", weave)
   .route("/", stream)
   .route("/", chat);
+
+if (process.env.NODE_ENV !== "production") api.route("/", dev);
 
 const app = new Hono();
 app.use("*", logger());
