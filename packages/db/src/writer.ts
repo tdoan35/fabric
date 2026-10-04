@@ -8,8 +8,8 @@ import type { Db } from "./db";
 import { deriveSegments } from "./derive";
 import type { RunWriter, RunWriterHooks } from "./index";
 import type { RunRowLike } from "./read";
+import { RunClosedError } from "./errors";
 
-/** The mock's createProject id rule, reused for tasks and projects (apps/web/src/lib/api). */
 export function slugId(name: string): string {
   return name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "project";
 }
@@ -22,6 +22,7 @@ async function emitRow(
   actorAgentId: string | undefined,
   payload: Record<string, unknown>,
   tOverride?: number,
+  allowClosed = false,
 ): Promise<RunEvent> {
   const parsed = parseRunEventPayload(type, payload) as Record<string, unknown>;
   for (let attempt = 1; ; attempt++) {
@@ -29,13 +30,16 @@ async function emitRow(
       return await db.db.transaction(async (tx) => {
         // Serialize concurrent emits for the same run (TEAM's parallel steps).
         await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${runId}, 0))`);
-        const next = await tx.execute(sql`
-          select (select coalesce(max(seq), 0) + 1 from run_events where run_id = ${runId}) as seq,
-                 (select round(extract(epoch from (now() - started_at))::numeric, 2) from runs where id = ${runId}) as t`);
-        const row = next.rows[0] as { seq: string | number; t: string | number | null } | undefined;
-        if (!row || row.t == null) throw new Error(`run ${runId} not found`);
-        const seq = Number(row.seq);
-        const t = tOverride ?? Number(row.t);
+        const state = await tx.execute(sql`
+          select (spliced_from_run_id is not null) as spliced, (finalized_at is not null) as finalized,
+                 round(extract(epoch from (now() - started_at))::numeric, 2) as t
+          from runs where id = ${runId}`);
+        const s = state.rows[0] as { spliced: boolean; finalized: boolean; t: string | null } | undefined;
+        if (!s || s.t == null) throw new Error(`run ${runId} not found`);
+        if (!allowClosed && (s.spliced || s.finalized)) throw new RunClosedError(runId, s.spliced ? "spliced" : "finalized");
+        const next = await tx.execute(sql`select coalesce(max(seq), 0) + 1 as seq from run_events where run_id = ${runId}`);
+        const seq = Number((next.rows[0] as { seq: string | number }).seq);
+        const t = tOverride ?? Number(s.t);
         await tx.execute(sql`
           insert into run_events (run_id, seq, t, type, actor_agent_id, payload)
           values (${runId}, ${seq}, ${t}, ${type}, ${actorAgentId ?? null}, ${JSON.stringify(parsed)}::jsonb)`);
@@ -47,6 +51,7 @@ async function emitRow(
         return event;
       });
     } catch (err) {
+      if (err instanceof RunClosedError) throw err;
       const notFound = err instanceof Error && /not found/i.test(err.message);
       if (attempt >= 5 || notFound) throw err;
       // Executor form, not Promise.withResolvers: consumers type-check this source under ES2023 libs.
@@ -101,6 +106,10 @@ export function createRunWriterWith(db: Db, hooks: RunWriterHooks = {}): RunWrit
       // Same per-run lock as emitRow: parallel steps (TEAM) must not derive the same snapshot id/ord.
       const id = await db.db.transaction(async (tx) => {
         await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${s.runId}, 0))`);
+        const state = await tx.execute(sql`select (spliced_from_run_id is not null) as spliced, (finalized_at is not null) as finalized from runs where id = ${s.runId}`);
+        const st = state.rows[0] as { spliced: boolean; finalized: boolean } | undefined;
+        if (!st) throw new Error(`run ${s.runId} not found`);
+        if (st.spliced || st.finalized) throw new RunClosedError(s.runId, st.spliced ? "spliced" : "finalized");
         const count = await tx.execute(sql`select count(*) as n from context_snapshots where run_id = ${s.runId}`);
         const n = Number((count.rows[0] as { n: string }).n) + 1;
         const snapshotId = `snap-${s.runId}-${n}`;
@@ -118,6 +127,10 @@ export function createRunWriterWith(db: Db, hooks: RunWriterHooks = {}): RunWrit
     async saveArtifact(runId, a) {
       const id = await db.db.transaction(async (tx) => {
         await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${runId}, 0))`);
+        const state = await tx.execute(sql`select (spliced_from_run_id is not null) as spliced, (finalized_at is not null) as finalized from runs where id = ${runId}`);
+        const st = state.rows[0] as { spliced: boolean; finalized: boolean } | undefined;
+        if (!st) throw new Error(`run ${runId} not found`);
+        if (st.spliced || st.finalized) throw new RunClosedError(runId, st.spliced ? "spliced" : "finalized");
         const count = await tx.execute(sql`select count(*) as n from artifacts where run_id = ${runId}`);
         const n = Number((count.rows[0] as { n: string }).n) + 1;
         const artifactId = `art-${runId}-${n}`;
@@ -145,9 +158,10 @@ export function createRunWriterWith(db: Db, hooks: RunWriterHooks = {}): RunWrit
   };
 }
 
-/** Emit with an explicit `t`: import playback and finalize's run.finished at the merged timeline end. */
+/** Emit with an explicit `t`: import playback and finalize's run.finished at the merged timeline
+ *  end. Exempt from the closed-run guard — closing a run is exactly what emits run.finished. */
 export function emitAt(db: Db, runId: string, type: RunEventType, actor: string | undefined, payload: RunEventPayloads[RunEventType], t: number, hooks: RunWriterHooks = {}): Promise<RunEvent> {
-  return emitRow(db, hooks, runId, type, actor, payload as Record<string, unknown>, t);
+  return emitRow(db, hooks, runId, type, actor, payload as Record<string, unknown>, t, true);
 }
 
 /** Maps one runs row to the contract Run; segments derive from the given (merged) event log. */

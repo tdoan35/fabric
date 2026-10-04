@@ -8,7 +8,7 @@
 import { writeFile } from "node:fs/promises";
 import { sql } from "drizzle-orm";
 import type { RunEvent } from "@fabric/contracts";
-import { createDb, createRunWriterWith, loadRootEnv } from "@fabric/db";
+import { createDb, createRunWriterWith, loadRootEnv, RunClosedError } from "@fabric/db";
 import { recordings } from "@fabric/fixtures/recordings";
 import { myProfiles } from "@fabric/fixtures/studio";
 import { studioTeams } from "@fabric/fixtures/teams";
@@ -90,6 +90,7 @@ for (const e of bundle.events) {
   prefix.push({ ...e, runId: run.id, seq: 0 });
 }
 const startedWall = Date.now();
+let spliced = false;
 for (const e of prefix) {
   const due = startedWall + (e.t * 1000) / speed;
   const wait = due - Date.now();
@@ -98,7 +99,18 @@ for (const e of prefix) {
     setTimeout(resolve, wait);
     await promise;
   }
-  await writer.emit(run.id, e.type, e.actorAgentId, e.payload as Record<string, unknown>);
+  try {
+    await writer.emit(run.id, e.type, e.actorAgentId, e.payload as Record<string, unknown>);
+  } catch (err) {
+    if (err instanceof RunClosedError) {
+      console.log("sim: run spliced, stopping");
+      spliced = true;
+      break;
+    }
+    throw err;
+  }
 }
-console.log(`sim: emitted ${prefix.length} events over ${((Date.now() - startedWall) / 1000).toFixed(1)}s; run ${run.id} left running`);
+if (!spliced) {
+  console.log(`sim: emitted ${prefix.length} events over ${((Date.now() - startedWall) / 1000).toFixed(1)}s; run ${run.id} left running`);
+}
 await db.close();

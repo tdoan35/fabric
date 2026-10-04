@@ -30,7 +30,7 @@ export type { Db } from "./db";
 export { createRunWriterWith, emitAt, slugId, rowToRun } from "./writer";
 export { deriveSegments } from "./derive";
 export { importRecording, exportRecording } from "./recordings";
-export type { ImportedRecording } from "./recordings";
+export { RunClosedError } from "./errors";
 export {
   getRunRow, latestRecordingRun, listProjects, listRuns, listSnapshots, listStoredEvents, listTasks,
   mergedEvents, readArtifact, readRegistry, readReport, readRun, readTask, readWeave,
