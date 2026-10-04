@@ -138,6 +138,20 @@ export type ChatPart = ChatTextPart | ChatToolCallPart;
 /** One NDJSON line of POST /api/chat: a cumulative snapshot of the assistant message. */
 export interface ChatStreamLine { content: ChatPart[] }
 
+// Added for UI-CHAT (additive): the web's dev-mode checks on the chat stream and thread history.
+export const ChatPartSchema = z.union([
+  z.object({ type: z.literal("text"), text: z.string() }),
+  z.object({
+    type: z.literal("tool-call"),
+    toolCallId: z.string(),
+    toolName: z.string(),
+    args: z.unknown(),
+    argsText: z.string().optional(),
+    result: z.unknown().optional(),
+  }),
+]) satisfies z.ZodType<ChatPart>;
+export const ChatStreamLineSchema = z.object({ content: z.array(ChatPartSchema) }) satisfies z.ZodType<ChatStreamLine>;
+
 export const ChatRequestSchema = z.object({
   sessionId: z.string(),
   /** The thread as the web runtime holds it, including human tool results ({decision}). */
@@ -155,6 +169,13 @@ export interface ThreadMessage {
 }
 /** GET /api/sessions/:id/messages */
 export interface SessionMessages { sessionId: string; messages: ThreadMessage[] }
+export const ThreadMessageSchema = z.object({
+  id: z.string(),
+  role: z.enum(["user", "assistant"]),
+  content: z.array(ChatPartSchema),
+  createdAt: z.string(),
+}) satisfies z.ZodType<ThreadMessage>;
+export const SessionMessagesSchema = z.object({ sessionId: z.string(), messages: z.array(ThreadMessageSchema) }) satisfies z.ZodType<SessionMessages>;
 
 /** Body of every non-2xx response. */
 export interface ApiError { error: string; owner?: string }
