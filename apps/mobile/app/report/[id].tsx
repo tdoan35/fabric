@@ -94,9 +94,11 @@ export default function ReportScreen() {
             <Text style={styles.paragraph}>{report.summary}</Text>
           </Section>
 
-          <Section label="Held-out perplexity">
-            <ResultTable results={report.results} />
-          </Section>
+          {report.results.length > 0 && (
+            <Section label="Held-out perplexity">
+              <ResultTable results={report.results} />
+            </Section>
+          )}
 
           {report.caveats.length > 0 && (
             <Section label="Caveats">

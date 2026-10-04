@@ -45,7 +45,7 @@ export default function WeaveTab() {
         )}
         ItemSeparatorComponent={Separator}
         refreshControl={
-          <RefreshControl refreshing={loading} onRefresh={refresh} tintColor={theme.colors.mutedForeground} />
+          <RefreshControl refreshing={loading} onRefresh={refresh} tintColor={theme.colors.run} />
         }
         contentContainerStyle={styles.list}
         ListEmptyComponent={
