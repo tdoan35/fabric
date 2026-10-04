@@ -21,7 +21,7 @@ export const stream = new Hono().get("/stream", (c) =>
       await stream.writeSSE({ event: "hello", data: JSON.stringify({ ok: true }) });
       while (!closed) {
         while (queue.length && !closed) {
-          await stream.writeSSE({ event: queue[0].type.split(".")[0], data: JSON.stringify(queue.shift()) });
+          await stream.writeSSE({ event: "app", data: JSON.stringify(queue.shift()) });
         }
         if (closed) break;
         const { promise, resolve } = Promise.withResolvers<void>();
