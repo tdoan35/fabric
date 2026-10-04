@@ -1,8 +1,6 @@
 // DATA owns this file. GET /api/registry (active rows only, §4.2) and POST /api/projects.
 import { Hono } from "hono";
-import { readRegistry } from "@fabric/db";
-import { slugId } from "@fabric/db";
-import { sql } from "drizzle-orm";
+import { readRegistry, slugId, sql } from "@fabric/db";
 import { hub } from "../services/hub";
 import { runtime } from "../services/runtime";
 

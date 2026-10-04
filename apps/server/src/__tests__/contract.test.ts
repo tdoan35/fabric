@@ -2,13 +2,12 @@
 // and on a lived-in branch the payloads equal the fixture data the mock api returns.
 // Runs only when DATABASE_URL points at a branch seeded `lived-in` (seed_state row); otherwise the
 // suite skips — `npm run seed` (default lived-in) makes it run.
-import { sql } from "drizzle-orm";
+import { createDb, sql } from "@fabric/db";
 import { afterAll, describe, expect, it } from "vitest";
 import { Hono } from "hono";
 import { cors } from "hono/cors";
 import { ContextSnapshotSchema, ProjectSchema, ReportSchema, RunEventSchema, RunSchema, TaskSchema } from "@fabric/contracts";
 import type { ContextSnapshot, Project, Registry, Report, Run, RunEvent, Task, WeaveSnapshot } from "@fabric/contracts";
-import { createDb } from "@fabric/db";
 import { report as reportFixture, run as run135, runEvents as events135, snapshots as snapshots135 } from "@fabric/fixtures/run";
 import { projects as projectsFixture, sessions as sessionsFixture } from "@fabric/fixtures/sessions";
 import { runs as runsFixture, tasks as tasksFixture } from "@fabric/fixtures/work";
