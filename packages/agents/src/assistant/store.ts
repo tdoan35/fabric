@@ -70,7 +70,7 @@ export async function touchSession(db: Db, id: string, status: "input" | "unread
   const count = await db.db.execute(sql`select count(*) as n from chat_messages where session_id = ${id}`);
   const n = Number((count.rows[0] as { n: string }).n);
   await db.db.execute(sql`
-    update sessions set messages = ${n}, newReplies = greatest(coalesce(new_replies, 0) + 1, 1), status = ${status},
+    update sessions set messages = ${n}, new_replies = greatest(coalesce(new_replies, 0) + 1, 1), status = ${status},
       updated = ${relativeLabel(new Date())}
     where id = ${id}`);
 }
