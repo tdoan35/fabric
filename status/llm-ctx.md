@@ -1,11 +1,11 @@
-# LLM+CTX status — updated Sun Oct 4, ~10:30 PDT (branch `seq/llm-ctx`)
+# LLM+CTX status — updated Sun Oct 4, ~10:12 PDT (branch `seq/llm-ctx`)
 
 Step 3 of §7.0: DANA step 1 (`llm`, thinking controls, `meter`) and all of CTX. 5 commits, nothing
 merged or pushed. Gates: typecheck · test (server 18 / agents 26 / db 21) · build -w web ·
 check:data (55.5 s) all green.
 
 ## Spikes
-- **S1 — pass** (`npm run llm:check`, sequential on the Spark lane; last full run Oct 4, ~10:30).
+- **S1 — pass** (`npm run llm:check`, sequential on the Spark lane; last full run Oct 4, ~10:12).
   Versions: **ai 7.0.127 · @ai-sdk/openai-compatible 3.0.62 · @mastra/core 1.74.0**.
   - Thinking on the routing prompt: **off 0.7 s (0 reasoning tokens — verified)**, medium 5.5 s
     (180 reasoning), low 3.8 s (115). Unit tests additionally pin the exact wire body per level.
@@ -116,6 +116,6 @@ npm run llm:check                        # ~40 s, sequential on Spark; ends "llm
 npm run llm:check -- --openrouter        # adds one tiny metered Haiku call
 npm run check:data                       # e2e unchanged (55.5 s last run)
 ```
-Last runs: gates all green (Oct 4, ~10:30); `llm:check` PASSED with the numbers in Spikes;
+Last runs: gates all green (Oct 4, ~10:12); `llm:check` PASSED with the numbers in Spikes;
 `check:data` 20/20 asserts on branch demo. No `apps/web` changes (`git diff main -- apps/web`
 empty); no `.env` or secret values committed or printed anywhere.

@@ -1,4 +1,4 @@
-# DATA status — updated Sun Oct 4, ~10:30 PDT after the integrator review (branch `seq/data`)
+# DATA status — updated Sun Oct 4, ~10:11 PDT after the integrator review (branch `seq/data`)
 
 ## Spikes
 - **S0 — pass.** Drizzle migrations committed under `packages/db/drizzle/` (0000–0003), run with `DATABASE_URL_UNPOOLED` (`npm run seed` also migrates programmatically, so a fresh branch is one command). Timed on a brand-new branch (`s0-fresh`, deleted after): **demo 9.0 s**, **lived-in 9.5 s** (seed incl. recording import; ~11 s wall incl. tsx boot). Branches now on Neon: `production` (dev, lived-in seeded), `demo` (demo profile), `recording`. No ws-* branches.
