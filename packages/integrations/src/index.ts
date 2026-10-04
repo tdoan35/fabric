@@ -1,27 +1,18 @@
 // @fabric/integrations — TOOLS owns this package: tool registry and policies, Sprites, Exa, AgentMail, Executor.
-import { NotImplementedError } from "@fabric/contracts";
-import type { Report, StudioProfile, ToolName, ToolPolicy } from "@fabric/contracts";
-import type { RunWriter } from "@fabric/db";
+//
+// The public surface (§4.6): toolsFor, createInbox, sendReportEmail. Plus what TEAM needs to
+// compose the runtime: the provider-key mapping, the team.assign factory, and the egress list.
+export { toolsFor } from "./tools-for";
+export type { AgentTools, ToolsForCtx } from "./tools-for";
+export { createInbox, sendReportEmail, renderReportEmail, agentMailClient, OWNER_INBOX } from "./agentmail";
+export type { AgentMailLike, InboxUpdate } from "./agentmail";
+export { TOOL_KEYS, TOOL_NAMES_BY_KEY, toolKeyOf, toolNameOf } from "./names";
+export { teamAssignTool } from "./tools/team-assign";
+export type { TeamAssign, TeamAssignInput } from "./tools/team-assign";
+export { EGRESS_ALLOWLIST, SPRITE_WORKDIR, egressAllowed, sandboxIdFor, spriteFor, spritesClient, ensureEgressPolicy, execInSprite } from "./sprites";
+export { exaClient, exaSearch, exaNarration } from "./exa";
+export type { ExaHit, ExaSearchOutcome } from "./exa";
+export { spriteFileReader } from "./tools/sprite";
 
-/** Placeholder until S3 settles the agent framework's tool type. */
-export type Tool = unknown;
-
-export interface AgentTools {
-  tools: Partial<Record<ToolName, Tool>>;
-  policies: { name: ToolName; policy: ToolPolicy }[];
-  /** Shown in the inspector, e.g. "sprite/fabric-coder-7f3 · egress: package index + model host only". */
-  sandbox?: string;
-}
-
-export function toolsFor(_agent: StudioProfile, _ctx: { runId: string; step: string; writer: RunWriter }): AgentTools {
-  throw new NotImplementedError("TOOLS", "toolsFor");
-}
-
-/** Returns the new address (CARD-3). */
-export function createInbox(_agentId: string): Promise<string> {
-  throw new NotImplementedError("TOOLS", "createInbox");
-}
-
-export function sendReportEmail(_report: Report, _to: string): Promise<void> {
-  throw new NotImplementedError("TOOLS", "sendReportEmail");
-}
+/** The AI SDK's tool type — what every entry of AgentTools.tools is (S1: plain AI SDK, not Mastra). */
+export type Tool = import("ai").Tool;
