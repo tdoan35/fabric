@@ -25,36 +25,44 @@ async function emitRow(
   allowClosed = false,
 ): Promise<RunEvent> {
   const parsed = parseRunEventPayload(type, payload) as Record<string, unknown>;
+  const body = JSON.stringify(parsed);
+  // One statement per event (one round trip to Neon instead of six): the next seq is computed in
+  // the insert and the (run_id, seq) primary key settles races — a concurrent emit that took the
+  // same seq makes this insert a no-op, and we retry. A seq only becomes visible after every lower
+  // one has committed, so SSE's `seq > after` tail never skips. The closed-run guard is in the WHERE.
+  let conflicts = 0;
   for (let attempt = 1; ; attempt++) {
     try {
-      // The transaction returns the event; onEvent fires only after it commits, so subscribers
-      // never see a rolled-back row and the SSE wakeup query reads durable data.
-      const event = await db.db.transaction(async (tx) => {
-        // Serialize concurrent emits for the same run (TEAM's parallel steps).
-        await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${runId}, 0))`);
-        const state = await tx.execute(sql`
-          select (spliced_from_run_id is not null) as spliced, (finalized_at is not null) as finalized,
-                 round(extract(epoch from (now() - started_at))::numeric, 2) as t
-          from runs where id = ${runId}`);
-        const s = state.rows[0] as { spliced: boolean; finalized: boolean; t: string | null } | undefined;
-        if (!s || s.t == null) throw new Error(`run ${runId} not found`);
-        if (!allowClosed && (s.spliced || s.finalized)) throw new RunClosedError(runId, s.spliced ? "spliced" : "finalized");
-        const next = await tx.execute(sql`select coalesce(max(seq), 0) + 1 as seq from run_events where run_id = ${runId}`);
-        const seq = Number((next.rows[0] as { seq: string | number }).seq);
-        const t = tOverride ?? Number(s.t);
-        await tx.execute(sql`
-          insert into run_events (run_id, seq, t, type, actor_agent_id, payload)
-          values (${runId}, ${seq}, ${t}, ${type}, ${actorAgentId ?? null}, ${JSON.stringify(parsed)}::jsonb)`);
-        if (type === "budget.update" && typeof payload.costUsd === "number") {
-          await tx.execute(sql`update runs set cost_usd = greatest(cost_usd, ${payload.costUsd}) where id = ${runId}`);
-        }
-        return { runId, seq, t, type, actorAgentId, payload: parsed } as RunEvent;
-      });
-      hooks.onEvent?.(event);
+      const inserted = await db.db.execute(sql`
+        insert into run_events (run_id, seq, t, type, actor_agent_id, payload)
+        select r.id,
+               coalesce((select max(e.seq) from run_events e where e.run_id = r.id), 0) + 1,
+               coalesce(${tOverride ?? null}::numeric, round(extract(epoch from (now() - r.started_at))::numeric, 2)),
+               ${type}, ${actorAgentId ?? null}, ${body}::jsonb
+        from runs r
+        where r.id = ${runId} and (${allowClosed}::boolean or (r.spliced_from_run_id is null and r.finalized_at is null))
+        on conflict (run_id, seq) do nothing
+        returning seq, t`);
+      const row = inserted.rows[0] as { seq: number | string; t: number | string } | undefined;
+      if (!row) {
+        const state = await db.db.execute(sql`
+          select (spliced_from_run_id is not null) as spliced, (finalized_at is not null) as finalized from runs where id = ${runId}`);
+        const st = state.rows[0] as { spliced: boolean; finalized: boolean } | undefined;
+        if (!st) throw new Error(`run ${runId} not found`);
+        if (!allowClosed && (st.spliced || st.finalized)) throw new RunClosedError(runId, st.spliced ? "spliced" : "finalized");
+        if (++conflicts > 50) throw new Error(`run ${runId}: could not stamp a seq after ${conflicts} conflicts`);
+        await new Promise<void>((resolve) => setTimeout(resolve, 2 + Math.random() * 8));
+        continue; // another emit took this seq: take the next one
+      }
+      if (type === "budget.update" && typeof payload.costUsd === "number") {
+        await db.db.execute(sql`update runs set cost_usd = greatest(cost_usd, ${payload.costUsd}) where id = ${runId}`);
+      }
+      const event: RunEvent = { runId, seq: Number(row.seq), t: Number(row.t), type, actorAgentId, payload: parsed };
+      hooks.onEvent?.(event); // after the commit (autocommit statement)
       return event;
     } catch (err) {
       if (err instanceof RunClosedError) throw err;
-      const notFound = err instanceof Error && /not found/i.test(err.message);
+      const notFound = err instanceof Error && /not found|could not stamp/i.test(err.message);
       if (attempt >= 5 || notFound) throw err;
       // Executor form, not Promise.withResolvers: consumers type-check this source under ES2023 libs.
       await new Promise<void>((resolve) => setTimeout(resolve, 25 * attempt));
@@ -190,7 +198,8 @@ export function rowToRun(row: RunRowLike, events: Parameters<typeof deriveSegmen
     reworkBudget: row.rework_budget,
     assistantTokens: row.assistant_tokens,
     brief: row.brief,
-    segments: deriveSegments(events, durationS),
+    // Open steps end at the same rounded "now" as durationS, so the UI can tell they're still going.
+    segments: deriveSegments(events, Math.round(durationS)),
     outcome: row.outcome ?? undefined,
     reportId: row.report_id ?? undefined,
     recording: row.recording_key
