@@ -1,5 +1,7 @@
 import { useSyncExternalStore } from "react";
-import { WEAVE_NOW, inboxSeed, presenceSeed, pulseSeed, type InboxItem, type ItemKind, type Presence, type PulseEntry, type UpdateEntry } from "./mock/weave";
+import { WEAVE_NOW, inboxSeed as fixtureItems, presenceSeed, pulseSeed, calendarEvents as fixtureCalendar, dayMarkers as fixtureMarkers, type InboxItem, type ItemKind, type Presence, type PulseEntry, type UpdateEntry } from "./mock/weave";
+import type { CalendarEvent, WeaveSnapshot } from "@fabric/contracts";
+import { httpMode } from "./api";
 
 /**
  * Weave's state lives in a module-level store rather than in the page, so the sidebar's
@@ -30,11 +32,16 @@ export interface WeaveState extends Snapshot {
 /** Asks wait on you; everything else is for you to read. */
 export const ASK_KINDS: ItemKind[] = ["approval", "question", "escalation"];
 export const isAsk = (item: InboxItem) => ASK_KINDS.includes(item.kind);
+let inboxSeed = fixtureItems;
+let calendar = fixtureCalendar as CalendarEvent[];
+export const weaveItems = () => inboxSeed;
+export const weaveCalendar = () => calendar;
+export const weaveDayMarkers = () => httpMode ? [] : fixtureMarkers;
 export const itemById = (id: string | null | undefined) => inboxSeed.find((i) => i.id === id);
 
 const loadedAt = Date.now();
 /** The mock clock keeps ticking from WEAVE_NOW, so decisions get plausible timestamps. */
-const mockNow = () => new Date(WEAVE_NOW.getTime() + (Date.now() - loadedAt)).toISOString();
+const mockNow = () => httpMode ? new Date().toISOString() : new Date(WEAVE_NOW.getTime() + (Date.now() - loadedAt)).toISOString();
 
 let state: WeaveState = {
   status: Object.fromEntries(inboxSeed.map((i) => [i.id, {
@@ -51,6 +58,20 @@ const listeners = new Set<() => void>();
 function set(next: WeaveState) {
   state = next;
   listeners.forEach((l) => l());
+}
+export function setWeaveSnapshot(next: WeaveSnapshot) {
+  const prior = state.status;
+  const serverIds = new Set(next.pulse.map((e) => e.id));
+  inboxSeed = next.items;
+  calendar = next.calendar;
+  set({
+    ...state,
+    status: Object.fromEntries(next.items.map((i) => [i.id, prior[i.id] ?? {
+      status: i.snoozedUntil ? "snoozed" : "open", unread: !!i.unread, snoozedUntil: i.snoozedUntil,
+    } satisfies ItemState])),
+    entries: [...state.entries.filter((e) => !serverIds.has(e.id) && /^(ev|po)-\d+$/.test(e.id)), ...next.pulse],
+    presence: next.presence,
+  });
 }
 const snapshot = (): Snapshot => ({ status: state.status, entries: state.entries, presence: state.presence });
 const subscribe = (l: () => void) => {

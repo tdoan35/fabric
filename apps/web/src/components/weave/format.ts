@@ -1,4 +1,6 @@
 import { WEAVE_NOW, WEAVE_TZ } from "@/lib/mock/weave";
+import { httpMode } from "@/lib/api";
+export const weaveNow = () => httpMode ? new Date() : WEAVE_NOW;
 
 /** Every Weave time renders in Ty's timezone, whatever the viewer's is. */
 const timeFmt = new Intl.DateTimeFormat("en-US", { timeZone: WEAVE_TZ, hour: "numeric", minute: "2-digit" });
@@ -9,7 +11,7 @@ const shortDate = new Intl.DateTimeFormat("en-US", { timeZone: WEAVE_TZ, month: 
 export const fmtTime = (iso: string) => timeFmt.format(new Date(iso));
 /** "2026-10-02" in Ty's timezone. */
 export const dayKey = (d: string | Date) => keyFmt.format(typeof d === "string" ? new Date(d) : d);
-export const TODAY = dayKey(WEAVE_NOW);
+export const TODAY = dayKey(weaveNow());
 
 /** Minutes since midnight in Ty's timezone. */
 export function clockMinutes(d: string | Date) {
@@ -19,7 +21,7 @@ export function clockMinutes(d: string | Date) {
 }
 
 /** Compact age, Linear-style: "now", "12m", "3h", "Sep 29". */
-export function age(iso: string, now: Date = WEAVE_NOW) {
+export function age(iso: string, now: Date = weaveNow()) {
   const mins = Math.round((now.getTime() - new Date(iso).getTime()) / 60000);
   if (mins < 1) return "now";
   if (mins < 60) return `${mins}m`;
@@ -28,14 +30,14 @@ export function age(iso: string, now: Date = WEAVE_NOW) {
 }
 
 /** Spelled-out age for detail headers: "just now", "12 min ago", "3 h ago", "Sep 29". */
-export function ago(iso: string, now: Date = WEAVE_NOW) {
+export function ago(iso: string, now: Date = weaveNow()) {
   const a = age(iso, now);
   if (a === "now") return "just now";
   return /^\d+[mh]$/.test(a) ? `${a.slice(0, -1)} ${a.endsWith("m") ? "min" : "h"} ago` : a;
 }
 
 /** "12 min", "1 h 5 min": how long work has been waiting. */
-export function waited(iso: string, now: Date = WEAVE_NOW) {
+export function waited(iso: string, now: Date = weaveNow()) {
   const mins = Math.max(0, Math.round((now.getTime() - new Date(iso).getTime()) / 60000));
   if (mins < 60) return `${mins} min`;
   const h = Math.floor(mins / 60), m = mins % 60;
@@ -62,7 +64,7 @@ export function dayLabel(key: string) {
   return longDay.format(fromKey(key));
 }
 /** "Good morning, Ty", by the mock clock so it agrees with the date in the header. */
-export function greeting(now: Date = WEAVE_NOW) {
+export function greeting(now: Date = weaveNow()) {
   const h = clockMinutes(now) / 60;
   return `Good ${h < 12 ? "morning" : h < 17 ? "afternoon" : "evening"}, Ty`;
 }

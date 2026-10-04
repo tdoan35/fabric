@@ -1,9 +1,11 @@
 import { Link } from "react-router";
+import { useEffect, useState } from "react";
 import { AlarmClock, ArrowRight, Check, Hourglass, Info, Lock, Quote, Undo2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { policyStyle } from "@/components/chat/assistant-hero";
-import { report } from "@/lib/mock/run";
-import type { ApprovalItem, EscalationItem, FindingItem, InboxItem, ItemAction, ProposalItem, QuestionItem } from "@/lib/mock/weave";
+import { api } from "@/lib/api";
+import type { ApprovalItem, EscalationItem, FindingItem, InboxItem, ItemAction, ProposalItem, QuestionItem, ResultItem } from "@/lib/mock/weave";
+import type { Report } from "@fabric/contracts";
 import { weave, type ItemState, type WeaveState } from "@/lib/weave-store";
 import { cn } from "@/lib/utils";
 import { ago, fmtTime, waited } from "./format";
@@ -117,7 +119,10 @@ function FindingBody({ item }: { item: FindingItem }) {
   );
 }
 
-function ResultBody() {
+function ResultBody({ item }: { item: ResultItem }) {
+  const [report, setReport] = useState<Report>();
+  useEffect(() => { let active = true; void api.getReport(item.reportId).then((value) => { if (active) setReport(value); }); return () => { active = false; }; }, [item.reportId]);
+  if (!report) return <p className="text-sm text-muted-foreground">Loading report…</p>;
   return (
     <>
       <p className="text-sm leading-relaxed">{report.summary}</p>
@@ -143,7 +148,7 @@ function Body({ item }: { item: InboxItem }) {
     case "escalation": return <EscalationBody item={item} />;
     case "proposal": return <ProposalBody item={item} />;
     case "finding": return <FindingBody item={item} />;
-    case "result": return <ResultBody />;
+    case "result": return <ResultBody item={item} />;
   }
 }
 

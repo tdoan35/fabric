@@ -2,7 +2,7 @@ import type { ComponentType, ReactNode } from "react";
 import { Link } from "react-router";
 import { Check, FileText, Folder, LifeBuoy, MessageCircleQuestion, Play, ShieldCheck, Sparkles, Telescope } from "lucide-react";
 import { Portrait } from "@/components/chat/assistant-hero";
-import { profileById } from "@/lib/mock/studio";
+import { profileById } from "@/lib/registry";
 import type { Health, ItemKind } from "@/lib/mock/weave";
 import { cn } from "@/lib/utils";
 
