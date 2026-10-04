@@ -264,14 +264,16 @@ export function createAssistant(deps: AssistantDeps): Assistant {
           handoff_to_team: tool({
             description: "Hand the work to an approved team: compiles the brief, creates the task and starts the run.",
             inputSchema: handoffSchema,
-            execute: (args) => runHandoff(handoffDeps((i: BriefInput) => compileBrief({ ...i, modelId: dana?.agent.model })), {
+            // The lane sometimes emits the call twice in one response; one handoff per turn.
+            execute: (args) => (handoffDone ??= runHandoff(handoffDeps((i: BriefInput) => compileBrief({ ...i, modelId: dana?.agent.model })), {
               sessionId, session, teamName: args.teamName, request: args.request, title: args.title, summary: args.summary,
-            }),
+            })),
           }),
         };
 
         const m = deps.modelFor?.(dana ?? fallbackDana()) ?? model(dana?.agent.model ?? "", { thinking: "off", meter: { agentId: "dana", step: "chat" } });
         const allowed = active ?? Object.keys(tools);
+        let handoffDone: Promise<HandoffPayload> | undefined;
         const attempt = async function* (control: AttemptControl): AsyncGenerator<ChatStreamLine> {
           let yielded = false;
           const turnAbort = new AbortController();
@@ -326,6 +328,9 @@ export function createAssistant(deps: AssistantDeps): Assistant {
               }
               if (part.toolName === "record_disposition") dispositionSeen = true;
               if (part.toolName === "propose_team" || part.toolName === "propose_specialist") terminal = true;
+              // One card (or handoff) per turn: a duplicated call of a name already on the message
+              // is dropped, not streamed and not stored.
+              if (toolParts.some((p) => p.toolName === part.toolName) && part.toolName !== "record_disposition") continue;
               let args: unknown = part.input;
               if (part.toolName === "propose_team" || part.toolName === "propose_specialist") {
                 // Store the pending row now, and stream the enriched payload (proposalId, supersedes).
