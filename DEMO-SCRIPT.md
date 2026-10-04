@@ -37,8 +37,11 @@ I have research ideas faster than I can test them. Personal agents today become 
 | 3:50–4:00 | **Fast-forward** | Click **Fast-forward** (or press `R`); badge `Replay · 600×`. Playback pauses on Carlos's verdict ~15 s later | "Real research takes hours. I'll fast-forward through a recorded run of this same task." | 🔁 |
 | 4:00–4:40 | **Bounce + rework** | The step bar's Review turns amber and the way back reads "Sent back to Elliot · rework 1/2"; under it, Carlos's verdict ("Changes requested → back to Elliot"); the criterion "Held-out split never seen by the n-gram table" shows ✗. Press play: an amber arrow runs from Carlos's "Bounced" to Elliot's "Re-plan", then Jonah's dashed "Rework", Sana's "Re-check", and a pause on "Accepted" | "The Reviewer caught a problem and the team fixed it — autonomously, inside a bounded rework budget. If the budget runs out, it escalates to me." | 🔁 |
 | 4:40–5:15 | **Results** | Dana: "I got the results here: [artifact]" → report card; email arrives (AgentMail). ⚠️ Today only the Run view's "Results are ready · Open report" card exists; Dana's chat message isn't built [CHAT-14]. The report shows the summary, held-out perplexity (valid / contaminated), caveats, provenance and "Also emailed to you via AgentMail" | "Outcome, evidence, artifacts — not the internal chatter." | 🔁 + 🟢 email |
+| *(opt) inside 4:40–5:15* | **Phone — same results** *(cuttable)* | Phone mirrored on screen (QuickTime → Movie Recording over USB, or `scrcpy`): the **Weave** tab shows the finalize "Results ready" item; tap it → the native Report screen with the same numbers. Fresh state: seed `demo`, then sim → splice → finalize (commands in `docs/status/mobile.md`) | *"Same results, in my pocket. Dana pings me wherever I am, and the full trail stays on the desktop."* | 🟢 phone |
 | 5:15–6:00 | **Org view (vision)** | Sidebar **Teams** → **Organizations**: Dana at the head; Research Team (led by Elliot) and Product Team (led by Diego, idle); Jonah under both, tagged `shared`; a dashed edge reading *"Can these results drive a real, value-driven product?"*, with a `Preview` label. ⚠️ The edge and label aren't built [ORG-1] — build them, or cut this beat to the closing sentence | "Teams can hand off to teams. This part isn't built yet — it's where this goes." | 🖼/🟢 static |
 | 6:00–6:30 | Close | Slide 3 (architecture), then slide 4 | "Built on Neon, Mastra, Sprites, Exa, Assistant UI, AgentMail, Executor. Pre-built foundation, wired and polished today." | 🖼 |
+
+**Cut rule (phone beat):** if M0 plus the network check aren't green by **14:00**, drop the phone beat — nothing else in the script depends on it (MOBILE-PLAN §5). Slide 4 gains the line *"Push notifications for asks"* only if the beat stays.
 
 ### If the slot is 5 minutes
 Cut the org view to the closing sentence, skip the direct-answer beat (chip shown inside the first request), shorten the inspector to one click.
@@ -50,10 +53,12 @@ Cut the org view to the closing sentence, skip the direct-answer beat (chip show
 - Everything after the fast-forward: **replay of a recorded real run** of this task — same events, same artifacts, produced by this team before the event. Badge in UI.
 - Org view team-to-team handoff: **not built**; labelled Preview.
 - Until the backend lands, rehearsals run on the mockup's mock data. Its `Live` badge is simulated (the recording played at 1×), so never present the mockup as live [RUN-3].
+- The phone beat is real: the Weave item comes from finalize and the report from the DB. But deciding a Weave item on the phone is **local-only** (no server decision endpoint yet), the same as the web today — say "seeded" if asked.
 
 ## 5. Pre-demo checklist
 
 **Night before**
+- [ ] Expo Go installed on the demo phone and its **SDK matches the project** (SDK 57) — a mismatch blocks the app from loading (MOBILE-PLAN §4)
 - [ ] Recorded run exists, verified: contains a real Reviewer bounce, artifact, context snapshots
 - [ ] Fallback video recorded (full script, screen + voice)
 - [ ] Seed script restores clean state in one command (agents, Product Team, no Research Team/Validator yet)
@@ -71,6 +76,8 @@ Cut the org view to the closing sentence, skip the direct-answer beat (chip show
 - [ ] Idea prompt on the clipboard (the suggestion chips are gone after the first message)
 - [ ] Smoke-test: direct answer + one proposal card end-to-end
 - [ ] Browser zoomed, notifications off, second window with fallback video ready
+- [ ] Phone on the **laptop hotspot or the tailnet**, and `EXPO_PUBLIC_API_URL` in `apps/mobile/.env` set to that IP (restart `npm start` after changing it; `expo start --tunnel` tunnels Metro only, never the API)
+- [ ] **Mirroring tested** (QuickTime → Movie Recording over USB for iPhone, `scrcpy` for Android) with the phone beat run twice in a row
 - [ ] Hotspot available as network fallback
 - [ ] Email inbox visible in a tab. Switch back to Fabric before Dana replies: the mock's scripted typing stalls in a background tab [VIS-2]
 
