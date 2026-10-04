@@ -35,8 +35,8 @@ function slots(cron: string, tz: string, from: Date, to: Date): Date[] {
 export function mockOccurrences(from: Date, to: Date, runs: Run[], now = new Date()): Occurrence[] {
   const out: Occurrence[] = [];
   for (const s of schedules) {
-    if (!s.enabled) continue;
-    const planned = slots(s.cron, s.tz, from, to).map((d) => d.getTime());
+    // Paused expands to nothing planned, but keeps its history: fires still show.
+    const planned = (s.enabled ? slots(s.cron, s.tz, from, to) : []).map((d) => d.getTime());
     const plannedSet = new Set(planned);
     const extra = fires
       .filter((f) => f.scheduleId === s.id)

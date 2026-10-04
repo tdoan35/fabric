@@ -104,8 +104,11 @@ describe("overlayOccurrences", () => {
     });
   });
 
-  it("paused schedules expand to nothing", () => {
+  it("a paused schedule plans nothing but keeps its fired history", () => {
     const paused = { ...digest, enabled: false };
+    const fires = [fire(at("07"), { status: "fired", messageId: "msg-1" })];
+    const out = overlayOccurrences([paused], fires, from, to, now);
+    expect(out.map((o) => [o.at, o.state])).toEqual([[at("07"), "posted"]]); // no upcoming, history kept
     expect(overlayOccurrences([paused], [], from, to, now)).toEqual([]);
   });
 });

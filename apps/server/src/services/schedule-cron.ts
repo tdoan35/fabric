@@ -50,8 +50,8 @@ export function overlayOccurrences(
   for (const f of fires) fired.set(slotKey(f.scheduleId, f.scheduledFor), f);
   const out: Occurrence[] = [];
   for (const s of schedules) {
-    if (!s.enabled) continue;
-    const planned = cronSlots(s.cron, s.tz, from, to).map((d) => d.getTime());
+    // Paused expands to nothing planned, but keeps its history: fires still show.
+    const planned = (s.enabled ? cronSlots(s.cron, s.tz, from, to) : []).map((d) => d.getTime());
     const plannedSet = new Set(planned);
     // Off-pattern fires in the window (Run now) show alongside the planned slots.
     const extra = fires
