@@ -1,5 +1,5 @@
 import type { RunEvent } from "@fabric/contracts";
-import { RunClosedError, sql, type Db, type RunWriter } from "@fabric/db";
+import { RunClosedError, provisionTeam, sql, type Db, type RunWriter } from "@fabric/db";
 import { recordings } from "@fabric/fixtures/recordings";
 import { myProfiles } from "@fabric/fixtures/studio";
 import { studioTeams } from "@fabric/fixtures/teams";
@@ -25,36 +25,14 @@ export async function startSim(db: Db, writer: RunWriter, options: SimOptions = 
   const team = studioTeams.find((t) => t.id === "research")!;
   const exists = await db.db.execute(sql`select 1 from teams where id = 'research'`);
   if (!exists.rows.length) {
+    // The same shared path a real approval takes (DANA 3), so the rows and the org edge match.
     const profiles = new Map(myProfiles.filter((p) => team.members.some((m) => m.agentId === p.agent.id)).map((p) => [p.agent.id, p]));
-    for (const m of team.members) {
-      const profile = profiles.get(m.agentId);
-      const agentExists = await db.db.execute(sql`select 1 from agents where id = ${m.agentId}`);
-      if (!agentExists.rows.length && profile) {
-        await db.db.execute(sql`
-          insert into agents (id, ord, name, role, tagline, summary, personality, traits, tone, avatar, model,
-                              context_tokens, memory, tools, greeting, placeholder, workspace, origin, community, status, is_seeded)
-          values (${profile.agent.id}, 900, ${profile.agent.name}, ${profile.agent.role}, ${profile.tagline},
-                  ${profile.agent.summary}, ${profile.agent.personality}, ${JSON.stringify(profile.agent.traits)}::jsonb,
-                  ${profile.agent.tone}, ${JSON.stringify(profile.agent.avatar ?? null)}::jsonb, ${profile.agent.model},
-                  ${profile.agent.contextTokens}, ${JSON.stringify(profile.agent.memory)}::jsonb,
-                  ${JSON.stringify(profile.agent.tools)}::jsonb, ${profile.agent.greeting}, ${profile.agent.placeholder},
-                  ${JSON.stringify(profile.workspace)}::jsonb, ${profile.origin ?? "Created by sim"}, false, 'active', false)`);
-      }
-    }
-    await db.db.execute(sql`
-      insert into teams (id, ord, name, tagline, purpose, status, origin, workflow, criteria, rework_budget)
-      values ('research', 900, ${team.name}, ${team.tagline}, ${team.purpose}, 'active', 'Created by sim · live loop',
-              ${JSON.stringify(team.workflow)}::jsonb, ${JSON.stringify(team.criteria)}::jsonb, ${team.reworkBudget})`);
-    for (const [mi, m] of team.members.entries()) {
-      await db.db.execute(sql`
-        insert into team_members (team_id, agent_id, ord, duty, lead) values ('research', ${m.agentId}, ${mi}, ${m.duty}, ${m.lead ?? false})`);
-    }
-    // The clean demo org starts with Product Team. Materialize the planned edge with the team.
-    await db.db.execute(sql`insert into org_slots (org_id, key, ord, team_id) values ('ty-lab', 'research-1', 0, 'research') on conflict do nothing`);
-    await db.db.execute(sql`
-      insert into org_handoffs (org_id, from_team_id, to_team_id, ord, question, preview)
-      values ('ty-lab', 'research', 'product', 0, 'Can these results drive a real, value-driven product?', true)
-      on conflict do nothing`);
+    const provisioned = await provisionTeam(db, {
+      team,
+      templates: Object.fromEntries(team.members.map((m) => [m.agentId, profiles.get(m.agentId)]).filter(([, p]) => p)),
+      origin: "Created by sim · live loop",
+    });
+    console.log(`sim: provisioned team ${provisioned.teamId} (new agents: ${provisioned.createdAgents.join(", ") || "none"})`);
     options.onRegistryChanged?.();
   }
 
