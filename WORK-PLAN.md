@@ -62,6 +62,11 @@
 2. **No spikes have run.** Phase 1 opens with them (§5.2).
 3. **Parallel agents in git worktrees.**
 4. **For the demo, Work is real and Weave is seeded.**
+5. **Models (Oct 3): Spark for development, the Neon AI Gateway at the venue, OpenRouter as backup.**
+   - **Development:** the DGX Spark lane (`qwen3.8-flash-next`, vLLM over the tailnet) is free, so all build and test traffic goes there.
+   - **The demo:** switch to the Neon AI Gateway with the hackathon credits.
+   - **Backup:** OpenRouter, the key capped at $5. Raise the cap before relying on it.
+   - **Switching** is one line: `LLM_PROVIDER` in `.env`.
 
 ### 2.2 Defaults (all confirmed by the owner, Oct 3)
 
@@ -290,7 +295,7 @@ sendReportEmail(report: Report, to: string): Promise<void>;
 
 ### 4.9 Env, flags and ports
 
-- **Server:** `DATABASE_URL`, `DATABASE_URL_UNPOOLED` (for migrations) and `NEON_BRANCH`, which `neon link` writes. `NEON_AI_GATEWAY_BASE_URL` and `NEON_AI_GATEWAY_TOKEN`, using Neon's names so Mastra's `neon/<model>` and `@neon/ai-sdk-provider` read them with no config. Our own names: `LLM_FALLBACK_PROVIDER`, `LLM_FALLBACK_KEY`, `SPRITES_TOKEN`, `EXA_API_KEY`, `AGENTMAIL_API_KEY`, `EXECUTOR_URL`, `EXECUTOR_KEY`, `PORT`, `CORS_ORIGINS`, `DANA_MODE=live|fixture`, `FEATURE_AGENTMAIL`, `FEATURE_EXECUTOR`, `DEMO_RECORDING_KEY=ngram-135m`, `OWNER_EMAIL`.
+- **Server:** `DATABASE_URL`, `DATABASE_URL_UNPOOLED` (for migrations) and `NEON_BRANCH`, which `neon link` writes. `NEON_AI_GATEWAY_BASE_URL` and `NEON_AI_GATEWAY_TOKEN`, using Neon's names so Mastra's `neon/<model>` and `@neon/ai-sdk-provider` read them with no config. `OPENROUTER_API_KEY`, the name Mastra's `openrouter/<model>` reads by default. Our own names: `LLM_PROVIDER=spark|openrouter|neon`, `SPARK_BASE_URL`, `SPARK_API_KEY` (the server doesn't enforce it; the tailnet is the boundary), `SPARK_MODEL`, `SPRITES_TOKEN`, `EXA_API_KEY`, `AGENTMAIL_API_KEY`, `EXECUTOR_URL`, `EXECUTOR_KEY`, `PORT`, `CORS_ORIGINS`, `DANA_MODE=live|fixture`, `FEATURE_AGENTMAIL`, `FEATURE_EXECUTOR`, `DEMO_RECORDING_KEY=ngram-135m`, `OWNER_EMAIL`.
 - **Web:** `VITE_API_MODE=mock|http`, `VITE_API_URL`, `VITE_DEMO=0|1`, `VITE_PORT`.
 - **Ports per worktree:** with index `n` (FND/main 0, DATA 1, DANA 2, TEAM 3, CTX 4, TOOLS 5, LAB 6, UI-CHAT 7, UI-WORK 8, OPS 9), the web runs on `3000+10n`, the server on `8787+10n` and headless Chrome debugging on `9333+n`.
 - **Neon:** project `fabric` (`solitary-meadow-39146227`, aws-us-east-2); the default branch is **`production`** (Neon's name; git's integration branch is still `main`). DATA, DANA and TEAM each get a branch (`ws-data`, `ws-dana`, `ws-team`). Recording uses `recording`; the demo uses `demo`, which `npm run demo:reset` restores. The UI agents use mock or fixture data and need no branch. Until DATA creates the branches, everyone shares `production`.
@@ -320,7 +325,7 @@ These follow ARCH §12's numbering, plus S0 and S-LAB. Each one ends with pass o
 | # | Spike | Owner | Pass | If it fails |
 |---|---|---|---|---|
 | S0 | Neon Postgres, Drizzle migrations, branches | DATA | Migrate and seed a fresh branch in under a minute | — (must pass) |
-| S1 | Neon AI Gateway from Mastra | DANA | **Needs a paid Neon plan** (the free plan can't provision it). Once enabled, check `GET /v1/models`: a new account's list can be trimmed, so request any missing model (e.g. Opus) on the branch's AI Gateway page. Tool calling, streaming and `usage` all work. Serves models for Dana and the specialists (the mock assigns Sonnet 5.5, Haiku 4.5 and Opus 5.5). Credit is active | `@neon/ai-sdk-provider`. Otherwise a direct provider for tool-calling agents (`LLM_FALLBACK_*`) and the Gateway for the rest, counting tokens ourselves |
+| S1 | Model providers from Mastra (§2.1 item 5) | DANA | **Spark** (checked by the integrator, Oct 3): a forced tool call takes 3.6 s; streaming gives a first chunk in 0.4 s, delivers the tool call in pieces and reports `usage`. With **thinking off** (`chat_template_kwargs: {enable_thinking: false}`), routing is correct in 4.8 s; with thinking on, 55 s. So Dana runs with thinking off, and specialists may keep it on. The lane allows only 8 requests at once. Still for DANA to verify: the same through Mastra's agent loop. **OpenRouter:** key valid, every mock model listed with tools, `usage.cost` returned. **Neon Gateway:** needs a paid plan or the hackathon credits; check `GET /v1/models` at the venue and request any missing model | Spark down → `LLM_PROVIDER=openrouter`. Gateway not enabled at the venue → stay on Spark (reachable over the tailnet) or OpenRouter, and drop the Gateway claim from the deck |
 | S2 | Sprites from Node | TOOLS | Create or attach a Sprite, stream `exec` output, use its filesystem, and have the egress policy block a fetch. Cold start measured | Sprite CLI over `child_process` |
 | S3 | Mastra workflow | TEAM | Parallel steps, a rework loop, cancel, and `.stream()` events mapped onto run events | Plain async orchestration (`Promise.all` plus a loop), which is fine for the demo |
 | S4 | Chat stream ↔ assistant-ui | UI-CHAT with DANA | The NDJSON adapter renders the cards, and a human result round-trip creates rows | Scripted Dana for the card turns |
@@ -384,7 +389,12 @@ Each section can be pasted into an agent as its brief.
 **Reads:** CONCEPT §2, §4, §7; ARCH §5, §10, §15; DEMO-SCRIPT beats 0:45–2:30; `apps/web/src/lib/mock/chat.ts`, which is the script and the fixture.
 **Spikes:** S1, plus the server half of S4.
 
-1. **`llm`:** a model factory over the Neon AI Gateway with a fallback set by env. A `meter` wrapper tags every call with `{runId, agentId, step}` and reports tokens and cost, priced from a per-model table in code (ARCH §10).
+1. **`llm`:** one model factory over three providers, chosen by `LLM_PROVIDER`. Each agent row keeps its intended model (Sonnet 5.5, Haiku 4.5, Opus 5.5), and `model(id)` maps it per provider:
+   - **`spark`:** every agent gets `SPARK_MODEL`. Pass `enable_thinking: false` for Dana; specialists may keep thinking on.
+   - **`openrouter`:** `anthropic/claude-sonnet-5.5` and so on.
+   - **`neon`:** the Gateway catalog ids (read `/v1/models`).
+
+   A `meter` wrapper tags every call with `{runId, agentId, step}` and reports tokens and cost. OpenRouter returns `usage.cost`; Spark costs $0; the Gateway's price comes from a table in code (ARCH §10). The inspector and report show the model that actually ran, not the intended one.
 2. **Dana:** a small fixed prompt built from her workspace files in the DB, plus a few worked routing examples. Tools: `record_disposition`, which must be the first call of every turn (retry once if it's missing), `search_registry` (internal), `propose_team`, `propose_specialist`, `handoff_to_team`.
 3. **`POST /api/chat`**, streaming §4.3. Persist sessions and messages, so a reload restores the thread (`GET /api/sessions/:id/messages`). Store `considered[]` [CHAT-13].
 4. **Proposals:** on `propose_*`, store a `proposals` row. The payload carries the persona from the pool (D1), purpose, workflow, budget, criteria and lead defaults [CARD-1]. Then act on the decision:
@@ -573,7 +583,9 @@ Each section can be pasted into an agent as its brief.
 | The git conversion loses `apps/web` history | Bundle it first (FND step 1); remove the nested repo only with your OK |
 | No real run with a bounce by CP-C (Sun 12:00) | D10's planted trap; D9 accepts the illustrative bundle (L2) |
 | Electron's `app://fabric` origin breaks fetch or SSE | CORS from FND; S8 tests the Electron origin; check `electron:start` at CP-B |
-| Parallel agents share Gateway limits (200k TPM, ARCH §10) | UI agents develop against fixture Dana; small models for parallel steps; spread load over Neon branches |
+| The Spark lane takes 8 requests at once and generates ~28 tokens/s, shared by every agent and every test run | UI agents develop against scripted Dana. Thinking off wherever latency matters. The 27B sglang lane on `ty-dgx-spark-2` (`:8888/v1`, `qwen3.8-27b-sglang`) is spare capacity if needed |
+| The Spark lane is at home, and the venue's network or a home outage cuts it off | `LLM_PROVIDER=openrouter` (raise the $5 cap first) or `neon`. Test reaching it over the tailnet from the venue at 9:00 |
+| The recording is made on Qwen but the live demo runs on the Gateway's models | Both are real runs. Show the model that actually ran in the inspector and the report, and say so if asked |
 | The 135M eval is too slow on Sprite hardware | S-LAB's budget; a smaller eval set; the table stays on disk |
 | Phase-2 scope creeps into phase 1 (real Weave, threads) | Out of scope by decision 2.1.4; requests for it go to §6 |
 | Keys aren't available to the agents | Fill in `.env` at kickoff; each worktree copies it; never commit it |
