@@ -68,7 +68,10 @@ const seed = await run("npm", ["run", "seed", "-w", "@fabric/db", "--", "--profi
 if (seed.code !== 0) throw new Error(`seed failed:\n${seed.output}`);
 console.log(`   ${seed.output.trim().split("\n").pop()}`);
 
-console.log("2. starting server + sim …");
+// A stale server on the port would answer health checks with old code; refuse to run blind.
+if (await fetch(`${base}/api/health`).then((r) => r.ok).catch(() => false)) {
+  throw new Error(`something already serves ${base}; stop it before running check-data`);
+}
 const server = spawn("npx", ["tsx", "apps/server/src/index.ts"], {
   env: { ...process.env, DATABASE_URL: pooled, PORT: String(port), NEON_BRANCH: branch },
   stdio: ["ignore", "pipe", "inherit"],
