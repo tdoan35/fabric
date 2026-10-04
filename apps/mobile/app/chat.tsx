@@ -14,7 +14,7 @@ import { MessageBubble } from "@/components/chat/parts";
 import { httpApi } from "@/lib/api";
 import { chatStream, DEMO_SESSION_ID, toWire } from "@/lib/chat";
 import { theme } from "@/lib/theme";
-import { useAppEvents } from "@/lib/stream";
+import { useAppEvents } from "@/lib/app-stream";
 
 const now = () => new Date().toISOString();
 

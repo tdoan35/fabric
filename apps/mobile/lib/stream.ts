@@ -1,10 +1,10 @@
 // GET /api/stream (MOBILE-PLAN §2 M1): SSE of AppEvents, invalidation only (§4.4). RN has no
-// EventSource, so the frames are read from a streaming fetch body — `expo/fetch` in the app,
-// because RN's global fetch doesn't expose response bodies as streams. The parser and the
-// connection manager are pure and take the fetch as an argument, so scripts/chat-smoke.mts
-// drives the exact same code against node's fetch. Mirrors the web's routes/root.tsx listener:
-// AppEventSchema-validates every frame, warns in dev on mismatches, reconnects on drops.
-import { useEffect, useRef, useState } from "react";
+// EventSource, so the frames are read from a streaming fetch body — `expo/fetch` in the app
+// (wired in lib/app-stream.ts), because RN's global fetch doesn't expose response bodies as
+// streams. This module is PURE — no react/react-native/expo imports — so scripts/chat-smoke.mts
+// drives the exact same parser and manager under node's fetch. Mirrors the web's routes/root.tsx
+// listener: AppEventSchema-validates every frame, warns in dev on mismatches, reconnects on drops.
+// The React layer (useAppEvents / useStreamStatus / the shared connection) is lib/app-stream.ts.
 import { AppEventSchema, type AppEvent } from "@fabric/contracts";
 import { apiBase } from "./api";
 
@@ -211,66 +211,4 @@ export function createAppStream(fetchImpl: FetchLike, baseUrl: string): AppStrea
       kick();
     },
   };
-}
-
-let shared: Promise<AppStream> | undefined;
-
-/** The app-wide stream: one connection shared by every subscriber. expo/fetch and AppState are
- * imported lazily so this module also loads under plain node (scripts/chat-smoke.mts injects fetch
- * into `createAppStream` directly and never touches this path). */
-export function startAppStream(): Promise<AppStream> {
-  shared ??= (async () => {
-    const [{ fetch }, { AppState }] = await Promise.all([import("expo/fetch"), import("react-native")]);
-    const stream = createAppStream(fetch as FetchLike, apiBase);
-    // A suspended phone drops the socket without an error; reconnect the moment it's foregrounded.
-    AppState.addEventListener("change", (state) => {
-      if (state === "active") stream.reconnect();
-    });
-    return stream;
-  })();
-  return shared;
-}
-
-/**
- * Subscribes to matching AppEvents from the shared /api/stream connection. Both arguments may be
- * fresh closures every render — they are kept in a ref, like the web's revalidateRef pattern.
- */
-export function useAppEvents(filter: (e: AppEvent) => boolean, cb: (e: AppEvent) => void): void {
-  const handlers = useRef({ filter, cb });
-  useEffect(() => {
-    handlers.current = { filter, cb };
-  }, [filter, cb]);
-  useEffect(() => {
-    let off: (() => void) | undefined;
-    let cancelled = false;
-    void startAppStream().then((stream) => {
-      if (cancelled) return;
-      off = stream.subscribe(
-        (e) => handlers.current.filter(e),
-        (e) => handlers.current.cb(e),
-      );
-    });
-    return () => {
-      cancelled = true;
-      off?.();
-    };
-  }, []);
-}
-
-/** Live connection status, for the debug screen (app/debug.tsx). */
-export function useStreamStatus(): StreamStatus {
-  const [status, setStatus] = useState<StreamStatus>({ state: "connecting", attempts: 0, lastEventAt: undefined, lastEvent: undefined });
-  useEffect(() => {
-    let off: (() => void) | undefined;
-    let cancelled = false;
-    void startAppStream().then((stream) => {
-      if (cancelled) return;
-      off = stream.onStatus(setStatus);
-    });
-    return () => {
-      cancelled = true;
-      off?.();
-    };
-  }, []);
-  return status;
 }

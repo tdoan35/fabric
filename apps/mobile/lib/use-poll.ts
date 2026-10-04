@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useFocusEffect } from "expo-router";
 import type { AppEvent } from "@fabric/contracts";
 
-import { useAppEvents } from "./stream";
+import { useAppEvents } from "./app-stream";
 
 export interface PollState<T> {
   data: T | undefined;

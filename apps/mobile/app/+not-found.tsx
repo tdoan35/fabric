@@ -10,7 +10,8 @@ export default function NotFoundScreen() {
       <Stack.Screen options={{ title: "Not found" }} />
       <Screen>
         <Text style={styles.title}>This screen doesn&apos;t exist.</Text>
-        <Link href="/" style={styles.link}>
+        {/* "/" isn't a registered route (the (tabs) group has no index); Weave is the initial screen. */}
+        <Link href="/weave" style={styles.link}>
           <Text style={styles.linkText}>Go to Weave</Text>
         </Link>
       </Screen>
