@@ -16,6 +16,8 @@
     "electron:dist": "tsc && vite build && electron-builder"
   },
   "dependencies": {
+    "@fabric/contracts": "*",
+    "@fabric/fixtures": "*",
     "@assistant-ui/react": "^0.15.22",
     "@fontsource-variable/atkinson-hyperlegible-next": "^5.3.0",
     "@fontsource-variable/fira-code": "^5.3.0",
