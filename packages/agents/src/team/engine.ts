@@ -169,7 +169,13 @@ async function executeWorkflow(
       return;
     }
     if (verdict.verdict === "accept") {
-      await writer.end(runId, "accepted", verdict.text); // → onEnd → finalizeRun
+      // → onEnd → finalizeRun. A finalize failure is the server's to report, not the workflow's:
+      // the run is already accepted on disk, so it must not read as a workflow crash.
+      try {
+        await writer.end(runId, "accepted", verdict.text);
+      } catch (err) {
+        if (!quiet(err)) console.error(`[team] run ${runId} accepted, but finalize failed:`, err);
+      }
       return;
     }
     if (bounceOutcome(used, run.reworkBudget) === "blocked") {
