@@ -18,6 +18,8 @@ coverage/
 chrome-profile/
 .DS_Store
 npm-debug.log*
+# tools: exa result cache (the fallback when Exa is slow or down)
+.cache/
 
 # exported git history, if any
 *.bundle

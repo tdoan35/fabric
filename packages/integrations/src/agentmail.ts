@@ -51,8 +51,16 @@ export async function createInbox(agentId: string, opts: InboxUpdate = {}, clien
     return "";
   }
   const email = `${username}@${DOMAIN}`;
-  const found = (await client.inboxes.list({ limit: 100 })).inboxes.find((i) => i.email === email);
-  const address = found?.email ?? (await client.inboxes.create({ username, domain: DOMAIN })).email;
+  let address = (await client.inboxes.list({ limit: 100 })).inboxes.find((i) => i.email === email)?.email;
+  if (!address) {
+    try {
+      address = (await client.inboxes.create({ username, domain: DOMAIN })).email;
+    } catch (err) {
+      // The list can lag a create (read replicas): "already exists" means it's there — say so.
+      if (!/already/i.test(String((err as { name?: string })?.name ?? (err as Error)?.message))) throw err;
+      address = email;
+    }
+  }
   if (opts.db) await recordInbox(opts.db, agentId, address);
   opts.publish?.({ type: "registry.changed" });
   return address;

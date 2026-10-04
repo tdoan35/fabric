@@ -51,7 +51,7 @@ export function artifactsReadTool(policy: ToolPolicy, ctx: ToolCtx, db?: Db) {
           order by ord desc limit 1`);
         const row = (rows.rows as { name: string; content_type: string; content: string }[])[0];
         if (!row) throw new Error(`no artifact named ${i.name} in this run`);
-        const text = row.content_type === "text/plain" ? Buffer.from(row.content, "base64").toString("utf8") : undefined;
+        const text = row.content_type === "text/plain" ? row.content : undefined;
         return i.content === false ? { name: row.name } : { name: row.name, contentType: row.content_type, ...(text !== undefined ? { text } : {}) };
       },
     },
