@@ -1,7 +1,8 @@
 import {
-  ContextSnapshotSchema, ProjectSchema, RegistrySchema, ReportSchema,
-  RunEventSchema, RunSchema, TaskSchema, WeaveSnapshotSchema,
-  type ContextSnapshot, type FinalizeResponse, type Project, type Registry, type Report, type Run, type RunEvent, type SpliceResponse, type Task, type WeaveSnapshot,
+  ChatStreamLineSchema, ContextSnapshotSchema, ProjectSchema, RegistrySchema, ReportSchema,
+  RunEventSchema, RunSchema, SessionMessagesSchema, TaskSchema, WeaveSnapshotSchema,
+  type ChatRequest, type ChatStreamLine, type ContextSnapshot, type FinalizeResponse, type Project, type Registry, type Report, type Run, type RunEvent,
+  type SessionMessages, type SpliceResponse, type Task, type WeaveSnapshot,
 } from "@fabric/contracts";
 import { z } from "zod";
 
@@ -24,6 +25,37 @@ async function request<T>(path: string, schema: z.ZodType, init?: RequestInit, m
 }
 
 const json = (body: unknown): RequestInit => ({ method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+
+/** POST /api/chat (§4.3): one cumulative snapshot of the assistant message per NDJSON line. */
+async function* chatStream(body: ChatRequest, signal?: AbortSignal): AsyncGenerator<ChatStreamLine> {
+  const response = await fetch(`${apiBase}/api/chat`, { ...json(body), signal });
+  if (!response.ok || !response.body) {
+    const err = await response.json().catch(() => ({})) as { error?: string };
+    throw new Error(err.error ?? `Dana is unavailable (${response.status})`);
+  }
+  const parse = (line: string) => {
+    const value: unknown = JSON.parse(line);
+    if (dev) {
+      const checked = ChatStreamLineSchema.safeParse(value);
+      if (!checked.success) console.warn("[api] /chat line contract mismatch", checked.error.issues);
+    }
+    return value as ChatStreamLine;
+  };
+  const reader = response.body.pipeThrough(new TextDecoderStream()).getReader();
+  let buffer = "";
+  for (;;) {
+    const { value, done } = await reader.read();
+    if (value) buffer += value;
+    let nl: number;
+    while ((nl = buffer.indexOf("\n")) >= 0) {
+      const line = buffer.slice(0, nl).trim();
+      buffer = buffer.slice(nl + 1);
+      if (line) yield parse(line);
+    }
+    if (done) break;
+  }
+  if (buffer.trim()) yield parse(buffer.trim());
+}
 const spliceSchema = z.object({ run: RunSchema, events: z.array(RunEventSchema) });
 const finalizeSchema = z.object({ reportId: z.string() });
 
@@ -41,4 +73,7 @@ export const httpApi = {
   getReport: (id: string) => request<Report | undefined>(`/reports/${encodeURIComponent(id)}`, ReportSchema, undefined, true),
   spliceRun: (id: string, t: number) => request<SpliceResponse>(`/runs/${encodeURIComponent(id)}/splice`, spliceSchema, json({ t })),
   finalizeSplice: (id: string) => request<FinalizeResponse>(`/runs/${encodeURIComponent(id)}/finalize-splice`, finalizeSchema, json({})),
+  // Chat (UI-CHAT): Dana's thread. Http mode only; mock mode streams the scripted adapter instead.
+  chat: chatStream,
+  getSessionMessages: (id: string) => request<SessionMessages>(`/sessions/${encodeURIComponent(id)}/messages`, SessionMessagesSchema),
 };
