@@ -4,7 +4,7 @@
 // opens with a recorded disposition (forced tool call, one retry), proposals are human tools whose
 // decisions create rows on the next request, and the handoff compiles a brief and starts a real
 // task + run. Fixture mode (DANA 6) runs the scripted branches with the same side effects.
-import { stepCountIs, streamText, tool } from "ai";
+import { ToolChoiceViolationError, stepCountIs, streamText, tool } from "ai";
 import type { ToolSet } from "ai";
 import { z } from "zod";
 import { NotImplementedError } from "@fabric/contracts";
@@ -270,6 +270,7 @@ export function createAssistant(deps: AssistantDeps): Assistant {
 
         const m = deps.modelFor?.(dana ?? fallbackDana()) ?? model(dana?.agent.model ?? "", { thinking: "off", meter: { agentId: "dana", step: "chat" } });
         const attempt = async function* (): AsyncGenerator<ChatStreamLine> {
+          let yielded = false;
           const turnAbort = new AbortController();
           const stream = streamText({
             model: m,
@@ -304,8 +305,9 @@ export function createAssistant(deps: AssistantDeps): Assistant {
               ],
             };
           };
-          for await (const part of stream.fullStream) {
-            if (part.type === "error") throw part.error;
+          try {
+            for await (const part of stream.fullStream) {
+              if (part.type === "error") throw part.error;
             if (part.type === "text-delta") {
               if (!text) anchor = toolParts.filter((p) => p.toolName !== "record_disposition").length;
               text += part.text;
@@ -340,11 +342,24 @@ export function createAssistant(deps: AssistantDeps): Assistant {
             }
             // Hold everything back until the disposition call has landed, so a retried turn never
             // streams text without one (the UI replaces content per line either way).
-            if (dispositionSeen) yield snapshot();
-            if (terminal) {
+            if (dispositionSeen) {
+              yielded = true;
+              yield snapshot();
+            }
+            // A card/handoff may share a step with the disposition call; its result still has to
+            // land (the chip shows {recorded: true}) before the turn can end.
+            const disposition = toolParts.find((p) => p.toolName === "record_disposition");
+            if (terminal && disposition?.result !== undefined) {
+              yield snapshot();
               turnAbort.abort(); // the turn is complete; nothing may follow the card or the handoff
               break;
             }
+          }
+          } catch (err) {
+            // A provider that ignores the forced tool choice (seen on the Spark lane) fails before
+            // anything streamed: hand the turn to the one retry instead of failing the request.
+            if (yielded || !(err instanceof ToolChoiceViolationError)) throw err;
+            console.warn(`[assistant] step 0 ignored the forced record_disposition; retrying: ${err.message}`);
           }
         };
 

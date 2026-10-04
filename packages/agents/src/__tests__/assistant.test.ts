@@ -2,7 +2,7 @@
 // transitions, and the forced first record_disposition call. No network, no database: the model
 // is the AI SDK's MockLanguageModelV4 and the pure modules are exercised directly.
 import { describe, expect, it } from "vitest";
-import { stepCountIs, streamText, tool } from "ai";
+import { ToolChoiceViolationError, stepCountIs, streamText, tool } from "ai";
 import type { ToolSet } from "ai";
 import { MockLanguageModelV4 } from "ai/test";
 import { z } from "zod";
@@ -185,6 +185,54 @@ describe("forced first record_disposition", () => {
     expect(recorded).toEqual([{ disposition: "handle_directly", reason: "simple question" }]);
     expect(mock.doStreamCalls[0].toolChoice).toEqual({ type: "tool", toolName: "record_disposition" });
     expect(mock.doStreamCalls[1].toolChoice).toEqual({ type: "auto" });
+  });
+
+  it("a step-0 response that ignores the forced tool choice is swallowed and retried once", async () => {
+    // Seen on the Spark lane: the model skips the forced call, streamText raises
+    // ToolChoiceViolationError, and the turn reruns from scratch (DANA 2 "retry the turn once").
+    const mock = new MockLanguageModelV4({
+      doStream: [
+        streamOf([{ type: "text-start", id: "t" }, { type: "text-delta", id: "t", delta: "no tool call" }, { type: "text-end", id: "t" }, finish]),
+        streamOf([
+          { type: "tool-call", toolCallId: "c1", toolName: "record_disposition", input: JSON.stringify({ disposition: "handle_directly", reason: "retry" }) },
+          finish,
+        ]),
+      ],
+    });
+    const recorded: unknown[] = [];
+    const tools: ToolSet = {
+      record_disposition: tool({
+        inputSchema: z.object({ disposition: z.string(), reason: z.string() }),
+        execute: async (args) => { recorded.push(args); return { recorded: true }; },
+      }),
+    };
+    const lines: string[] = [];
+    // The retry policy itself is what matters here: streamText raised on attempt 1 (forced call
+    // missing), attempt 2 carries the call. Assert via the wire-level calls the mock recorded.
+    // Mirrors the live attempt(): nothing yields until record_disposition has been called, and a
+    // ToolChoiceViolationError before anything streamed ends the attempt for the retry to take over.
+    const attempt = async function* () {
+      const stream = streamText({
+        model: mock,
+        messages: [{ role: "user", content: "hi" }],
+        tools,
+        stopWhen: stepCountIs(6),
+        prepareStep: ({ stepNumber }) => prepareDispositionFirstStep(stepNumber),
+      });
+      let dispositionSeen = false;
+      try {
+        for await (const part of stream.fullStream) {
+          if (part.type === "tool-call" && part.toolName === "record_disposition") dispositionSeen = true;
+        }
+      } catch (err) {
+        if (!(err instanceof ToolChoiceViolationError)) throw err;
+      }
+      if (dispositionSeen) yield { content: [{ type: "text" as const, text: "ok" }] };
+    };
+    for await (const line of withForcedDisposition(attempt)) lines.push(JSON.stringify(line.content));
+    expect(mock.doStreamCalls.length).toBeGreaterThanOrEqual(2); // the violation was retried, not failed
+    expect(recorded).toEqual([{ disposition: "handle_directly", reason: "retry" }]);
+    expect(lines.length).toBeGreaterThan(0);
   });
 
   it("withForcedDisposition retries the turn exactly once when no line ever lands", async () => {
