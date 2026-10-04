@@ -7,17 +7,20 @@ import { Card, Row, Screen } from "@/components/ui";
 import { apiBase, httpApi } from "@/lib/api";
 import { avatar } from "@/lib/avatar";
 import { theme } from "@/lib/theme";
+import { useStreamStatus } from "@/lib/stream";
 import { usePoll } from "@/lib/use-poll";
 
 /**
  * Hidden network + contracts check (MOBILE-PLAN §6 step 3). Reached from the ⌘ button in either
- * tab header. Shows the API base, the GET /api/runs count through the validated client, and a raw
- * RunSchema.parse of the same response — proof that @fabric/contracts executes in RN.
+ * tab header. Shows the API base, the GET /api/runs count through the validated client, a raw
+ * RunSchema.parse of the same response — proof that @fabric/contracts executes in RN — and the
+ * M1 /api/stream connection state (live / reconnecting, with the last AppEvent).
  */
 
 type SchemaCheck = { status: "ok" | "mismatch" | "error"; detail: string };
 
 export default function DebugScreen() {
+  const stream = useStreamStatus();
   const { data, error, loading, refresh } = usePoll(() => httpApi.listRuns(), 3000);
   const [check, setCheck] = useState<SchemaCheck | undefined>(undefined);
 
@@ -68,8 +71,20 @@ export default function DebugScreen() {
               {check ? `${check.status} — ${check.detail}` : "…"}
             </Text>
           </Row>
-          <Row label="Portrait (webp)">
-            <Image source={avatar("elliot")} style={styles.portrait} />
+        </Card>
+        <Card>
+          <Row label="App stream">
+            <Text style={[styles.value, stream.state === "live" && styles.ok, stream.state !== "live" && styles.bad]}>
+              {stream.state}
+              {stream.state !== "live" && stream.attempts > 0 ? ` · retry ${stream.attempts}` : ""}
+            </Text>
+          </Row>
+          <Row label="Last event">
+            <Text style={styles.value}>
+              {stream.lastEvent
+                ? `${stream.lastEvent.type} · ${new Date(stream.lastEventAt ?? 0).toLocaleTimeString()}`
+                : "—"}
+            </Text>
           </Row>
         </Card>
         {error && (

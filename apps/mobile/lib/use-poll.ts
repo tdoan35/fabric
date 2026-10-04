@@ -1,5 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useFocusEffect } from "expo-router";
+import type { AppEvent } from "@fabric/contracts";
+
+import { useAppEvents } from "./stream";
 
 export interface PollState<T> {
   data: T | undefined;
@@ -13,8 +16,12 @@ export interface PollState<T> {
  * Focus-aware poll (MOBILE-PLAN §2): fetches immediately, then every `intervalMs` while the
  * screen is focused, and stops when it isn't. `refresh()` drives RefreshControl. Errors keep
  * the last `data` (a flaky venue network must not blank the screen) and clear on the next hit.
+ *
+ * M1: pass `matches` to refetch the moment a matching /api/stream AppEvent arrives (SSE
+ * invalidation, MOBILE-PLAN §2 M1). The poll stays as the fallback and still owns the cadence;
+ * event-driven ticks only fire while focused, so a backgrounded screen fetches nothing.
  */
-export function usePoll<T>(fn: () => Promise<T>, intervalMs = 3000): PollState<T> {
+export function usePoll<T>(fn: () => Promise<T>, intervalMs = 3000, matches?: (e: AppEvent) => boolean): PollState<T> {
   const [data, setData] = useState<T | undefined>(undefined);
   const [error, setError] = useState<Error | undefined>(undefined);
   const [loading, setLoading] = useState(true);
@@ -55,11 +62,23 @@ export function usePoll<T>(fn: () => Promise<T>, intervalMs = 3000): PollState<T
     void tick();
   }, [tick]);
 
+  const focused = useRef(false);
+  useAppEvents(
+    (e) => matches?.(e) ?? false,
+    () => {
+      if (focused.current) void tick();
+    },
+  );
+
   useFocusEffect(
     useCallback(() => {
+      focused.current = true;
       void tick();
       const timer = setInterval(() => void tick(), intervalMs);
-      return () => clearInterval(timer);
+      return () => {
+        focused.current = false;
+        clearInterval(timer);
+      };
     }, [tick, intervalMs]),
   );
 

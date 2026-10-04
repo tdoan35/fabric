@@ -54,6 +54,8 @@ export default function WorkTab() {
         httpApi.listTasks(),
         httpApi.listRuns(),
       ]).then(([projects, tasks, runs]) => ({ projects, tasks, runs })),
+    3000,
+    (e) => e.type === "task.changed" || e.type === "run.changed",
   );
   const groups = useMemo(() => {
     if (!data) return [];

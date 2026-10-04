@@ -14,10 +14,11 @@ import { useWeaveLocal } from "@/components/weave/store";
 /**
  * Weave list (MOBILE-PLAN §2 M0): items grouped by kind, each row with the unread dot, the
  * agent, the title, the blocking cost-of-delay line and the time. 3 s focus poll plus
- * pull-to-refresh; tap opens the detail. Web counterpart: components/weave/inbox.tsx.
+ * pull-to-refresh; M1 refetches on `weave.changed` from /api/stream the moment it lands.
+ * Tap opens the detail. Web counterpart: components/weave/inbox.tsx.
  */
 export default function WeaveTab() {
-  const { data, error, loading, refresh } = usePoll(() => httpApi.getWeave(), 3000);
+  const { data, error, loading, refresh } = usePoll(() => httpApi.getWeave(), 3000, (e) => e.type === "weave.changed");
   const local = useWeaveLocal();
   const people = usePeople();
   const router = useRouter();
