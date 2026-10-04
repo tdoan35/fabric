@@ -1,12 +1,13 @@
 // POST /api/dev/tools (non-production): a sim-style scratch run that exercises the REAL tools —
 // Megan's exa.search and Jonah's sprite.exec + a blocked network.fetch — through toolsFor with a
 // real RunWriter, so the loop view streams exactly what a live start will (§5.3 TOOLS, DEV ROUTE).
+import { RunClosedError, provisionTeam, readRegistry, sql } from "@fabric/db";
 import type { Db, RunWriter } from "@fabric/db";
-import type { StudioProfile } from "@fabric/contracts";
+import { toolsFor } from "@fabric/integrations";
 import { myProfiles } from "@fabric/fixtures/studio";
 import { studioTeams } from "@fabric/fixtures/teams";
-import { RunClosedError, provisionTeam, readRegistry, sql } from "@fabric/db";
-import { toolsFor } from "@fabric/integrations";
+import { assembleContext } from "@fabric/agents/context";
+import type { Run, StudioProfile, ToolName, ToolPolicy } from "@fabric/contracts";
 
 export interface DevToolsOptions {
   onRegistryChanged?: () => void;
@@ -55,7 +56,10 @@ export async function startDevToolsRun(db: Db, writer: RunWriter, options: DevTo
     try {
       await writer.emit(run.id, "step.started", "megan", { label: "Survey", stage: "Prepare", kind: "work" });
       await writer.emit(run.id, "step.started", "jonah", { label: "Setup", stage: "Prepare", kind: "work" });
-      await Promise.all([meganLane(megan, run.id, writer, options.query), jonahLane(jonah, run.id, writer)]);
+      await Promise.all([
+        meganLane(megan, run, writer, options.query),
+        jonahLane(jonah, run, writer),
+      ]);
       await writer.emit(run.id, "step.finished", "megan", { label: "Survey", stage: "Prepare", kind: "work" });
       await writer.emit(run.id, "step.finished", "jonah", { label: "Setup", stage: "Prepare", kind: "work" });
       await writer.end(run.id, "stopped", "Dev tools check finished.");
@@ -68,16 +72,26 @@ export async function startDevToolsRun(db: Db, writer: RunWriter, options: DevTo
   return { taskId: task.id, runId: run.id, done };
 }
 
-async function meganLane(megan: StudioProfile, runId: string, writer: RunWriter, query = "engram conditional memory n-gram lookup") {
-  const { tools } = toolsFor(megan, { runId, step: "Prepare", writer });
-  await tools.exa_search?.execute?.({ query, fast: true }, {} as never);
+/** What TEAM does before each step (CTX assemble → saveSnapshot), so the Inspector has its tabs. */
+async function snapshotFor(agent: StudioProfile, run: Run, writer: RunWriter, tools: { name: ToolName; policy: ToolPolicy }[], sandbox?: string) {
+  const { snapshot } = await assembleContext({
+    agent, run, step: "Prepare", brief: run.brief, artifactRefs: [], teamKnowledge: [], tools, sandbox, t: 0.1,
+  });
+  await writer.saveSnapshot(snapshot);
 }
 
-async function jonahLane(jonah: StudioProfile, runId: string, writer: RunWriter) {
-  const { tools } = toolsFor(jonah, { runId, step: "Prepare", writer });
-  await tools.sprite_exec?.execute?.({ command: "python3 --version && uv --version" }, {} as never);
-  await tools.sprite_exec?.execute?.({ command: "for i in 1 2 3; do echo \"check $i/3\"; sleep 0.4; done" }, {} as never);
-  await tools.workspace_write?.execute?.({ path: "tools-check.md", content: "# Tools check\n\nWritten by workspace.write.\n" }, {} as never);
+async function meganLane(megan: StudioProfile, run: Run, writer: RunWriter, query = "engram conditional memory n-gram lookup") {
+  const set = toolsFor(megan, { runId: run.id, step: "Prepare", writer });
+  await snapshotFor(megan, run, writer, set.policies);
+  await set.tools.exa_search?.execute?.({ query, fast: true }, {} as never);
+}
+
+async function jonahLane(jonah: StudioProfile, run: Run, writer: RunWriter) {
+  const set = toolsFor(jonah, { runId: run.id, step: "Prepare", writer });
+  await snapshotFor(jonah, run, writer, set.policies, set.sandbox);
+  await set.tools.sprite_exec?.execute?.({ command: "python3 --version && uv --version" }, {} as never);
+  await set.tools.sprite_exec?.execute?.({ command: "for i in 1 2 3; do echo \"check $i/3\"; sleep 0.4; done" }, {} as never);
+  await set.tools.workspace_write?.execute?.({ path: "tools-check.md", content: "# Tools check\n\nWritten by workspace.write.\n" }, {} as never);
   // The Tools-tab beat: a fetch the policy blocks (Jonah's row says network.fetch: blocked).
-  await tools.network_fetch?.execute?.({ url: "https://files.example.org/pkg.tar.gz" }, {} as never);
+  await set.tools.network_fetch?.execute?.({ url: "https://files.example.org/pkg.tar.gz" }, {} as never);
 }
