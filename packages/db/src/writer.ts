@@ -58,16 +58,20 @@ async function emitRow(
 export function createRunWriterWith(db: Db, hooks: RunWriterHooks = {}): RunWriter {
   return {
     async createTask(i) {
-      const base = slugId(i.title);
-      const counts = await db.db.execute(sql`
-        select count(*) filter (where id = ${base}) as taken, count(*) as total from tasks`);
-      const { taken, total } = counts.rows[0] as { taken: string; total: string };
-      const id = Number(taken) > 0 ? `${base}-${Number(total) + 1}` : base;
-      await db.db.execute(sql`
-        insert into tasks (id, project_id, team_id, title, recording_key, session_id)
-        values (${id}, ${i.projectId}, ${i.teamId}, ${i.title}, ${i.recordingKey ?? null}, ${i.sessionId ?? null})`);
-      const task: Task = { id, projectId: i.projectId, teamId: i.teamId, title: i.title, runIds: [], recordingKey: i.recordingKey, sessionId: i.sessionId };
-      return task;
+      // Ids derive from counts: stamp under the tasks advisory lock so parallel creates can't collide.
+      return db.db.transaction(async (tx) => {
+        await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended('tasks', 0))`);
+        const base = slugId(i.title);
+        const counts = await tx.execute(sql`
+          select count(*) filter (where id = ${base}) as taken, count(*) as total from tasks`);
+        const { taken, total } = counts.rows[0] as { taken: string; total: string };
+        const id = Number(taken) > 0 ? `${base}-${Number(total) + 1}` : base;
+        await tx.execute(sql`
+          insert into tasks (id, project_id, team_id, title, recording_key, session_id)
+          values (${id}, ${i.projectId}, ${i.teamId}, ${i.title}, ${i.recordingKey ?? null}, ${i.sessionId ?? null})`);
+        const task: Task = { id, projectId: i.projectId, teamId: i.teamId, title: i.title, runIds: [], recordingKey: i.recordingKey, sessionId: i.sessionId };
+        return task;
+      });
     },
 
     async startRun(taskId, brief, budget) {
@@ -94,27 +98,36 @@ export function createRunWriterWith(db: Db, hooks: RunWriterHooks = {}): RunWrit
       emitRow(db, hooks, runId, type, actor, payload as Record<string, unknown>),
 
     async saveSnapshot(s) {
-      const count = await db.db.execute(sql`select count(*) as n from context_snapshots where run_id = ${s.runId}`);
-      const n = Number((count.rows[0] as { n: string }).n);
-      const id = `snap-${s.runId}-${n + 1}`;
-      await db.db.execute(sql`
-        insert into context_snapshots (id, ord, run_id, agent_id, step, assembled_at_s, sections, total_tokens, tools, last_denied, not_loaded, note, sandbox)
-        values (${id}, ${n + 1}, ${s.runId}, ${s.agentId}, ${s.step}, ${s.assembledAtS}, ${JSON.stringify(s.sections)}::jsonb,
-                ${s.totalTokens}, ${JSON.stringify(s.tools)}::jsonb, ${s.lastDenied ?? null}, ${s.notLoaded}, ${s.note}, ${s.sandbox ?? null})`);
+      // Same per-run lock as emitRow: parallel steps (TEAM) must not derive the same snapshot id/ord.
+      const id = await db.db.transaction(async (tx) => {
+        await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${s.runId}, 0))`);
+        const count = await tx.execute(sql`select count(*) as n from context_snapshots where run_id = ${s.runId}`);
+        const n = Number((count.rows[0] as { n: string }).n) + 1;
+        const snapshotId = `snap-${s.runId}-${n}`;
+        await tx.execute(sql`
+          insert into context_snapshots (id, ord, run_id, agent_id, step, assembled_at_s, sections, total_tokens, tools, last_denied, not_loaded, note, sandbox)
+          values (${snapshotId}, ${n}, ${s.runId}, ${s.agentId}, ${s.step}, ${s.assembledAtS}, ${JSON.stringify(s.sections)}::jsonb,
+                  ${s.totalTokens}, ${JSON.stringify(s.tools)}::jsonb, ${s.lastDenied ?? null}, ${s.notLoaded}, ${s.note}, ${s.sandbox ?? null})`);
+        return snapshotId;
+      });
       const snapshot: ContextSnapshot = { ...s, id };
       await emitRow(db, hooks, s.runId, "context.snapshot", s.agentId, { snapshotId: id }, s.assembledAtS);
       return snapshot;
     },
 
     async saveArtifact(runId, a) {
-      const count = await db.db.execute(sql`select count(*) as n from artifacts where run_id = ${runId}`);
-      const n = Number((count.rows[0] as { n: string }).n);
-      const id = `art-${runId}-${n + 1}`;
-      const isBinary = typeof a.content !== "string";
-      await db.db.execute(sql`
-        insert into artifacts (id, run_id, name, by, ord, content_type, content)
-        values (${id}, ${runId}, ${a.name}, ${a.by}, ${n + 1}, ${isBinary ? "application/octet-stream" : "text/plain"},
-                ${isBinary ? Buffer.from(a.content as Uint8Array).toString("base64") : (a.content as string)})`);
+      const id = await db.db.transaction(async (tx) => {
+        await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${runId}, 0))`);
+        const count = await tx.execute(sql`select count(*) as n from artifacts where run_id = ${runId}`);
+        const n = Number((count.rows[0] as { n: string }).n) + 1;
+        const artifactId = `art-${runId}-${n}`;
+        const isBinary = typeof a.content !== "string";
+        await tx.execute(sql`
+          insert into artifacts (id, run_id, name, by, ord, content_type, content)
+          values (${artifactId}, ${runId}, ${a.name}, ${a.by}, ${n}, ${isBinary ? "application/octet-stream" : "text/plain"},
+                  ${isBinary ? Buffer.from(a.content as Uint8Array).toString("base64") : (a.content as string)})`);
+        return artifactId;
+      });
       await emitRow(db, hooks, runId, "artifact.created", a.by, { name: a.name, artifactId: id });
       return { id };
     },
