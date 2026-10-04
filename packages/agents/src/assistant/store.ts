@@ -124,15 +124,20 @@ export async function setToolResult(db: Db, messageId: string, toolCallId: strin
 
 /** Stores every disposition with its considered[] (CHAT-13). Returns the tool's result. */
 export async function recordDisposition(db: Db, sessionId: string, args: DispositionArgs): Promise<{ recorded: true }> {
-  await db.db.transaction(async (tx) => {
-    await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended('dispositions', 0))`);
-    const next = await tx.execute(sql`select count(*) + 1 as n from dispositions where session_id = ${sessionId}`);
-    const turn = Number((next.rows[0] as { n: string }).n);
-    await tx.execute(sql`
-      insert into dispositions (id, session_id, turn, disposition, considered, reason)
-      values (${"disp-" + sessionId + "-" + turn}, ${sessionId}, ${turn}, ${args.disposition},
-              ${JSON.stringify(args.considered ?? [])}::jsonb, ${args.reason})`);
-  });
+  // One statement, the turn counted inside it: the model's next step waits on this, and a
+  // transaction is five round trips. A session's turns are sequential; if two inserts ever race
+  // for the same turn, the primary key (which carries the turn) rejects one and it retries once.
+  const insert = () => db.db.execute(sql`
+    insert into dispositions (id, session_id, turn, disposition, considered, reason)
+    select 'disp-' || ${sessionId}::text || '-' || c.n, ${sessionId}, c.n, ${args.disposition},
+           ${JSON.stringify(args.considered ?? [])}::jsonb, ${args.reason}
+    from (select count(*) + 1 as n from dispositions where session_id = ${sessionId}) c`);
+  try {
+    await insert();
+  } catch (err) {
+    if ((err as { code?: string }).code !== "23505") throw err;
+    await insert();
+  }
   return { recorded: true };
 }
 

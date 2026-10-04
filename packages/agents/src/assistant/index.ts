@@ -112,7 +112,6 @@ const handoffSchema = z.object({
   teamName: z.string(),
   request: z.string().describe("Your one-sentence restatement of what Ty wants. This is all the brief compiler sees."),
   title: z.string().optional().describe("Short task title for the Work board"),
-  summary: z.string().describe("One line for the handoff card, e.g. what the team receives"),
 });
 
 
@@ -268,7 +267,7 @@ export function createAssistant(deps: AssistantDeps): Assistant {
                 return fixtureBrief(i);
               }
             }), {
-              sessionId, session, teamName: args.teamName, request: args.request, title: args.title, summary: args.summary,
+              sessionId, session, teamName: args.teamName, request: args.request, title: args.title,
             }).catch((err: unknown) => {
               handoffDone = undefined; // a failed handoff must not poison a retried turn
               throw err;

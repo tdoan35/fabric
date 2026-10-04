@@ -57,27 +57,30 @@ export interface HandoffInput {
   request: string;
   /** Short task title for the board; defaults to a trimmed restatement. */
   title?: string;
-  summary: string;
+  /** The handoff card's line; defaults to the compiled brief's objective (what the team receives). */
+  summary?: string;
 }
 
 /** Runs the whole handoff and returns the payload that streams back to the thread. */
 export async function runHandoff(deps: HandoffDeps, input: HandoffInput): Promise<HandoffPayload> {
   const { db } = deps;
-  const team = await getTeamByName(db, input.teamName);
+  const [team, dana, projects] = await Promise.all([getTeamByName(db, input.teamName), getProfile(db, "dana"), listProjects(db)]);
   if (!team) throw new Error(`handoff: team "${input.teamName}" does not exist (approve the team first)`);
-  const dana = await getProfile(db, "dana");
 
-  const brief = await deps.brief({
-    request: input.request,
-    team: { name: team.name, purpose: team.purpose, criteria: team.criteria },
-    specialists: team.memberProfiles,
-  });
-
-  const project = projectFor(input.session, await listProjects(db));
+  // The brief is a model call and the task doesn't depend on it: both at once. (The live brief
+  // falls back to the deterministic one rather than failing, so this never strands a task.)
+  const project = projectFor(input.session, projects);
   const title = (input.title ?? input.request).replace(/\s+/g, " ").trim().slice(0, 80);
-  const task = await deps.writer.createTask({
-    projectId: project, teamId: team.id, title, sessionId: input.sessionId, recordingKey: deps.recordingKey,
-  });
+  const [brief, task] = await Promise.all([
+    deps.brief({
+      request: input.request,
+      team: { name: team.name, purpose: team.purpose, criteria: team.criteria },
+      specialists: team.memberProfiles,
+    }),
+    deps.writer.createTask({
+      projectId: project, teamId: team.id, title, sessionId: input.sessionId, recordingKey: deps.recordingKey,
+    }),
+  ]);
   const run = await deps.writer.startRun(
     task.id,
     brief,
@@ -101,7 +104,7 @@ export async function runHandoff(deps: HandoffDeps, input: HandoffInput): Promis
     runId: run.id,
     taskId: task.id,
     teamName: team.name,
-    summary: input.summary,
+    summary: input.summary ?? brief.objective,
     members: workingMembers(team, team.memberProfiles),
   };
 }
