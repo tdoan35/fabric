@@ -171,7 +171,7 @@ export function Inspector({ member, run, view, t, snapshots, onClose }: {
                     <span><span className="font-medium">Blocked at {fmtClock(d.t)}:</span> <span className="font-mono">{d.tool}</span> → {d.target} ({d.reason})</span>
                   </p>
                 ))}
-                <p className="text-[11px] text-muted-foreground">Policies are enforced by the runtime (Executor and the Sprite's egress list), not by this view.</p>
+                <p className="text-[11px] text-muted-foreground">Policies are enforced by the runtime (the tool layer and the Sprite’s egress list), not by this view.</p>
               </div>
             )}
           </TabsContent>

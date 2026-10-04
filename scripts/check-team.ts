@@ -240,6 +240,12 @@ ok(afterT.length === tail1.length + 1 && merged3.at(-1)!.type === "run.finished"
   "the only event added after the tail is finalize's run.finished");
 const report = (await (await fetch(`${base}/api/reports/${fin.reportId}`)).json());
 ok(!!report.id && !!report.summary, `the report is served (${report.title ?? fin.reportId})`);
+const thread = (await (await fetch(`${base}/api/sessions/t1/messages`)).json()) as { messages: { content: Part[] }[] };
+const results = thread.messages.at(-1)?.content.find((p) => p.toolName === "post_results");
+ok(!!results && (results.args as { reportId?: string }).reportId === fin.reportId, "Dana's results message closes the thread, pointing at the report (CHAT-14)");
+const taskAfter = (await (await fetch(`${base}/api/tasks/${taskId}`)).json()) as { runIds: string[] };
+const loopAfter = await runGet(taskAfter.runIds.at(-1)!);
+ok(loopAfter.status === "accepted", `the task's loop is accepted (${loopAfter.status})`);
 timings.push(["handoff turn (fixture, incl. startTeamRun)", `${((handoffDone - tHandoff0) / 1000).toFixed(1)}s`]);
 
 // ---- the toy/bounce/block runs share one runner ----

@@ -21,7 +21,12 @@
     "export-recording": "tsx scripts/export-recording.ts",
     "check:data": "node scripts/check-data.mjs",
     "check:tools": "tsx scripts/check-tools.ts",
-    "check:team": "tsx scripts/check-team.ts"
+    "check:team": "tsx scripts/check-team.ts",
+    "demo:reset": "bash scripts/demo.sh reset",
+    "demo:server": "bash scripts/demo.sh server",
+    "demo:web": "bash scripts/demo.sh web",
+    "demo:electron": "bash scripts/demo.sh electron",
+    "demo:offline": "bash scripts/demo.sh offline"
   },
   "devDependencies": {
     "@types/node": "^20",

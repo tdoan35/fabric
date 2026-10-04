@@ -651,6 +651,8 @@ One agent at a time. The integrator writes the agent's prompt, the owner runs it
 | 8 | LAB (`seq/lab`) | LAB 1–4 | High | S-LAB, **L3** | Sun 11:00 |
 | 9 | OPS | OPS 2–4 (integrator) | — | smoke, runbook | Sun 12:00 |
 
+**Progress (Sun Oct 4, 09:30):** steps 1–7 are merged (plus the DANA latency follow-up and the integrator's splice-seam, event-writer and live-lane fixes), so **L2 is reached**: real chat → real live start on Spark with Exa and the Sprites → splice into the recording → finalize → Dana's results message. **LAB is deferred**: the demo uses the illustrative bundle (D9). OPS steps 2–4 are done by the integrator: `npm run smoke`, `npm run demo:*` and `RUNBOOK.md`.
+
 LAB steps 1–2 touch only `lab/` and the Sprites, so they are the one step that can run alongside the others if the owner wants the experiment de-risked early.
 
 ### 7.1 Per-agent setup
