@@ -36,11 +36,17 @@ describe("ngram-135m bundle", () => {
     expect(bundle.snapshots.map((s) => s.idHint)).toEqual(snapshots135.map((s) => s.id));
   });
 
-  it("the report is the fixture's, labelled illustrative, ids stripped", () => {
-    const { idHint, ...body } = bundle.report;
+  it("the report is the fixture's plus the Setup rows, labelled illustrative, ids stripped", () => {
+    const { idHint, setup, ...body } = bundle.report;
     const { id: fixtureId, runId: _fixtureRunId, ...fixtureBody } = reportFixture;
     expect(idHint).toBe(fixtureId);
     expect(body).toEqual({ ...fixtureBody, kind: "illustrative" });
+    expect(setup).toEqual([
+      { label: "Model", value: "135M open model" },
+      { label: "Method", value: "Inference-time n-gram lookup" },
+      { label: "Corpus", value: "Cached corpus" },
+      { label: "Split", value: "Held-out; overlap removed after review" },
+    ]);
   });
 
   it("every artifact.created event has a bundle artifact", () => {

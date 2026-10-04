@@ -58,19 +58,26 @@ export async function importRecording(db: Db, bundle: RecordingBundle, opts: { t
               ${s.totalTokens}, ${JSON.stringify(s.tools)}::jsonb, ${s.lastDenied ?? null}, ${s.notLoaded}, ${s.note}, ${s.sandbox ?? null})`);
   }
   let aord = 0;
+  const artifactIds = new Map<string, string>();
   for (const a of bundle.artifacts) {
     aord += 1;
     const artifactId = `art-${runId}-${aord}`;
+    artifactIds.set(a.name, artifactId);
     await db.db.execute(sql`
       insert into artifacts (id, run_id, name, by, ord, content_type, content)
       values (${artifactId}, ${runId}, ${a.name}, ${a.by}, ${aord}, ${a.contentType}, ${a.content})`);
   }
   const { idHint: _idHint, ...reportBody } = bundle.report;
+  // The stored report carries the artifact ids, so /api/reports serves links straight from data.
+  const reportArtifacts = reportBody.artifacts.map((a) => {
+    const id = artifactIds.get(a.name);
+    return id ? { ...a, id } : a;
+  });
   await db.db.execute(sql`
     insert into reports (id, run_id, title, intro, summary, results, caveats, provenance, made_by, artifacts, emailed, setup, kind)
     values (${reportId}, ${runId}, ${reportBody.title}, ${reportBody.intro}, ${reportBody.summary}, ${JSON.stringify(reportBody.results)}::jsonb,
             ${JSON.stringify(reportBody.caveats)}::jsonb, ${JSON.stringify(reportBody.provenance)}::jsonb, ${JSON.stringify(reportBody.madeBy)}::jsonb,
-            ${JSON.stringify(reportBody.artifacts)}::jsonb, ${reportBody.emailed}, ${reportBody.setup ? JSON.stringify(reportBody.setup) : null}::jsonb, ${reportBody.kind ?? null})`);
+            ${JSON.stringify(reportArtifacts)}::jsonb, ${reportBody.emailed}, ${reportBody.setup ? JSON.stringify(reportBody.setup) : null}::jsonb, ${reportBody.kind ?? null})`);
   return { runId, reportId };
 }
 

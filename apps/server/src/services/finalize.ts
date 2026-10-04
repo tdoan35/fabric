@@ -85,7 +85,11 @@ export async function finalizeRun(runId: string): Promise<{ reportId: string } |
       const source = rec?.report_id ? await readReport(db, rec.report_id) : undefined;
       if (source) {
         reportId = `report-${runId}`;
-        await insertReport(db, { ...source, id: reportId, runId, emailed: false });
+        // Point the copied report's artifacts at the recording's artifact rows (the bytes live there).
+        const rows = await db.db.execute(sql`select id, name from artifacts where run_id = ${run.spliced_from_run_id} order by ord`);
+        const ids = new Map((rows.rows as { id: string; name: string }[]).map((r) => [r.name, r.id]));
+        const artifacts = source.artifacts.map((a) => ({ ...a, id: a.id ?? ids.get(a.name) }));
+        await insertReport(db, { ...source, artifacts, id: reportId, runId, emailed: false });
       }
     }
     if (!reportId) {
