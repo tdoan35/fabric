@@ -69,7 +69,11 @@ function templateFor(memberId: string, pool: PersonaPoolEntry[]): StudioProfile 
 
 /** The team an approved team card creates: the fixture definition when it matches, else the payload's. */
 export function resolveTeam(payload: TeamProposal, pool: PersonaPoolEntry[]): ResolvedTeam {
-  const definition = fixtureTeam(payload.name) ?? teamFromProposal(payload);
+  const full = fixtureTeam(payload.name) ?? teamFromProposal(payload);
+  // Only what this card authorizes: its roster, plus members that already exist. A persona still
+  // in the pool (Sana, proposed separately) joins when HER card is approved (SEED-1).
+  const rosterIds = new Set(payload.roster.map((r) => r.agentId || slugId(r.name)));
+  const definition: StudioTeam = { ...full, members: full.members.filter((m) => rosterIds.has(m.agentId)) };
   const templates: Partial<Record<string, StudioProfile>> = {};
   for (const m of definition.members) {
     const t = templateFor(m.agentId, pool);

@@ -126,13 +126,18 @@ const handoffSchema = z.object({
 export function createAssistant(deps: AssistantDeps): Assistant {
   const { db, publish } = deps;
   const recordingKey = deps.recordingKey ?? RECORDING_KEY;
-  const inboxFor = deps.createInbox ?? ((agentId: string) => createInbox(agentId).catch((err) => {
-    if (err instanceof NotImplementedError) {
-      console.log(`[assistant] TOOLS createInbox not implemented yet; skipping inbox for ${agentId}`);
-      return "";
+  const inboxFor = deps.createInbox ?? (async (agentId: string) => {
+    // createInbox throws synchronously while TOOLS is a stub (§7.0): catch it and carry on.
+    try {
+      return await createInbox(agentId);
+    } catch (err) {
+      if (err instanceof NotImplementedError) {
+        console.log(`[assistant] TOOLS createInbox not implemented yet; skipping inbox for ${agentId}`);
+        return "";
+      }
+      throw err;
     }
-    throw err;
-  }));
+  });
 
   const handoffDeps = (brief: HandoffDeps["brief"]): HandoffDeps => ({
     db, writer: deps.writer, team: deps.team, publish, recordingKey, brief,

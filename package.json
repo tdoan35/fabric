@@ -12,6 +12,7 @@
     "dev:server": "npm run dev -w @fabric/server",
     "build": "npm run build -w web",
     "typecheck": "npm run typecheck --workspaces --if-present",
+    "check:chat": "tsx scripts/check-chat.ts",
     "test": "npm run test --workspaces --if-present",
     "lint": "npm run lint -w web",
     "seed": "npm run seed -w @fabric/db --",
