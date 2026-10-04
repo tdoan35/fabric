@@ -325,7 +325,7 @@ These follow ARCH §12's numbering, plus S0 and S-LAB. Each one ends with pass o
 | # | Spike | Owner | Pass | If it fails |
 |---|---|---|---|---|
 | S0 | Neon Postgres, Drizzle migrations, branches | DATA | Migrate and seed a fresh branch in under a minute | — (must pass) |
-| S1 | Model providers from Mastra (§2.1 item 5) | DANA | **Spark** (checked by the integrator, Oct 3): a forced tool call takes 3.6 s; streaming gives a first chunk in 0.4 s, delivers the tool call in pieces and reports `usage`. With **thinking off** (`chat_template_kwargs: {enable_thinking: false}`), routing is correct in 4.8 s; with thinking on, 55 s. So Dana runs with thinking off, and specialists may keep it on. The lane allows only 8 requests at once. Still for DANA to verify: the same through Mastra's agent loop. **OpenRouter:** key valid, every mock model listed with tools, `usage.cost` returned. **Neon Gateway:** needs a paid plan or the hackathon credits; check `GET /v1/models` at the venue and request any missing model | Spark down → `LLM_PROVIDER=openrouter`. Gateway not enabled at the venue → stay on Spark (reachable over the tailnet) or OpenRouter, and drop the Gateway claim from the deck |
+| S1 | Model providers from Mastra (§2.1 item 5) | DANA | **Spark** (checked by the integrator, Oct 3): a forced tool call takes 3.6 s; streaming gives a first chunk in 0.4 s, delivers the tool call in pieces and reports `usage`. Routing is correct at every thinking level: off (`enable_thinking: false`) 4.8 s, `medium` 5.9 s, `low` 14.3 s, default `xhigh` 55 s. So Dana runs with thinking off and specialists start at `medium` (thinking controls are in DANA step 1). The lane allows only 8 requests at once. Still for DANA to verify: the same through Mastra's agent loop. **OpenRouter:** key valid, every mock model listed with tools, `usage.cost` returned. **Neon Gateway:** needs a paid plan or the hackathon credits; check `GET /v1/models` at the venue and request any missing model | Spark down → `LLM_PROVIDER=openrouter`. Gateway not enabled at the venue → stay on Spark (reachable over the tailnet) or OpenRouter, and drop the Gateway claim from the deck |
 | S2 | Sprites from Node | TOOLS | Create or attach a Sprite, stream `exec` output, use its filesystem, and have the egress policy block a fetch. Cold start measured | Sprite CLI over `child_process` |
 | S3 | Mastra workflow | TEAM | Parallel steps, a rework loop, cancel, and `.stream()` events mapped onto run events | Plain async orchestration (`Promise.all` plus a loop), which is fine for the demo |
 | S4 | Chat stream ↔ assistant-ui | UI-CHAT with DANA | The NDJSON adapter renders the cards, and a human result round-trip creates rows | Scripted Dana for the card turns |
@@ -390,7 +390,13 @@ Each section can be pasted into an agent as its brief.
 **Spikes:** S1, plus the server half of S4.
 
 1. **`llm`:** one model factory over three providers, chosen by `LLM_PROVIDER`. Each agent row keeps its intended model (Sonnet 5.5, Haiku 4.5, Opus 5.5), and `model(id)` maps it per provider:
-   - **`spark`:** every agent gets `SPARK_MODEL`. Pass `enable_thinking: false` for Dana; specialists may keep thinking on.
+   - **`spark`:** every agent gets `SPARK_MODEL`. Thinking controls on this lane (probed Oct 3):
+     - **Off:** only with `chat_template_kwargs: {enable_thinking: false}`. Zero reasoning tokens.
+     - **Levels:** top-level `reasoning_effort` set to `low` or `medium`, where medium is the model's own default instruction. `high` and `max` alias to `xhigh`, the template's default, which is verbose and slow.
+     - **Never send `"none"`.** Inside `chat_template_kwargs` it returns HTTP 400. At the top level vLLM happens to accept it, but that's undocumented.
+     - `preserve_thinking` (on by default) only re-injects reasoning from earlier user turns, so leave it as it is.
+     - **Starting defaults** (tune them in S1): Dana off; specialists `medium`; no `xhigh` anywhere on the live-start path. Single samples on the routing prompt: off 4.8 s, medium 5.9 s, low 14.3 s, `xhigh` 55 s.
+     - Phase 2: the composer's effort picker (Low / Medium / High / Extra high) maps onto `low` / `medium` / `xhigh` (CHAT-8).
    - **`openrouter`:** `anthropic/claude-sonnet-5.5` and so on.
    - **`neon`:** the Gateway catalog ids (read `/v1/models`).
 
