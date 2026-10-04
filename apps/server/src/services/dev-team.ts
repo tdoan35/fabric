@@ -32,7 +32,7 @@ const TOY_CRITERIA = [
   "The report states how the result was computed",
 ];
 
-const STAYED = ["Your chat with Dana", "Dana's memory of you", "Your other threads and projects"];
+export const STAYED = ["Your chat with Dana", "Dana's memory of you", "Your other threads and projects"];
 
 /** Same world as the dev sim and the TOOLS route: the research team exists before the run. */
 async function ensureTeam(db: Db): Promise<void> {
@@ -47,6 +47,49 @@ async function ensureTeam(db: Db): Promise<void> {
   });
 }
 
+/** The shared team-run starter (SCH generalization): the deterministic brief, the task (carrying
+ *  the routine's thread when one is given), the run, and the handoff to the runtime. The dev route
+ *  calls it with the toy objective; schedule-fire calls it with the routine's prompt. */
+export interface TeamJob {
+  teamId: string;
+  projectId: string;
+  /** The task card's title; routines suffix the date. */
+  title: string;
+  objective: string;
+  criteria: string[];
+  constraints?: string[];
+  stayed?: string[];
+  budget?: { costUsd: number; timeS: number; rework: number };
+  /** The routine's thread: Dana posts results there (finalizeRun reads it off the task). */
+  sessionId?: string;
+  /** Dev hooks (never on by default), passed through to the runtime. */
+  forceBounce?: boolean;
+  forceBlock?: boolean;
+}
+
+export async function startTeamJob(
+  writer: RunWriter, teamRuntime: TeamRuntime, job: TeamJob,
+  hooks: { onTaskCreated?: (taskId: string, runId: string) => void } = {},
+): Promise<{ taskId: string; runId: string }> {
+  const brief: Brief = {
+    objective: job.objective,
+    constraints: job.constraints ?? [],
+    criteria: job.criteria,
+    preferences: [],
+    stayed: job.stayed ?? [],
+    tokens: 0,
+  };
+  brief.tokens = countTokens(renderBrief(brief)).tokens;
+
+  const task = await writer.createTask({ projectId: job.projectId, teamId: job.teamId, title: job.title, sessionId: job.sessionId });
+  const run = await writer.startRun(task.id, brief, job.budget ?? { costUsd: 1, timeS: 1800, rework: 2 });
+  hooks.onTaskCreated?.(task.id, run.id);
+
+  // startTeamRun resolves once the run is underway; the workflow continues in the background.
+  await teamRuntime.startTeamRun(run.id, { forceBounce: job.forceBounce, forceBlock: job.forceBlock });
+  return { taskId: task.id, runId: run.id };
+}
+
 export async function startDevTeamRun(db: Db, writer: RunWriter, teamRuntime: TeamRuntime, options: DevTeamOptions = {}) {
   await ensureTeam(db);
   options.onRegistryChanged?.();
@@ -55,22 +98,19 @@ export async function startDevTeamRun(db: Db, writer: RunWriter, teamRuntime: Te
   if (!lead) throw new Error("dev team run needs the research team (seed the demo profile first)");
 
   const objective = options.objective ?? TOY_OBJECTIVE;
-  const brief: Brief = {
+  const { taskId, runId } = await startTeamJob(writer, teamRuntime, {
+    teamId: "research",
+    projectId: "engram",
+    title: `Team check · ${objective.slice(0, 48)}`,
     objective,
-    constraints: ["Real commands in the Sprites; no large installs", "Keep it small: minutes, not hours"],
     criteria: TOY_CRITERIA,
-    preferences: [],
+    constraints: ["Real commands in the Sprites; no large installs", "Keep it small: minutes, not hours"],
     stayed: [...STAYED],
-    tokens: 0,
-  };
-  brief.tokens = countTokens(renderBrief(brief)).tokens;
+    budget: { costUsd: 1, timeS: 1800, rework: options.forceBlock ? 1 : 2 },
+    ...(options.forceBounce ? { forceBounce: true } : {}),
+    ...(options.forceBlock ? { forceBlock: true } : {}),
+  }, { onTaskCreated: options.onTaskCreated });
 
-  const task = await writer.createTask({ projectId: "engram", teamId: "research", title: `Team check · ${objective.slice(0, 48)}` });
-  const run = await writer.startRun(task.id, brief, { costUsd: 1, timeS: 1800, rework: options.forceBlock ? 1 : 2 });
-  options.onTaskCreated?.(task.id, run.id);
-
-  // startTeamRun resolves once the run is underway; the workflow continues in the background.
-  await teamRuntime.startTeamRun(run.id, { forceBounce: options.forceBounce, forceBlock: options.forceBlock });
-  options.onDone?.(`dev team: run ${run.id} underway (task ${task.id})`);
-  return { taskId: task.id, runId: run.id };
+  options.onDone?.(`dev team: run ${runId} underway (task ${taskId})`);
+  return { taskId, runId };
 }

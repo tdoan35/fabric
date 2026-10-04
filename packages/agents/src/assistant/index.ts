@@ -447,6 +447,9 @@ export function createAssistant(deps: AssistantDeps): Assistant {
   };
 }
 
+// The schedules route creates the routine's thread before its first fire (SCH).
+export { ensureSession } from "./store";
+
 // ---- helpers ----
 
 const copy = (p: ChatToolCallPart): ChatToolCallPart => ({ ...p });
