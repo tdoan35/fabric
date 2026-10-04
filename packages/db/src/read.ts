@@ -9,6 +9,7 @@ import type {
 import type { Db } from "./db";
 import { agents, artifacts, contextSnapshots, organizations, orgHandoffs, orgSlots, personaPool, projects, reports, runEvents, runs, sessions, tasks, teams, teamMembers, weaveCalendar, weaveItems, weavePresence, weavePulse } from "./schema";
 import { rowToRun } from "./writer";
+import { spliceEvents } from "./splice";
 
 export interface RunRowLike {
   id: string; task_id: string | null; team_id: string; n: number | string;
@@ -29,24 +30,11 @@ export async function listStoredEvents(db: Db, runId: string): Promise<RunEvent[
   return rows.map(eventFromRow);
 }
 
-/** The merged log: live events up to splice_t, then the recording's events after it, re-stamped
- *  with the live run's id and continuing seqs; the recording's own run.finished is dropped in
- *  favour of the live finalize's, which always lands last. */
+/** The merged log of a spliced run (see spliceEvents); a run that wasn't spliced returns its own log. */
 export async function mergedEvents(db: Db, run: RunRowLike): Promise<RunEvent[]> {
   if (!run.spliced_from_run_id) return listStoredEvents(db, run.id);
-  const live = await listStoredEvents(db, run.id);
-  const spliceT = Number(run.splice_t ?? 0);
-  const rec = (await listStoredEvents(db, run.spliced_from_run_id))
-    .filter((e) => e.t > spliceT && e.type !== "run.finished")
-    .map((e) => ({ ...e, runId: run.id }));
-  // Second line of defence: only finalize's run.finished may follow the splice point; a late live
-  // emit that slipped past the RunClosedError guard never reaches the merged log.
-  const head = live.filter((e) => e.t <= spliceT);
-  const tail = live.filter((e) => e.t > spliceT && e.type === "run.finished");
-  // Re-stamp the whole log 1..N so seqs stay contiguous however t order and seq order interleaved.
-  return [head, rec, tail]
-    .flat()
-    .map((e, i) => ({ ...e, runId: run.id, seq: i + 1 }));
+  const [live, recording] = await Promise.all([listStoredEvents(db, run.id), listStoredEvents(db, run.spliced_from_run_id)]);
+  return spliceEvents(live, recording, Number(run.splice_t ?? 0), run.id);
 }
 
 export async function getRunRow(db: Db, runId: string): Promise<RunRowLike | undefined> {
