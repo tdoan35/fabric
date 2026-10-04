@@ -73,15 +73,15 @@ const RECORDING_KEY = "ngram-135m";
 
 /** Low, fixed: routing should be deterministic (WORK-PLAN DANA "use low temperature"). */
 const TEMPERATURE = 0.2;
-/** Tool-loop bound: disposition → maybe search → text+propose/handoff is 3; 6 is headroom. */
+/** Tool-loop bound: disposition → text + propose/handoff is 2; 6 is headroom. */
 const MAX_STEPS = 6;
 
 // ---- tool schemas: what the model fills; the server enriches before streaming ----
 
 const dispositionSchema = z.object({
   disposition: z.enum(["handle_directly", "delegate_agent", "delegate_team", "propose_team", "propose_specialist", "clarify"]),
-  reason: z.string().min(3),
-  considered: z.array(z.string()).optional(),
+  reason: z.string().min(3).describe("One short sentence"),
+  considered: z.array(z.string()).optional().describe("The dispositions you weighed"),
 });
 
 const searchSchema = z.object({
@@ -225,10 +225,12 @@ export function createAssistant(deps: AssistantDeps): Assistant {
 
         const tools: ToolSet = {
           record_disposition: tool({
-            description: "Record how this turn is routed: {disposition, reason, considered[]}. First call of every turn.",
+            description: "Record how this turn is routed. First call of every turn.",
             inputSchema: dispositionSchema,
             execute: (args) => recordDisposition(db, sessionId, args),
           }),
+          // Kept for registries that outgrow the prompt; not active by default (the compact registry
+          // is in the system prompt, and a lookup round trip costs a whole model step).
           search_registry: tool({
             description: "Internal lookup of your agents, teams and free personas. Never shown to Ty.",
             inputSchema: searchSchema,
@@ -275,7 +277,7 @@ export function createAssistant(deps: AssistantDeps): Assistant {
         };
 
         const m = deps.modelFor?.(dana ?? fallbackDana()) ?? model(dana?.agent.model ?? "", { thinking: "off", meter: { agentId: "dana", step: "chat" } });
-        const allowed = active ?? Object.keys(tools);
+        const allowed = active ?? DEFAULT_TOOLS;
         let handoffDone: Promise<HandoffPayload> | undefined;
         const attempt = async function* (control: AttemptControl): AsyncGenerator<ChatStreamLine> {
           let yielded = false;
@@ -287,13 +289,13 @@ export function createAssistant(deps: AssistantDeps): Assistant {
             tools,
             temperature: TEMPERATURE,
             abortSignal: turnAbort.signal,
-            ...(active ? { activeTools: active } : {}),
+            activeTools: allowed,
             stopWhen: stepCountIs(MAX_STEPS),
             // DANA 2: record_disposition is forced as the first call of every turn; later steps choose freely.
             // activeTools must be re-asserted every step: a step-level prepareStep return
             // overrides the top-level option.
             prepareStep: ({ stepNumber }) => ({
-              ...(active ? { activeTools: active } : {}),
+              activeTools: allowed,
               ...prepareDispositionFirstStep(stepNumber),
             }),
           });
@@ -427,19 +429,22 @@ export function createAssistant(deps: AssistantDeps): Assistant {
 
 const copy = (p: ChatToolCallPart): ChatToolCallPart => ({ ...p });
 
+/** Every turn's tools unless a post-approval step narrows them; search_registry stays off (see tools). */
+const DEFAULT_TOOLS = ["record_disposition", "propose_team", "propose_specialist", "handoff_to_team"];
+
 /**
  * The canonical post-approval steps (the demo script, D2/D3), as a tool guard rather than hope:
  * after a team approval the next card is the missing specialist; after the specialist approval the
- * turn hands off. Anything else in the thread keeps every tool.
+ * turn hands off. Anything else in the thread keeps the default tools.
  */
 function activeToolsFor(delta: ThreadDelta, proposals: { kind: "team" | "specialist" }[]): string[] | undefined {
   const last = delta.decisions[delta.decisions.length - 1];
   if (!last) return undefined;
   if (last.toolName === "propose_specialist" && last.decision === "approved") {
-    return ["record_disposition", "search_registry", "handoff_to_team"];
+    return ["record_disposition", "handoff_to_team"];
   }
   if (last.toolName === "propose_team" && last.decision === "approved" && !proposals.some((p) => p.kind === "specialist")) {
-    return ["record_disposition", "search_registry", "propose_specialist"];
+    return ["record_disposition", "propose_specialist"];
   }
   return undefined;
 }
