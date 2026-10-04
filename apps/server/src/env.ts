@@ -34,6 +34,9 @@ export const env = z.object({
   /** The name Mastra's openrouter/<model> and @openrouter/ai-sdk-provider read by default. */
   OPENROUTER_API_KEY: z.string().optional(),
   SPRITES_TOKEN: z.string().optional(),
+  /** Pre-created Sprites (8 CPU, 8 GiB, no GPU): Jonah's sandbox and Sana's separate one (ARCH §9). */
+  SPRITE_CODER: z.string().default("fabric-coder"),
+  SPRITE_VALIDATOR: z.string().default("fabric-validator"),
   EXA_API_KEY: z.string().optional(),
   AGENTMAIL_API_KEY: z.string().optional(),
   EXECUTOR_URL: z.string().optional(),
