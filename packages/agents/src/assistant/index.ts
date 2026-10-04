@@ -19,7 +19,9 @@ import { model } from "../llm";
 import { compileBrief } from "../context";
 import type { BriefInput } from "../context";
 import type { TeamRuntime } from "../team";
-import { buildSystemPrompt } from "./prompt";
+import { buildSystemPrompt, fallbackDana } from "./prompt";
+import { runScheduledTurn } from "./scheduled";
+import type { ScheduledInput } from "./scheduled";
 import { fixtureBrief, fixtureTurn } from "./fixture";
 import type { FixtureDeps } from "./fixture";
 import { runHandoff } from "./handoff";
@@ -43,6 +45,8 @@ export interface Assistant {
   history(sessionId: string): Promise<SessionMessages>;
   /** Called by finalizeRun: Dana's "I got the results" message (CHAT-14). */
   postResultsMessage(sessionId: string, p: ResultsPayload): Promise<{ messageId: string }>;
+  /** The scheduled turn (SCH): one read-only turn, posted into the routine's thread. */
+  runScheduled(i: ScheduledInput): Promise<{ messageId: string }>;
 }
 
 /** ChatRequest plus the server-side switches the route resolves (header, DANA_MODE). */
@@ -436,6 +440,10 @@ export function createAssistant(deps: AssistantDeps): Assistant {
       await touchSession(db, sessionId, "unread");
       return { messageId };
     },
+
+    async runScheduled(i) {
+      return runScheduledTurn({ db, publish, mode: deps.mode, modelFor: deps.modelFor, ...i });
+    },
   };
 }
 
@@ -476,11 +484,3 @@ function cardFor(toolName: string, input: unknown, world: World): Proposal | und
   return specialistCard(input as SpecialistChoice, world);
 }
 
-function fallbackDana(): StudioProfile {
-  // Only reached if the agents row is missing (unseeded branch); enough to build a prompt/model.
-  return {
-    agent: { id: "dana", name: "Dana", role: "Executive assistant", tone: "", summary: "", personality: "", traits: [], model: "", contextTokens: 0, memory: [], tools: [], greeting: "", placeholder: "" },
-    tagline: "",
-    workspace: { files: [{ name: "SOUL.md", body: "# SOUL.md\n\nYou are Dana, Ty's executive assistant.\n" }], skills: [], connectors: [], memories: [] },
-  };
-}
