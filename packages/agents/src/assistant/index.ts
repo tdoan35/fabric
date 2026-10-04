@@ -240,13 +240,14 @@ export function createAssistant(deps: AssistantDeps): Assistant {
             description: "Internal lookup of your agents, teams and free personas. Never shown to Ty.",
             inputSchema: searchSchema,
             execute: async ({ query }) => {
+              // ~8 rows: return the whole compact registry and flag what matched (ARCH §5).
               const r = await readRegistry(db);
               const q = query.toLowerCase();
               const hit = (s: string) => s.toLowerCase().includes(q);
               return {
-                agents: r.agents.filter((a) => hit(`${a.agent.name} ${a.agent.role} ${a.agent.summary}`)).map((a) => ({ id: a.agent.id, name: a.agent.name, role: a.agent.role, summary: a.agent.summary })),
-                teams: r.teams.filter((t) => hit(`${t.name} ${t.purpose}`)).map((t) => ({ id: t.id, name: t.name, purpose: t.purpose, members: t.members.map((m) => m.agentId) })),
-                personaPool: r.personaPool.filter((p) => hit(`${p.name} ${p.role}`)).map((p) => ({ id: p.id, name: p.name, role: p.role, avatar: p.avatar.still })),
+                agents: r.agents.map((a) => ({ id: a.agent.id, name: a.agent.name, role: a.agent.role, summary: a.agent.summary, match: hit(`${a.agent.name} ${a.agent.role} ${a.agent.summary}`) })),
+                teams: r.teams.map((t) => ({ id: t.id, name: t.name, purpose: t.purpose, members: t.members.map((m) => m.agentId), match: hit(`${t.name} ${t.purpose}`) })),
+                personaPool: r.personaPool.map((p) => ({ id: p.id, name: p.name, role: p.role, match: hit(`${p.name} ${p.role}`) })),
               };
             },
           }),
@@ -281,19 +282,27 @@ export function createAssistant(deps: AssistantDeps): Assistant {
           });
           const toolParts: ChatToolCallPart[] = [];
           let text = "";
-          let anchor = 0; // where the text part sits among the tool parts
+          let anchor = 0; // non-disposition tool parts that came before the text
           let dispositionSeen = false;
-          const snapshot = (): ChatStreamLine => ({
-            content: [
-              ...toolParts.slice(0, anchor).map(copy),
-              ...(text ? [{ type: "text" as const, text }] : []),
-              ...toolParts.slice(anchor).map(copy),
-            ],
-          });
+          // The disposition part is always rendered first (the contract shape, and what the mock
+          // yields), whatever order the model produced text and calls in. `anchor` counts the
+          // non-disposition tool parts that preceded the text, so later calls land after it.
+          const snapshot = (): ChatStreamLine => {
+            const disposition = toolParts.filter((p) => p.toolName === "record_disposition");
+            const rest = toolParts.filter((p) => p.toolName !== "record_disposition");
+            return {
+              content: [
+                ...disposition.map(copy),
+                ...rest.slice(0, anchor).map(copy),
+                ...(text ? [{ type: "text" as const, text }] : []),
+                ...rest.slice(anchor).map(copy),
+              ],
+            };
+          };
           for await (const part of stream.fullStream) {
             if (part.type === "error") throw part.error;
             if (part.type === "text-delta") {
-              if (!text) anchor = toolParts.length;
+              if (!text) anchor = toolParts.filter((p) => p.toolName !== "record_disposition").length;
               text += part.text;
             } else if (part.type === "tool-call") {
               if (part.toolName === "search_registry") continue; // internal: never streamed
