@@ -56,7 +56,7 @@ export function runtime(): Runtime {
       await finalizeRun(runId);
     },
   });
-  const team = lazyStep("TEAM", () => createTeamRuntime({ writer }));
+  const team = lazyStep("TEAM", () => createTeamRuntime({ writer, db, publish: (e) => hub.publishApp(e) }));
   // DANA can land before TEAM: hand her a stand-in that throws only if she starts a run.
   const notYetTeam: TeamRuntime = {
     async startTeamRun() { throw new NotImplementedError("TEAM", "startTeamRun"); },
