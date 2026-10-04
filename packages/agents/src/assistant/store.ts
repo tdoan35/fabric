@@ -51,13 +51,16 @@ export async function getSession(db: Db, id: string): Promise<SessionRow | undef
   return (rows.rows as unknown as SessionRow[])[0];
 }
 
-/** Creates the sessions row for an unknown id; the sidebar picks it up on registry.changed. */
+/**
+ * Creates the sessions row for an unknown id; the sidebar picks it up on registry.changed. A new
+ * thread sorts first (the registry orders sessions by `ord`), so it's at the top of the sidebar.
+ */
 export async function ensureSession(db: Db, id: string, firstMessage?: string): Promise<boolean> {
   const there = await getSession(db, id);
   if (there) return false;
   await db.db.transaction(async (tx) => {
     await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended('sessions', 0))`);
-    const next = await tx.execute(sql`select coalesce(max(ord), -1) + 1 as ord from sessions`);
+    const next = await tx.execute(sql`select coalesce(min(ord), 1) - 1 as ord from sessions`);
     const ord = Number((next.rows[0] as { ord: string | number }).ord);
     await tx.execute(sql`
       insert into sessions (id, ord, title, href, project_id, status, agent_id, messages, updated)
