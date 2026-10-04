@@ -1,6 +1,7 @@
 import {
-  AssistantRuntimeProvider, CompositeAttachmentAdapter, MessagePrimitive, SimpleImageAttachmentAdapter,
-  SimpleTextAttachmentAdapter, ThreadPrimitive, WebSpeechDictationAdapter, useAuiState, useLocalRuntime,
+  AssistantRuntimeProvider, CompositeAttachmentAdapter, ErrorPrimitive, MessagePrimitive, SimpleImageAttachmentAdapter,
+  SimpleTextAttachmentAdapter, ThreadPrimitive, WebSpeechDictationAdapter, useAui, useAuiState, useLocalRuntime,
+  type ThreadMessageLike,
 } from "@assistant-ui/react";
 import { AnimatePresence, motion } from "motion/react";
 import { useEffect, useMemo, useState, type Dispatch, type SetStateAction } from "react";
@@ -12,6 +13,12 @@ import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
 import { SidebarTrigger } from "@/components/ui/sidebar";
 import { mockAssistant, mockContext } from "@/lib/mock/chat";
+import { httpMode } from "@/lib/api";
+import { httpAssistant } from "@/lib/chat/http-assistant";
+import { fetchHistory, toRuntimePart } from "@/lib/chat/session";
+import { onSessionMessage } from "@/lib/chat/events";
+import { isFixtureHotkey, toggleFixture } from "@/lib/chat/fixture";
+import { demoMode } from "@/lib/chat/demo";
 import { suggestionPool, type Suggestion } from "@/lib/mock/suggestions";
 import { AgentHero, AgentProfilePanel, FLY, IncognitoInfo, veil, scrollArea, type SideTab, Portrait, nameLayoutId, portraitLayoutId } from "./assistant-hero";
 import { chatAgents as registryChatAgents, studioTeams as registryTeams, useRegistry } from "@/lib/registry";
@@ -19,7 +26,7 @@ import type { ChatAgent, StudioTeam } from "@fabric/contracts";
 import { TeamHero, TeamProfile, teamLead } from "./team-hero";
 import { Composer } from "./composer";
 import { ComposerBar, ConnectorPicker, ContextMeter, ProjectPicker, RunTargetPicker, SessionSettingsProvider } from "./composer-bar";
-import { DispositionChip, HandoffCard, SpecialistProposalCard, TeamProposalCard } from "./cards";
+import { DispositionChip, HandoffCard, ResultsCard, SpecialistProposalCard, TeamProposalCard } from "./cards";
 
 const tools = {
   by_name: {
@@ -27,6 +34,7 @@ const tools = {
     propose_team: TeamProposalCard,
     propose_specialist: SpecialistProposalCard,
     handoff_to_team: HandoffCard,
+    post_results: ResultsCard,
   },
 } as never;
 
@@ -42,6 +50,11 @@ function AssistantMessage() {
   return (
     <MessagePrimitive.Root className="py-2 text-sm leading-relaxed">
       <MessagePrimitive.Parts components={{ tools }} />
+      <MessagePrimitive.Error>
+        <ErrorPrimitive.Root className="mt-1 rounded-lg border border-warn/30 bg-warn-soft px-3 py-2 text-xs text-warn" role="alert">
+          <ErrorPrimitive.Message />
+        </ErrorPrimitive.Root>
+      </MessagePrimitive.Error>
     </MessagePrimitive.Root>
   );
 }
@@ -170,9 +183,11 @@ function PageActions({ started, incognito, onIncognito, panelOpen, onPanel }: {
 }) {
   return (
     <div className="absolute right-4 top-4 z-20 flex items-center gap-1">
-      <IconTip label="Start a group chat">
-        <Button variant="ghost" size="icon" className="size-8" aria-label="Start a group chat"><Plus /></Button>
-      </IconTip>
+      {!demoMode && (
+        <IconTip label="Start a group chat">
+          <Button variant="ghost" size="icon" className="size-8" aria-label="Start a group chat"><Plus /></Button>
+        </IconTip>
+      )}
       <AnimatePresence mode="popLayout" initial={false}>
         {started ? (
           <motion.div key="panel" {...swap}>
@@ -244,29 +259,73 @@ function SessionPanel() {
         <div className={row}><span className="text-muted-foreground">Connectors</span><ConnectorPicker className="-mr-2" /></div>
         <div className={row}><span className="text-muted-foreground">Runs on</span><RunTargetPicker withLabel className="-mr-2" /></div>
       </section>
-      <section>
-        <h3 className="mb-2 text-xs font-semibold uppercase text-muted-foreground">Context</h3>
-        <ContextMeter className="-ml-3" />
-      </section>
+      {!demoMode && (
+        <section>
+          <h3 className="mb-2 text-xs font-semibold uppercase text-muted-foreground">Context</h3>
+          <ContextMeter className="-ml-3" />
+        </section>
+      )}
     </div>
   );
 }
 
-export function AssistantThread({ agentIndex, onAgentChange, onBackToDana }: {
+/**
+ * One thread: its runtime talks to Dana on the server in http mode (scripted Dana in mock mode), and
+ * starts from the thread's stored history. Mount it keyed by sessionId (routes/home.tsx).
+ */
+export function AssistantThread({ sessionId, initialMessages, agentIndex, onAgentChange, onBackToDana }: {
+  sessionId: string; initialMessages: readonly ThreadMessageLike[];
   agentIndex: number; onAgentChange: Dispatch<SetStateAction<number>>; onBackToDana: () => void;
 }) {
   const adapters = useMemo(() => ({
     attachments: new CompositeAttachmentAdapter([new SimpleImageAttachmentAdapter(), new SimpleTextAttachmentAdapter()]),
     dictation: WebSpeechDictationAdapter.isSupported() ? new WebSpeechDictationAdapter() : undefined,
   }), []);
-  const runtime = useLocalRuntime(mockAssistant, { adapters, unstable_humanToolNames: ["propose_team", "propose_specialist"] });
+  const chatModel = useMemo(() => (httpMode ? httpAssistant(sessionId) : mockAssistant), [sessionId]);
+  const runtime = useLocalRuntime(chatModel, { adapters, initialMessages, unstable_humanToolNames: ["propose_team", "propose_specialist"] });
   return (
     <AssistantRuntimeProvider runtime={runtime}>
       <SessionSettingsProvider>
-        <ThreadBody agentIndex={agentIndex} onAgentChange={onAgentChange} onBackToDana={onBackToDana} />
+        <ThreadBody sessionId={sessionId} agentIndex={agentIndex} onAgentChange={onAgentChange} onBackToDana={onBackToDana} />
       </SessionSettingsProvider>
     </AssistantRuntimeProvider>
   );
+}
+
+/**
+ * Dana's results message (CHAT-14) arrives while the thread is open: on `session.message` for this
+ * session, refetch the history and append that message, unless the thread already shows it.
+ */
+function useLiveResults(sessionId: string) {
+  const aui = useAui();
+  useEffect(() => {
+    if (!httpMode) return;
+    return onSessionMessage((e) => {
+      if (e.sessionId !== sessionId) return;
+      void fetchHistory(sessionId).then((history) => {
+        const message = history.find((m) => m.id === e.messageId);
+        if (!message || message.role !== "assistant") return;
+        const thread = aui.thread().getState();
+        const shown = new Set(thread.messages.flatMap((m) => [m.id, ...m.content.flatMap((p) => (p.type === "tool-call" ? [p.toolCallId] : []))]));
+        if (shown.has(message.id) || message.content.some((p) => p.type === "tool-call" && shown.has(p.toolCallId))) return;
+        void aui.thread().append({ role: "assistant", content: message.content.map(toRuntimePart) as never, startRun: false });
+      }).catch((err) => console.warn("[chat] results message refresh failed", err));
+    });
+  }, [aui, sessionId]);
+}
+
+/** Ctrl+Shift+F arms scripted Dana for the next turn (RUN-12); http mode only — mock mode is all scripted. */
+function useFixtureHotkey() {
+  useEffect(() => {
+    if (!httpMode) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (!isFixtureHotkey(e)) return;
+      e.preventDefault();
+      toggleFixture();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
 }
 
 /**
@@ -274,9 +333,11 @@ export function AssistantThread({ agentIndex, onAgentChange, onBackToDana }: {
  * the portrait flies up into the top bar, the composer drops to the bottom, the tray and suggestions
  * hide, and the context meter fades into the composer toolbar.
  */
-function ThreadBody({ agentIndex, onAgentChange, onBackToDana }: {
-  agentIndex: number; onAgentChange: Dispatch<SetStateAction<number>>; onBackToDana: () => void;
+function ThreadBody({ sessionId, agentIndex, onAgentChange, onBackToDana }: {
+  sessionId: string; agentIndex: number; onAgentChange: Dispatch<SetStateAction<number>>; onBackToDana: () => void;
 }) {
+  useLiveResults(sessionId);
+  useFixtureHotkey();
   const started = useAuiState((st) => !st.thread.isEmpty);
   const [incognito, setIncognito] = useState(false);
   useRegistry();

@@ -21,6 +21,7 @@ import { useNeedsYouCount } from "@/lib/weave-store";
 import { Portrait } from "@/components/chat/assistant-hero";
 import { teamLead } from "@/components/chat/team-hero";
 import type { ChatAgent } from "@/lib/mock/assistant";
+import { sessionHref } from "@/lib/chat/session";
 import { TabsProvider } from "./tabs";
 import { TitleBar } from "./title-bar";
 
@@ -211,7 +212,7 @@ function SessionRow({ session, pinned, onPin, onRemove, onOpen }: {
   return (
     <SidebarMenuItem className="group/session">
       <SidebarMenuButton asChild className={cn("h-auto gap-2.5 py-1.5 group-hover/session:pr-14 data-[menu-open=true]:pr-14", pinned && "pr-7")} data-menu-open={menuOpen}>
-        <Link to={session.href} onClick={onOpen} aria-label={`${session.title}. ${sub.text}`}>
+        <Link to={sessionHref(session)} onClick={onOpen} aria-label={`${session.title}. ${sub.text}`}>
           <ThreadAvatar agent={agent} status={session.status} />
           <span className="min-w-0 flex-1">
             <span className="flex items-baseline gap-2">
@@ -271,7 +272,7 @@ function ProjectFolder({ project }: { project: Project }) {
           <SidebarMenuSub>
             {items.map((x) => (
               <SidebarMenuSubItem key={x.id}>
-                <SidebarMenuSubButton asChild><Link to={x.href}><span>{x.title}</span></Link></SidebarMenuSubButton>
+                <SidebarMenuSubButton asChild><Link to={sessionHref(x)}><span>{x.title}</span></Link></SidebarMenuSubButton>
               </SidebarMenuSubItem>
             ))}
           </SidebarMenuSub>
