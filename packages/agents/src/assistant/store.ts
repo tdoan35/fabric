@@ -8,6 +8,7 @@ import type {
 } from "@fabric/contracts";
 import { slugId } from "@fabric/db";
 import type { Db } from "@fabric/db";
+import { transitionOnReproposal } from "./transitions";
 
 export interface SessionRow {
   id: string;
@@ -146,14 +147,19 @@ export async function storeProposal(
 ): Promise<{ proposalId: string; supersedes?: string; payload: Proposal }> {
   return db.db.transaction(async (tx) => {
     await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended('proposals', 0))`);
-    // CARD-4: the pending row this one replaces, if any.
+    // CARD-4: the pending rows this one replaces (the newest gives `supersedes`).
     const pending = await tx.execute(sql`
-      select id, tool_call_id from proposals
+      select id, kind, status, tool_call_id from proposals
       where session_id = ${input.sessionId} and kind = ${input.kind} and status = 'pending'
-      order by created_at desc limit 1`);
-    const old = (pending.rows as { id: string; tool_call_id: string | null }[])[0];
-    const supersedes = old?.tool_call_id ?? undefined;
-    if (old) await tx.execute(sql`update proposals set status = 'superseded' where id = ${old.id}`);
+      order by created_at asc`);
+    const transition = transitionOnReproposal(
+      (pending.rows as { id: string; kind: string; status: string; tool_call_id: string | null }[]).map((r) => ({
+        id: r.id, kind: r.kind as "team" | "specialist", status: r.status as "pending", toolCallId: r.tool_call_id,
+      })),
+      input.kind,
+    );
+    const supersedes = transition.supersedes;
+    for (const id of transition.supersededIds) await tx.execute(sql`update proposals set status = 'superseded' where id = ${id}`);
     const next = await tx.execute(sql`select count(*) + 1 as n from proposals`);
     const proposalId = `prop-${Number((next.rows[0] as { n: string }).n)}`;
     const payload = { ...input.payload, proposalId, ...(supersedes ? { supersedes } : {}) } as Proposal;

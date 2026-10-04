@@ -32,6 +32,8 @@ import {
 } from "./store";
 import type { SessionRow, StoredProposal } from "./store";
 import { applyApproval } from "./teams";
+import { prepareDispositionFirstStep, withForcedDisposition } from "./stream";
+import { statusAfterDecision } from "./transitions";
 import { diffThread, parseIncoming, toModelMessages } from "./thread";
 import type { DecisionDelta } from "./thread";
 
@@ -181,15 +183,16 @@ export function createAssistant(deps: AssistantDeps): Assistant {
         const row = pendingFor(await listProposals(db, sessionId), d.toolCallId);
         if (!row) return; // we never stored this call: not ours to decide
         await setToolResult(db, message.id, d.toolCallId, { decision: d.decision });
-        if (d.decision === "approved") {
-          await setProposalStatus(db, row.id, "approved");
+        const next = statusAfterDecision(row, d.decision);
+        if (next === "approved") {
+          await setProposalStatus(db, row.id, next);
           const pool = await listPersonaPool(db);
           await applyApproval(db, { row, pool, onInbox: (agentId) => void inboxFor(agentId) });
           publish({ type: "registry.changed" });
-        } else if (d.decision === "declined") {
-          await setProposalStatus(db, row.id, "declined");
+        } else if (next === "declined") {
+          await setProposalStatus(db, row.id, next);
         }
-        // discuss: stays pending while Dana talks it through (CARD-4)
+        // discuss (next === "pending"): stays pending while Dana talks it through (CARD-4)
       }
 
       function fixtureLines(sessionId: string, session: SessionRow | undefined, delta: ReturnType<typeof diffThread>) {
@@ -269,7 +272,7 @@ export function createAssistant(deps: AssistantDeps): Assistant {
             temperature: TEMPERATURE,
             stopWhen: stepCountIs(MAX_STEPS),
             // DANA 2: record_disposition is forced as the first call of every turn; later steps choose freely.
-            prepareStep: ({ stepNumber }) => (stepNumber === 0 ? { toolChoice: { type: "tool", toolName: "record_disposition" } } : {}),
+            prepareStep: ({ stepNumber }) => prepareDispositionFirstStep(stepNumber),
           });
           const toolParts: ChatToolCallPart[] = [];
           let text = "";
@@ -320,14 +323,8 @@ export function createAssistant(deps: AssistantDeps): Assistant {
           }
         };
 
-        let lines: ChatStreamLine[] = [];
-        for (let tries = 0; tries < 2; tries++) {
-          lines = [];
-          for await (const line of attempt()) lines.push(line);
-          if (lines.length) break;
-        }
-        if (!lines.length) console.warn(`[assistant] turn for ${sessionId} produced no record_disposition call even after a retry`);
-        yield* lines;
+        yield* withForcedDisposition(attempt, () =>
+          console.warn(`[assistant] no record_disposition in the first attempt for ${sessionId}; retrying the turn`));
       }
     },
 
