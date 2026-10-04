@@ -7,6 +7,7 @@ import type { Assistant } from "@fabric/agents/assistant";
 import type { TeamRuntime } from "@fabric/agents/team";
 import { createAssistant } from "@fabric/agents/assistant";
 import { createTeamRuntime } from "@fabric/agents/team";
+import { createInbox as toolsCreateInbox } from "@fabric/integrations";
 import { createDb, createRunWriterWith } from "@fabric/db";
 import type { Db, RunWriter } from "@fabric/db";
 import { env } from "../env";
@@ -73,6 +74,11 @@ export function runtime(): Runtime {
         publish: (e) => hub.publishApp(e),
         mode: env.DANA_MODE === "fixture" ? "fixture" : "live",
         recordingKey: env.DEMO_RECORDING_KEY,
+        // CARD-3/S5: Sana's inbox on specialist approval — only when the flag is on, so dev runs
+        // never spend one of the account's three inboxes or any of its 100 daily sends.
+        ...(env.FEATURE_AGENTMAIL === "on" && env.AGENTMAIL_API_KEY
+          ? { createInbox: (agentId: string) => toolsCreateInbox(agentId, { db, publish: (e) => hub.publishApp(e) }) }
+          : { createInbox: async () => "" }),
       })),
   };
   return instance;

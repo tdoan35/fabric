@@ -270,7 +270,7 @@ export const sana = specialist({
   skills: [{ name: "held-out-check", description: "Re-runs results on unseen data." }, { name: "stat-sanity", description: "Variance, seeds and confidence intervals." }],
   connectors: [
     { name: "Sprites", note: "Separate sandbox from the Coder", status: "connected" },
-    { name: "AgentMail", note: "sana@fabric.mail", status: "connected" },
+    { name: "AgentMail", note: "", status: "available" },
   ],
   memories: [],
 });
@@ -318,7 +318,7 @@ export const maya = specialist({
 });
 
 export const myProfiles: StudioProfile[] = [
-  { agent: dana, tagline: "Your single point of contact", workspace: danaWorkspace },
+  { agent: dana, tagline: "Your single point of contact", workspace: danaWorkspace, inbox: "dana@fabric.mail" },
   { agent: jonah, tagline: "Writes and runs code in a sandbox", workspace: jonahWorkspace },
   { agent: megan, tagline: "Finds what's already known, with sources", workspace: meganWorkspace },
   { agent: carlos, tagline: "Decides whether the evidence holds up", workspace: carlosWorkspace },

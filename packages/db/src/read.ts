@@ -118,6 +118,10 @@ const profileFromRow = (r: typeof agents.$inferSelect): StudioProfile => ({
   },
   tagline: r.tagline, workspace: r.workspace, origin: r.origin ?? undefined,
   author: r.author ?? undefined, installs: r.installs ?? undefined,
+  // CARD-3: the AgentMail connector's address is the profile's inbox (no separate column).
+  ...(r.workspace.connectors.find((c) => c.name === "AgentMail" && c.status === "connected" && c.note)
+    ? { inbox: r.workspace.connectors.find((c) => c.name === "AgentMail")!.note }
+    : {}),
 });
 
 const teamFromRow = (r: typeof teams.$inferSelect, members: (typeof teamMembers.$inferSelect)[]): StudioTeam => ({
