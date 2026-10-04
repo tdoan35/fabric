@@ -150,9 +150,10 @@ await insertAll(schema.weaveItems as PgTable, world.weave.items.map((item, i) =>
   id: item.id, ord: i, kind: item.kind, agentId: item.agentId, taskId: item.taskId ?? null,
   at: item.at, data: item,
 })));
-await db.db.insert(schema.weavePulse).values(world.weave.pulse.map((entry, i) => ({ id: entry.id, ord: i, data: entry })));
-await db.db.insert(schema.weavePresence).values(world.weave.presence.map((p, i) => ({ agentId: p.agentId, ord: i, data: p })));
-await db.db.insert(schema.weaveCalendar).values(world.weave.calendar.map((e, i) => ({ id: e.id, ord: i, data: e })));
+// Demo's pulse is empty by design (SEED-1); every weave list takes the guard.
+await insertAll(schema.weavePulse as PgTable, world.weave.pulse.map((entry, i) => ({ id: entry.id, ord: i, data: entry })));
+await insertAll(schema.weavePresence as PgTable, world.weave.presence.map((p, i) => ({ agentId: p.agentId, ord: i, data: p })));
+await insertAll(schema.weaveCalendar as PgTable, world.weave.calendar.map((e, i) => ({ id: e.id, ord: i, data: e })));
 
 await db.db.insert(schema.seedState).values({ profile });
 await db.close();
