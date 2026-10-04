@@ -58,6 +58,7 @@ const stopAll = () => {
 };
 process.on("exit", stopAll);
 process.on("SIGINT", () => { stopAll(); process.exit(130); });
+process.on("SIGTERM", () => { stopAll(); process.exit(143); });
 
 const run = (cmd, args, env = {}) =>
   new Promise((resolve, reject) => {
@@ -264,3 +265,5 @@ assert(merged2[merged2.length - 1].type === "run.finished", "run.finished closes
 reader2.cancel();
 
 console.log(`done in ${((Date.now() - startedAll) / 1000).toFixed(1)}s · branch ${branch} · run ${runId}`);
+// The server child and open SSE readers keep the event loop alive: exit explicitly ("exit" runs stopAll).
+process.exit();
