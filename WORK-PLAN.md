@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| Status | v1.1 — Sat Oct 3, 10:40 AM PDT. Defaults D1–D12 confirmed by the owner; timeline re-based to a Sat 11:00 start (§5.1) |
+| Status | v1.2 — Sat Oct 3, 12:00 PM PDT. **Sequential mode** (§7.0): one agent at a time, reviewed and merged by the integrator before the next starts. Defaults D1–D12 confirmed by the owner |
 | Owner | Ty Thanh Doan |
 | Horizon | **Phase 1:** the Oct 4 demo path on a real backend. **Phase 2:** the rest of what the mockup shows |
 | Ground truth | The coded mockup in `apps/web` (Vite + React Router + Electron), read in full on Oct 2. Where `PRD.md`, `ARCHITECTURE.md` or `MOCKUP-GAPS.md` disagree with the mockup, this plan wins until OPS refreshes them (§1) |
@@ -11,7 +11,7 @@
 
 ## TL;DR
 
-- First comes one short blocking step, **FND**: put the repo under git, set up the monorepo and freeze the contracts. After it, **seven agents work in parallel**, each in its own worktree and owning its own directories. These are the ten workstreams in §5.3 with CTX folded into TEAM and OPS run by the integrator (§7.4).
+- **FND is done** (repo under git, monorepo, contracts frozen as `contracts-v1`). The workstreams in §5.3 now run **one at a time** in the order in §7.0. Each agent works on its own branch; the integrator reviews it and merges it before writing the next agent's prompt. (The parallel-worktree setup in §7.1–§7.5 is kept for reference.)
 - No spikes have run yet. Each spike belongs to the workstream that needs its answer, and **Checkpoint A (Sat 16:00)** picks the demo level (§5.4) from the results.
 - **Work becomes real**: the handoff creates a real task and a live loop on the board, and Fast-forward splices the loop into a recorded run. **Weave stays seeded**, plus one real "results ready" item.
 - The mock api stays as **offline mode** and as the fallback that always works (L0). No workstream may break it.
@@ -31,6 +31,8 @@
 6. Commit small, rebase on `main` at every checkpoint, and never commit `.env`.
 
 **Integrator** (you, or a lead session in the root checkout): merges at each checkpoint in the order given in §7.3, answers requests and runs the checkpoint checks in §5.5.
+
+**In sequential mode (§7.0)**, items 2, 3 and 6 above change as described there.
 
 ---
 
@@ -183,6 +185,7 @@ FND moves `apps/web/src/lib/types.ts` here, along with the types now defined ins
 | GET | `/api/health` | `{ok}` | FND |
 | GET | `/api/registry` | `{agents, communityAgents, teams, communityTeams, organizations, projects, sessions, personaPool}`. Active agents and teams only | DATA |
 | GET | `/api/projects` · `/api/tasks` · `/api/tasks/:id` · `/api/runs` · `/api/runs/:id` | The shapes `api.*` returns today. `Run.segments` is derived from step events [RUN-7] | DATA |
+| POST | `/api/projects` `{name, goal}` | `Project`, with the id slug rule of the mock's `createProject`; emits `registry.changed` (added Oct 3: the Work index's New project dialog uses it) | DATA |
 | GET | `/api/runs/:id/events` | `RunEvent[]`; the merged log if the run was spliced | DATA |
 | GET | `/api/runs/:id/stream?after=<seq>` | SSE, `event: run`, data is a `RunEvent` | DATA |
 | GET | `/api/runs/:id/snapshots` | `ContextSnapshot[]` | DATA |
@@ -623,6 +626,32 @@ This phase starts after Oct 4, when the docs are refreshed and the open amendmen
 ---
 
 ## 7. Running the agents
+
+### 7.0 Sequential mode (current, from Sat Oct 3 12:00)
+
+One agent at a time. The integrator writes the agent's prompt, the owner runs it, the integrator reviews the branch, asks for fixes if needed and merges it, then writes the next prompt. This replaces §7.1–§7.5 and, where they conflict, §0 items 2, 3 and 6.
+
+- **Where:** the root checkout (`~/projects/fabric`), on a branch `seq/<code>` cut from the current `main`. The agent never merges or pushes.
+- **Ports:** the defaults, web 3000 and server 8787. Ignore the per-worktree ports in §4.9.
+- **Neon:** `production` is the development database. DATA creates only `demo` and `recording`; there are no `ws-*` branches.
+- **Paths:** an agent edits the paths of its step's workstreams (§3.3) plus its status file. If the step can't be done without touching another path, it may, and says so in the status file.
+- **Contracts:** additive changes (new optional fields, new schemas, new routes) are allowed, each in its own commit prefixed `contracts:` and listed under Requests in the status file for review. Anything breaking: stop and ask.
+- **Later steps are stubs** that throw `NotImplementedError`. Code that calls one catches it, logs one line and carries on, so each step can be tested on its own.
+- **Handoff:** `status/<code>.md` (template §7.6) plus three sections: *How to verify* (exact commands), *Deviations* from this plan, and *Notes for the next step*.
+
+| # | Step (branch) | Covers | Effort | Unlocks | Target |
+|---|---|---|---|---|---|
+| 1 | DATA (`seq/data`) | DATA 1–9, plus a dev script that simulates a live run | High | S0, S8 | Sat 14:30 |
+| 2 | UI-WORK (`seq/ui-work`) | UI-WORK 1–9, built against the seed and the simulated run | High | the web on the real API, seed clean | Sat 17:00 |
+| 3 | LLM + CTX (`seq/llm-ctx`) | DANA step 1 (`llm`, thinking controls, `meter`) and all of CTX | High | S1 | Sat 18:30 |
+| 4 | DANA (`seq/dana`) | DANA 2–7 | High | — | Sat 20:30 |
+| 5 | UI-CHAT (`seq/ui-chat`) | UI-CHAT 1–6 | Medium | S4, **L1** | Sat 22:00 |
+| 6 | TOOLS (`seq/tools`) | TOOLS 1–6 | High | S2, S5–S7 | Sun 0:30 |
+| 7 | TEAM (`seq/team`) | TEAM 1–6 | Max | S3, **L2** | Sun 4:00 |
+| 8 | LAB (`seq/lab`) | LAB 1–4 | High | S-LAB, **L3** | Sun 11:00 |
+| 9 | OPS | OPS 2–4 (integrator) | — | smoke, runbook | Sun 12:00 |
+
+LAB steps 1–2 touch only `lab/` and the Sprites, so they are the one step that can run alongside the others if the owner wants the experiment de-risked early.
 
 ### 7.1 Per-agent setup
 
