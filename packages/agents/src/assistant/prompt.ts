@@ -74,3 +74,12 @@ ${pool}
 
 ${ROUTING}`;
 }
+
+/** Only reached if the agents row is missing (unseeded branch); enough to build a prompt/model. */
+export function fallbackDana(): StudioProfile {
+  return {
+    agent: { id: "dana", name: "Dana", role: "Executive assistant", tone: "", summary: "", personality: "", traits: [], model: "", contextTokens: 0, memory: [], tools: [], greeting: "", placeholder: "" },
+    tagline: "",
+    workspace: { files: [{ name: "SOUL.md", body: "# SOUL.md\n\nYou are Dana, Ty's executive assistant.\n" }], skills: [], connectors: [], memories: [] },
+  };
+}
