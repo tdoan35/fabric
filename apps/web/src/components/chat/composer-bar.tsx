@@ -9,6 +9,7 @@ import {
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { CONNECTORS, TARGETS, type TargetId } from "@/lib/mock/options";
 import { projects } from "@/lib/registry";
+import { demoMode } from "@/lib/chat/demo";
 import { cn } from "@/lib/utils";
 
 // ---- Session settings: shared by the tray (before the first message) and the right sidebar (after). ----
@@ -25,7 +26,8 @@ const SessionSettingsContext = createContext<SessionSettings | null>(null);
 export function SessionSettingsProvider({ children }: { children: React.ReactNode }) {
   const [project, setProject] = useState<string | null>(null);
   const [connected, setConnected] = useState<Set<string>>(new Set());
-  const [target, setTarget] = useState<TargetId>("local");
+  // D7: the demo build runs delegated work in the Sprite sandbox, and nowhere else.
+  const [target, setTarget] = useState<TargetId>(demoMode ? "sprite" : "local");
   const toggleConnector = (id: string) =>
     setConnected((p) => { const n = new Set(p); if (n.has(id)) n.delete(id); else n.add(id); return n; });
   return (
@@ -134,6 +136,18 @@ export function ConnectorPicker({ className, labelClassName }: { className?: str
 export function RunTargetPicker({ withLabel, className }: { withLabel?: boolean; className?: string }) {
   const { target, setTarget } = useSessionSettings();
   const current = TARGETS.find((t) => t.id === target)!;
+  if (demoMode) {
+    return (
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <span tabIndex={0} className={cn(withLabel ? cn(barButton, "inline-flex items-center rounded-md") : "inline-flex size-8 items-center justify-center text-muted-foreground", className)} aria-label={`Runs on: ${current.name} (locked)`}>
+            <current.icon className="size-4" />{withLabel && <span>{current.name}</span>}
+          </span>
+        </TooltipTrigger>
+        <TooltipContent side="bottom">Runs on: {current.name} · locked for the demo</TooltipContent>
+      </Tooltip>
+    );
+  }
   return (
     <DropdownMenu>
       <Tooltip>
@@ -169,7 +183,7 @@ export function ComposerBar() {
         <ConnectorPicker labelClassName="hidden @md/composer:inline" />
       </div>
       {/* Too short to read in a narrow composer; it moves into the toolbar once the chat starts anyway. */}
-      <ContextMeter className="mx-3 hidden @lg/composer:flex" />
+      {!demoMode && <ContextMeter className="mx-3 hidden @lg/composer:flex" />}
       <RunTargetPicker />
     </div>
   );

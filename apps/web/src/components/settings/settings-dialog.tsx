@@ -9,6 +9,7 @@ import { desktop, type FabricDesktop } from "@/lib/desktop";
 import { MONO_FONTS, SANS_FONTS, readFonts, writeFonts, type FontChoice, type FontOption, type FontRole } from "@/lib/fonts";
 import { chatAgents } from "@/lib/registry";
 import { APPROVALS, CONNECTORS, EFFORTS, MODELS, TARGETS, type TargetId } from "@/lib/mock/options";
+import { demoMode } from "@/lib/chat/demo";
 import { cn } from "@/lib/utils";
 
 const SECTIONS = [
@@ -20,7 +21,9 @@ type SectionId = (typeof SECTIONS)[number]["id"];
 
 // Mock defaults for new sessions. Held for the app's lifetime, not persisted or applied yet.
 interface Defaults { agent: string; model: string; effort: string; approval: string; target: TargetId; connectors: Set<string> }
-const initialDefaults: Defaults = { agent: "dana", model: "sonnet-5-5", effort: "Medium", approval: "ask", target: "local", connectors: new Set() };
+const initialDefaults: Defaults = { agent: "dana", model: "sonnet-5-5", effort: "Medium", approval: "ask", target: demoMode ? "sprite" : "local", connectors: new Set() };
+// D7: the demo build hides Full auto and locks "Runs on" to the Sprite sandbox.
+const approvals = demoMode ? APPROVALS.filter((a) => a.id !== "auto") : APPROVALS;
 
 function Row({ label, hint, children }: { label: string; hint?: string; children: React.ReactNode }) {
   return (
@@ -34,14 +37,14 @@ function Row({ label, hint, children }: { label: string; hint?: string; children
   );
 }
 
-function Select<T extends string>({ label, value, options, onChange }: {
-  label: string; value: T; options: readonly { id: T; name: string; note?: string }[]; onChange: (v: T) => void;
+function Select<T extends string>({ label, value, options, onChange, disabled }: {
+  label: string; value: T; options: readonly { id: T; name: string; note?: string }[]; onChange: (v: T) => void; disabled?: boolean;
 }) {
   const current = options.find((o) => o.id === value);
   return (
     <DropdownMenu>
-      <DropdownMenuTrigger asChild>
-        <Button variant="outline" size="sm" aria-label={label} className="min-w-40 justify-between gap-2 font-normal">
+      <DropdownMenuTrigger asChild disabled={disabled}>
+        <Button variant="outline" size="sm" aria-label={label} disabled={disabled} className="min-w-40 justify-between gap-2 font-normal">
           {current?.name}<ChevronDown className="size-3.5 text-muted-foreground" />
         </Button>
       </DropdownMenuTrigger>
@@ -76,11 +79,11 @@ function General({ d, set }: { d: Defaults; set: (p: Partial<Defaults>) => void 
         <Row label="Reasoning effort">
           <Select label="Reasoning effort" value={d.effort} options={EFFORTS.map((e) => ({ id: e, name: e }))} onChange={(effort) => set({ effort })} />
         </Row>
-        <Row label="Approvals" hint={APPROVALS.find((a) => a.id === d.approval)?.note}>
-          <Select label="Approvals" value={d.approval} options={APPROVALS} onChange={(approval) => set({ approval })} />
+        <Row label="Approvals" hint={approvals.find((a) => a.id === d.approval)?.note}>
+          <Select label="Approvals" value={d.approval} options={approvals} onChange={(approval) => set({ approval })} />
         </Row>
-        <Row label="Runs on" hint="Where agents execute code and tools">
-          <Select label="Runs on" value={d.target} options={TARGETS} onChange={(target) => set({ target })} />
+        <Row label="Runs on" hint={demoMode ? "Locked to the Sprite sandbox for the demo" : "Where agents execute code and tools"}>
+          <Select label="Runs on" value={d.target} options={TARGETS} onChange={(target) => set({ target })} disabled={demoMode} />
         </Row>
       </div>
     </section>

@@ -2,17 +2,22 @@ import { useState } from "react";
 import { AttachmentPrimitive, ComposerPrimitive, useAuiState } from "@assistant-ui/react";
 import { AnimatePresence, motion } from "motion/react";
 import { ContextMeter } from "./composer-bar";
-import { ArrowUp, AudioLines, Check, ChevronDown, Hand, Mic, Paperclip, Plus, Square, X } from "lucide-react";
+import { ArrowUp, AudioLines, Check, ChevronDown, FlaskConical, Hand, Mic, Paperclip, Plus, Square, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { APPROVALS, EFFORTS, MODELS } from "@/lib/mock/options";
+import { demoMode } from "@/lib/chat/demo";
+import { disarmFixture, useFixtureArmed } from "@/lib/chat/fixture";
+
+// D7: the demo build never offers Full auto.
+const approvals = demoMode ? APPROVALS.filter((a) => a.id !== "auto") : APPROVALS;
 
 
 function ApprovalPicker() {
-  const [value, setValue] = useState(APPROVALS[0].id);
-  const current = APPROVALS.find((a) => a.id === value)!;
+  const [value, setValue] = useState(approvals[0].id);
+  const current = approvals.find((a) => a.id === value)!;
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
@@ -22,7 +27,7 @@ function ApprovalPicker() {
       </DropdownMenuTrigger>
       <DropdownMenuContent align="start" side="top" className="min-w-72">
         <DropdownMenuLabel className="text-xs text-muted-foreground">Approvals</DropdownMenuLabel>
-        {APPROVALS.map((a) => (
+        {approvals.map((a) => (
           <DropdownMenuItem key={a.id} onSelect={() => setValue(a.id)} className="justify-between gap-3">
             <span><span className="block text-sm">{a.name}</span><span className="block text-xs text-muted-foreground">{a.note}</span></span>
             {a.id === value && <Check className="size-3.5 shrink-0" />}
@@ -75,6 +80,18 @@ function AttachmentChip() {
   );
 }
 
+/** Shown while the fixture hotkey (Ctrl+Shift+F) has scripted Dana armed for the next turn; click to disarm. */
+function FixtureArmed() {
+  const armed = useFixtureArmed();
+  if (!armed) return null;
+  return (
+    <button type="button" onClick={disarmFixture} title="Scripted Dana answers the next turn (Ctrl+Shift+F). Click to cancel."
+      className="flex h-6 shrink-0 items-center gap-1 rounded-full border border-dashed px-2 text-[11px] text-muted-foreground hover:text-foreground">
+      <FlaskConical className="size-3" />Scripted next turn
+    </button>
+  );
+}
+
 /** `showContext` moves the context meter into the toolbar (used once the tray has hidden). */
 export function Composer({ autoFocus, placeholder, showContext }: { autoFocus?: boolean; placeholder: string; showContext?: boolean }) {
   const empty = useAuiState((st) => st.composer.isEmpty);
@@ -94,9 +111,10 @@ export function Composer({ autoFocus, placeholder, showContext }: { autoFocus?: 
           <Button variant="ghost" size="icon" className="size-8 text-muted-foreground hover:text-foreground" aria-label="Attach files"><Plus /></Button>
         </ComposerPrimitive.AddAttachment>
         <ApprovalPicker />
+        <FixtureArmed />
         <div className="mx-2 flex min-w-0 flex-1 items-center">
           <AnimatePresence>
-            {showContext && (
+            {showContext && !demoMode && (
               <motion.div
                 className="flex min-w-0 flex-1"
                 initial={{ opacity: 0 }}
@@ -120,7 +138,7 @@ export function Composer({ autoFocus, placeholder, showContext }: { autoFocus?: 
               <Button variant="ghost" size="icon" className="size-8 animate-pulse text-destructive" aria-label="Stop dictation"><Square className="fill-current" /></Button>
             </ComposerPrimitive.StopDictation>
           </ComposerPrimitive.If>
-          {empty ? (
+          {empty && !demoMode ? (
             <Button type="button" size="icon" className="ml-1 size-8 rounded-full bg-run text-white hover:bg-run/90" aria-label="Voice conversation"><AudioLines /></Button>
           ) : (
             <ComposerPrimitive.Send asChild>
