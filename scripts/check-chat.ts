@@ -99,11 +99,12 @@ const post = async (path: string, body: unknown) => {
  * When each piece of a turn first reached the client, in ms from the POST: the disposition chip,
  * the first text, the card (a propose_* part) or the handoff (with its result), and the stream end.
  */
-interface Timing { disposition?: number; text?: number; card?: number; done: number }
+interface Timing { disposition?: number; text?: number; card?: number; done: number; notes?: string }
 
 /** One turn: returns the final cumulative snapshot, how long the turn took end to end, and its timing. */
 async function turn(sessionId: string, messages: unknown[], fixture: boolean): Promise<{ parts: Part[]; ms: number; timing: Timing }> {
   const started = Date.now();
+  const logsBefore = serverLogs.length;
   const res = await post("/api/chat", { sessionId, messages, ...(fixture ? { fixture: true } : {}) });
   const timing: Timing = { done: 0 };
   const mark = (key: Exclude<keyof Timing, "done">, seen: boolean) => {
@@ -129,6 +130,10 @@ async function turn(sessionId: string, messages: unknown[], fixture: boolean): P
     }
   }
   timing.done = Date.now() - started;
+  // What the server said about this turn: retries, unusable input, failed tools (the timing's why).
+  const notes = serverLogs.slice(logsBefore).split("\n").filter((l) => /^\[assistant\]/.test(l) && !/not implemented yet/.test(l))
+    .map((l) => l.replace(/^\[assistant\]\s*/, "").replace(/ for live-\d+/, "").replace(/\|/g, "/").slice(0, 90));
+  if (notes.length) timing.notes = notes.join("; ");
   return { parts, ms: timing.done, timing };
 }
 const userMsg = (text: string) => ({ role: "user", content: [{ type: "text", text }] });
@@ -404,12 +409,12 @@ function printTimingTable(rows: { pass: number; turn: string; timing: Timing }[]
   };
   const cols = ["disposition", "text", "card", "done"] as const;
   console.log(`\nlive timing (from the POST; card = propose_* part, or the handoff with its result):\n`);
-  console.log("| pass | turn | disposition | text | card / handoff | done |");
-  console.log("|---|---|---|---|---|---|");
-  for (const r of rows) console.log(`| ${r.pass} | ${r.turn} | ${cols.map((c) => sec(r.timing[c])).join(" | ")} |`);
+  console.log("| pass | turn | disposition | text | card / handoff | done | server notes |");
+  console.log("|---|---|---|---|---|---|---|");
+  for (const r of rows) console.log(`| ${r.pass} | ${r.turn} | ${cols.map((c) => sec(r.timing[c])).join(" | ")} | ${r.timing.notes ?? ""} |`);
   for (const t of [...new Set(rows.map((r) => r.turn))]) {
     const of = rows.filter((r) => r.turn === t);
     const med = cols.map((c) => sec(median(of.map((r) => r.timing[c]).filter((v): v is number => v !== undefined))));
-    console.log(`| median | ${t} | ${med.join(" | ")} |`);
+    console.log(`| median | ${t} | ${med.join(" | ")} | |`);
   }
 }
