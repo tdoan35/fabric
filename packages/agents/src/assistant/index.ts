@@ -265,7 +265,16 @@ export function createAssistant(deps: AssistantDeps): Assistant {
             description: "Hand the work to an approved team: compiles the brief, creates the task and starts the run.",
             inputSchema: handoffSchema,
             // The lane sometimes emits the call twice in one response; one handoff per turn.
-            execute: (args) => (handoffDone ??= runHandoff(handoffDeps((i: BriefInput) => compileBrief({ ...i, modelId: dana?.agent.model })), {
+            // compileBrief is an LLM call: if the lane fails it, the deterministic scripted brief
+            // takes over (ARCH §11) so the handoff itself never fails.
+            execute: (args) => (handoffDone ??= runHandoff(handoffDeps(async (i: BriefInput) => {
+              try {
+                return await compileBrief({ ...i, modelId: dana?.agent.model });
+              } catch (err) {
+                console.log(`[assistant] compileBrief failed (${err instanceof Error ? err.message : err}); using the deterministic brief`);
+                return fixtureBrief(i);
+              }
+            }), {
               sessionId, session, teamName: args.teamName, request: args.request, title: args.title, summary: args.summary,
             })),
           }),
@@ -333,9 +342,9 @@ export function createAssistant(deps: AssistantDeps): Assistant {
               }
               if (part.toolName === "record_disposition") dispositionSeen = true;
               if (part.toolName === "propose_team" || part.toolName === "propose_specialist") terminal = true;
-              // One card (or handoff) per turn: a duplicated call of a name already on the message
-              // is dropped, not streamed and not stored.
-              if (toolParts.some((p) => p.toolName === part.toolName) && part.toolName !== "record_disposition") continue;
+              // One part per tool per turn: a duplicated call of a name already on the message is
+              // dropped, not streamed and not stored (the lane repeats calls when loaded).
+              if (toolParts.some((p) => p.toolName === part.toolName)) continue;
               let args: unknown = part.input;
               if (part.toolName === "propose_team" || part.toolName === "propose_specialist") {
                 // Store the pending row now, and stream the enriched payload (proposalId, supersedes).
