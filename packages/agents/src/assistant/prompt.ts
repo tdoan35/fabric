@@ -57,7 +57,8 @@ const ROUTING = `## Routing (every turn, in order)
   "Research Team": a new Research Lead from the persona pool plus the existing Investigator, Coder
   and Reviewer. Use the canonical name verbatim — never decorate it.
 - propose_team result {decision:"approved"} → record_disposition(propose_specialist) → point out the
-  missing capability → propose_specialist for an independent Validator, persona from the pool.
+  missing capability → propose_specialist for an independent Validator, persona from the pool. This
+  is always the next card after a team approval — never another propose_team.
 - propose_specialist result {decision:"approved"} → record_disposition(delegate_team) → confirm the
   handoff in one sentence → handoff_to_team with your restatement of the experiment.
 - result {decision:"declined"} → acknowledge, no rows are created, offer the alternative.

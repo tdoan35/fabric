@@ -35,7 +35,7 @@ import { applyApproval } from "./teams";
 import { prepareDispositionFirstStep, withForcedDisposition } from "./stream";
 import { statusAfterDecision } from "./transitions";
 import { diffThread, parseIncoming, toModelMessages } from "./thread";
-import type { DecisionDelta } from "./thread";
+import type { DecisionDelta, ThreadDelta } from "./thread";
 
 export interface Assistant {
   /** POST /api/chat: yields cumulative snapshots of the assistant message (§4.3). */
@@ -166,7 +166,7 @@ export function createAssistant(deps: AssistantDeps): Assistant {
 
       // ---- the turn ----
       const fixture = req.fixture || deps.mode === "fixture";
-      const lines = fixture ? fixtureLines(sessionId, session, delta) : liveLines(sessionId, session);
+      const lines = fixture ? fixtureLines(sessionId, session, delta) : liveLines(sessionId, session, delta);
       let final: ChatPart[] = [];
       for await (const line of lines) {
         final = line.content;
@@ -220,7 +220,8 @@ export function createAssistant(deps: AssistantDeps): Assistant {
         })();
       }
 
-      async function* liveLines(sessionId: string, session: SessionRow | undefined): AsyncGenerator<ChatStreamLine> {
+      async function* liveLines(sessionId: string, session: SessionRow | undefined, delta: ThreadDelta): AsyncGenerator<ChatStreamLine> {
+        const active = await activeToolsFor(delta, await listProposals(db, sessionId));
         const dana = await getProfile(db, "dana");
         const registry = await readRegistry(db);
         const system = buildSystemPrompt(dana ?? fallbackDana(), {
@@ -279,6 +280,7 @@ export function createAssistant(deps: AssistantDeps): Assistant {
             tools,
             temperature: TEMPERATURE,
             abortSignal: turnAbort.signal,
+            ...(active ? { activeTools: active } : {}),
             stopWhen: stepCountIs(MAX_STEPS),
             // DANA 2: record_disposition is forced as the first call of every turn; later steps choose freely.
             prepareStep: ({ stepNumber }) => prepareDispositionFirstStep(stepNumber),
@@ -387,6 +389,23 @@ export function createAssistant(deps: AssistantDeps): Assistant {
 // ---- helpers ----
 
 const copy = (p: ChatToolCallPart): ChatToolCallPart => ({ ...p });
+
+/**
+ * The canonical post-approval steps (the demo script, D2/D3), as a tool guard rather than hope:
+ * after a team approval the next card is the missing specialist; after the specialist approval the
+ * turn hands off. Anything else in the thread keeps every tool.
+ */
+async function activeToolsFor(delta: ThreadDelta, proposals: { kind: "team" | "specialist" }[]): Promise<string[] | undefined> {
+  const last = delta.decisions[delta.decisions.length - 1];
+  if (!last) return undefined;
+  if (last.toolName === "propose_specialist" && last.decision === "approved") {
+    return ["record_disposition", "search_registry", "handoff_to_team"];
+  }
+  if (last.toolName === "propose_team" && last.decision === "approved" && !proposals.some((p) => p.kind === "specialist")) {
+    return ["record_disposition", "search_registry", "propose_specialist"];
+  }
+  return undefined;
+}
 
 function isHandoffPayload(result: unknown): result is HandoffPayload {
   return !!result && typeof result === "object" && typeof (result as HandoffPayload).runId === "string" && Array.isArray((result as HandoffPayload).members);
