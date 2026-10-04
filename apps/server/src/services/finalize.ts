@@ -125,7 +125,12 @@ export async function finalizeRun(runId: string): Promise<{ reportId: string } |
       at: endedAt.toISOString(),
       unread: true,
       reportId,
-      why: "You asked to hear when the run finished. The reviewer accepted it after one rework.",
+      why: (() => {
+        const reworks = events.filter((e) => e.type === "rework.requested").length;
+        return `You asked to hear when the run finished. The reviewer accepted it ${
+          reworks === 0 ? "on the first pass" : reworks === 1 ? "after one rework" : `after ${reworks} reworks`
+        }.`;
+      })(),
       actions: [
         { id: "open", label: "Open report", variant: "primary", href: `/reports/${reportId}` },
         { id: "run", label: "View loop", variant: "outline", href: `/work/${task.id}` },
