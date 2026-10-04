@@ -305,6 +305,8 @@ export function createAssistant(deps: AssistantDeps): Assistant {
           // Contract turn-enders (§4.3): a propose_* call (human decision pending) and a completed
           // handoff. Live models sometimes keep going past them; Dana's turn ends there.
           let terminal = false;
+          // A handoff call that failed and hasn't been followed by one that succeeded.
+          let handoffFailed = false;
           // The disposition part is always rendered first (the contract shape, and what the mock
           // yields), whatever order the model produced text and calls in. `anchor` counts the
           // non-disposition tool parts that preceded the text, so later calls land after it.
@@ -365,7 +367,17 @@ export function createAssistant(deps: AssistantDeps): Assistant {
               toolParts.push({ type: "tool-call", toolCallId: part.toolCallId, toolName: part.toolName, args, argsText: JSON.stringify(args) });
             } else if (part.type === "tool-error") {
               console.error(`[assistant] ${part.toolName} failed:`, part.error instanceof Error ? part.error.message : part.error);
-              if (part.toolName === "handoff_to_team") control.invalid = true; // retry the turn once
+              if (part.toolName === "handoff_to_team") {
+                // The model sees the error and usually corrects the call in its next step (seen: a
+                // team id for its name): drop the failed part so that call can take its place. Only
+                // an attempt that never completes a handoff is retried.
+                const failed = toolParts.find((p) => p.toolCallId === part.toolCallId);
+                if (failed) {
+                  if (toolParts.filter((p) => p.toolName !== "record_disposition").indexOf(failed) < anchor) anchor--;
+                  toolParts.splice(toolParts.indexOf(failed), 1);
+                }
+                handoffFailed = true;
+              }
             } else if (part.type === "tool-result") {
               const target = toolParts.find((p) => p.toolCallId === part.toolCallId && p.result === undefined);
               if (target) {
@@ -374,6 +386,7 @@ export function createAssistant(deps: AssistantDeps): Assistant {
                   target.args = part.output; // the card reads the real ids and personas
                   target.argsText = JSON.stringify(part.output);
                   terminal = true;
+                  handoffFailed = false;
                 }
               }
             } else {
@@ -401,6 +414,7 @@ export function createAssistant(deps: AssistantDeps): Assistant {
             console.warn(`[assistant] step 0 ignored the forced record_disposition; retrying: ${err.message}`);
           }
           if (!dispositionSeen) control.invalid = true; // nothing usable came out of this attempt
+          if (handoffFailed) control.invalid = true; // the handoff never went through: retry the turn once
         };
 
         yield* withForcedDisposition(attempt, () =>

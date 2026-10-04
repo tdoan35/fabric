@@ -212,11 +212,18 @@ export async function listProfiles(db: Db): Promise<StudioProfile[]> {
   return (rows.rows as Record<string, unknown>[]).map(agentRowToProfile).filter((p): p is StudioProfile => !!p);
 }
 
+/**
+ * A team by its name, or by its id — the prompt shows "Research Team (research)", and the lane
+ * sometimes hands off to the id. An exact name match wins.
+ */
 export async function getTeamByName(db: Db, name: string): Promise<(StudioTeam & { memberProfiles: StudioProfile[] }) | undefined> {
   const teamRows = await db.db.execute(sql`
     select t.*, (select jsonb_agg(jsonb_build_object('agentId', m.agent_id, 'duty', m.duty, 'lead', m.lead) order by m.ord)
                  from team_members m where m.team_id = t.id) as members
-    from teams t where lower(t.name) = lower(${name}) limit 1`);
+    from teams t
+    where lower(t.name) = lower(${name}) or t.id = lower(${name}) or t.id = ${slugId(name)}
+    order by (lower(t.name) = lower(${name})) desc
+    limit 1`);
   const row = (teamRows.rows as (Record<string, unknown> & { members: { agentId: string; duty: string; lead: boolean }[] | null })[])[0];
   if (!row) return undefined;
   const members = row.members ?? [];
