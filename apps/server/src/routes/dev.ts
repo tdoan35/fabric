@@ -3,6 +3,7 @@ import { hub } from "../services/hub";
 import { runtime } from "../services/runtime";
 import { startSim } from "../services/sim";
 import { startDevToolsRun } from "../services/dev-tools";
+import { startDevTeamRun } from "../services/dev-team";
 
 // Mounted only when NODE_ENV !== "production" (index.ts): the dev scratch runs.
 export const dev = new Hono()
@@ -38,4 +39,24 @@ export const dev = new Hono()
     });
     void sim.done.catch((err) => console.error("dev tools: background run failed", err));
     return c.json({ taskId: sim.taskId, runId: sim.runId }, 201);
+  })
+  /** The TEAM dev route (§5.3 TEAM 6): a scratch run through the real team workflow. */
+  .post("/dev/team", async (c) => {
+    const body = (await c.req.json().catch(() => ({}))) as { objective?: string; toy?: boolean; forceBounce?: boolean; forceBlock?: boolean };
+    const { db, writer, team } = runtime();
+    const teamRuntime = team();
+    if (!teamRuntime) return c.json({ error: "TEAM runtime not available" }, 503);
+    const started = await startDevTeamRun(db, writer, teamRuntime, {
+      objective: body.objective,
+      toy: body.toy,
+      forceBounce: body.forceBounce === true,
+      forceBlock: body.forceBlock === true,
+      onRegistryChanged: () => hub.publishApp({ type: "registry.changed" }),
+      onTaskCreated: (taskId, runId) => {
+        hub.publishApp({ type: "task.changed", taskId });
+        hub.publishApp({ type: "run.changed", runId });
+      },
+      onDone: (message) => console.log(message),
+    });
+    return c.json({ taskId: started.taskId, runId: started.runId }, 201);
   });
