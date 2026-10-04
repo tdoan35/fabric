@@ -287,7 +287,12 @@ export function createAssistant(deps: AssistantDeps): Assistant {
             ...(active ? { activeTools: active } : {}),
             stopWhen: stepCountIs(MAX_STEPS),
             // DANA 2: record_disposition is forced as the first call of every turn; later steps choose freely.
-            prepareStep: ({ stepNumber }) => prepareDispositionFirstStep(stepNumber),
+            // activeTools must be re-asserted every step: a step-level prepareStep return
+            // overrides the top-level option.
+            prepareStep: ({ stepNumber }) => ({
+              ...(active ? { activeTools: active } : {}),
+              ...prepareDispositionFirstStep(stepNumber),
+            }),
           });
           const toolParts: ChatToolCallPart[] = [];
           let text = "";
