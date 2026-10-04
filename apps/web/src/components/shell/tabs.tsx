@@ -3,6 +3,8 @@ import { useLocation, useNavigate } from "react-router";
 import { Briefcase, Hammer, MessageSquare, Plus, Spool, SquarePen, Users, X } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
+import { sessions, useRegistry } from "@/lib/registry";
+import { SESSION_PARAM } from "@/lib/chat/session";
 
 interface Tab { id: string; path: string; /** Title of the chat running in this tab, once one has started. */ chat?: string }
 interface TabsState {
@@ -74,7 +76,12 @@ export function TabsProvider({ children }: { children: React.ReactNode }) {
 function describe(path: string): { title: string; icon: ComponentType<{ className?: string }> } {
   const [pathname, search = ""] = path.split("?");
   const view = new URLSearchParams(search).get("view");
-  if (pathname === "/") return { title: "New thread", icon: SquarePen };
+  if (pathname === "/") {
+    // A tab whose thread isn't mounted (another tab is active) is still labelled by its session.
+    const session = new URLSearchParams(search).get(SESSION_PARAM);
+    const title = session ? sessions().find((s) => s.id === session)?.title : undefined;
+    return title ? { title, icon: MessageSquare } : { title: "New thread", icon: SquarePen };
+  }
   if (pathname.startsWith("/weave")) return { title: "Weave", icon: Spool };
   if (pathname.startsWith("/agents")) return view === "teams" ? { title: "Teams", icon: Users } : view === "orgs" ? { title: "Organizations", icon: Users } : { title: "Agent Studio", icon: Hammer };
   if (pathname.startsWith("/work") || pathname.startsWith("/runs") || pathname.startsWith("/reports")) return { title: "Work", icon: Briefcase };
@@ -89,6 +96,7 @@ const noDrag = "[-webkit-app-region:no-drag]";
  */
 export function TabStrip() {
   const { tabs, activeId, select, add, close } = useTabs();
+  useRegistry();
   const single = tabs.length < 2;
   const visible = single ? tabs.filter((t) => t.chat) : tabs;
   return (
