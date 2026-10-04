@@ -1,5 +1,5 @@
 import { createBrowserRouter, data, redirect } from "react-router";
-import { RootLayout } from "@/routes/root";
+import { RootLayout, rootLoader } from "@/routes/root";
 import { RouteError } from "@/routes/error";
 import { HomePage } from "@/routes/home";
 import { AgentsPage } from "@/routes/agents";
@@ -12,6 +12,7 @@ import { ReportPage, reportLoader } from "@/routes/report";
 export const router = createBrowserRouter([
   {
     element: <RootLayout />,
+    loader: rootLoader,
     children: [
       {
         // Pathless layout so errors render inside the app shell.

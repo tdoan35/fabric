@@ -32,7 +32,7 @@ export function StudioScreen() {
     <div className="flex h-full flex-col">
       <PageHeader
         center={<Segmented value={view} options={VIEWS} onChange={setView} />}
-        right={<Button size="sm" variant="outline" className={headerButton}><Plus />{CREATE[view]}</Button>}
+        right={import.meta.env.VITE_DEMO === "1" ? undefined : <Button size="sm" variant="outline" className={headerButton}><Plus />{CREATE[view]}</Button>}
       >
         <span className={headerTitle}>Agent Studio</span>
       </PageHeader>

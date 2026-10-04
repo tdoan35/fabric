@@ -14,8 +14,8 @@ import { SidebarTrigger } from "@/components/ui/sidebar";
 import { mockAssistant, mockContext } from "@/lib/mock/chat";
 import { suggestionPool, type Suggestion } from "@/lib/mock/suggestions";
 import { AgentHero, AgentProfilePanel, FLY, IncognitoInfo, veil, scrollArea, type SideTab, Portrait, nameLayoutId, portraitLayoutId } from "./assistant-hero";
-import { chatAgents, type ChatAgent } from "@/lib/mock/assistant";
-import { studioTeams, type StudioTeam } from "@/lib/mock/teams";
+import { chatAgents as registryChatAgents, studioTeams as registryTeams, useRegistry } from "@/lib/registry";
+import type { ChatAgent, StudioTeam } from "@fabric/contracts";
 import { TeamHero, TeamProfile, teamLead } from "./team-hero";
 import { Composer } from "./composer";
 import { ComposerBar, ConnectorPicker, ContextMeter, ProjectPicker, RunTargetPicker, SessionSettingsProvider } from "./composer-bar";
@@ -279,6 +279,9 @@ function ThreadBody({ agentIndex, onAgentChange, onBackToDana }: {
 }) {
   const started = useAuiState((st) => !st.thread.isEmpty);
   const [incognito, setIncognito] = useState(false);
+  useRegistry();
+  const chatAgents = registryChatAgents();
+  const studioTeams = registryTeams();
   const firstMessage = useAuiState((st) => {
     const m = st.thread.messages.find((x) => x.role === "user");
     return m ? m.content.map((p) => (p.type === "text" ? p.text : "")).join(" ") : "";

@@ -8,7 +8,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { CONNECTORS, TARGETS, type TargetId } from "@/lib/mock/options";
-import { projects } from "@/lib/mock/sessions";
+import { projects } from "@/lib/registry";
 import { cn } from "@/lib/utils";
 
 // ---- Session settings: shared by the tray (before the first message) and the right sidebar (after). ----
@@ -86,13 +86,13 @@ export function ProjectPicker({ className }: { className?: string }) {
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
         <Button variant="ghost" size="sm" className={cn(barButton, className)}>
-          <Folder className="size-3.5 shrink-0" /><span className="max-w-40 truncate">{project ? projects.find((p) => p.id === project)?.name : "Choose project"}</span>
+          <Folder className="size-3.5 shrink-0" /><span className="max-w-40 truncate">{project ? projects().find((p) => p.id === project)?.name : "Choose project"}</span>
           <ChevronDown className="size-3" />
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="start" side="bottom" className="min-w-56">
         <DropdownMenuLabel className="text-xs text-muted-foreground">Project</DropdownMenuLabel>
-        {projects.filter((p) => !p.archived).map((p) => (
+        {projects().filter((p) => !p.archived).map((p) => (
           <DropdownMenuItem key={p.id} onSelect={() => setProject(p.id)} className="justify-between">
             {p.name}{project === p.id && <Check className="size-3.5" />}
           </DropdownMenuItem>

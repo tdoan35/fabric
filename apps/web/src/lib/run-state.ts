@@ -1,4 +1,5 @@
-import { studioTeams, type StudioTeam } from "./mock/teams";
+import { studioTeams } from "./registry";
+import type { StudioTeam } from "@fabric/contracts";
 import type { Run, RunEvent, RunSegment } from "./types";
 
 export type MemberState = "idle" | "working" | "done" | "bounced" | "rework" | "waiting" | "blocked";
@@ -34,7 +35,7 @@ export interface RunView {
   finished: boolean;
 }
 
-export const teamOf = (run: Pick<Run, "teamId">): StudioTeam => studioTeams.find((t) => t.id === run.teamId)!;
+export const teamOf = (run: Pick<Run, "teamId">): StudioTeam => studioTeams().find((t) => t.id === run.teamId)!;
 
 /** Running and blocked loops end at "now": a segment that reaches it is still going. */
 const isOpen = (run: Run, s: RunSegment) => (run.status === "running" || run.status === "blocked") && s.end >= run.durationS;

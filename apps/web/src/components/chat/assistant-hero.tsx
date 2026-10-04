@@ -7,7 +7,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Group, panel } from "@/components/studio/studio-ui";
-import { myProfiles } from "@/lib/mock/studio";
+import { myProfiles } from "@/lib/registry";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import type { ChatAgent } from "@/lib/mock/assistant";
 import { cn } from "@/lib/utils";
@@ -236,7 +236,7 @@ export const scrollArea = "min-h-0 flex-1 overflow-y-auto p-4 [scrollbar-width:t
 
 /** Same Profile / Capabilities / Memory split as Agent Studio, condensed to a single column. */
 function ProfileTabs({ agent }: { agent: ChatAgent }) {
-  const profile = myProfiles.find((p) => p.agent.id === agent.id);
+  const profile = myProfiles().find((p) => p.agent.id === agent.id);
   const workspace = profile?.workspace;
   return (
     <Tabs key={agent.id} defaultValue="profile" className="min-h-0 flex-1 gap-0">
