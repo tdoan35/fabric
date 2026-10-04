@@ -1,13 +1,13 @@
 // Scripted Dana (DANA 6, RUN-12): the same branches as the web mock's mockAssistant, the same
 // stream shape, and the same REAL side effects (dispositions, proposal rows, approvals, task, run).
-// The payloads are the enriched card data (CARD-1, D1), built by the same teamCard/specialistCard
-// as live turns: real agent ids and roles, personas from the pool, workflow, budget, criteria and
-// lead defaults. packages/fixtures/src/chat.ts and the web mock stay untouched.
+// The cards are the scripted payloads in @fabric/fixtures/chat (CARD-1, D1), the same ones the web
+// mock streams: their choices (name, purpose, roster, persona) go through the same teamCard /
+// specialistCard as live turns, which fill the rest from the definition approval provisions — on
+// the demo seed that is exactly the scripted payload (cards.test pins it).
 import type {
   ChatPart, ChatStreamLine, DispositionArgs, HandoffPayload, Proposal, SpecialistProposal, TeamProposal,
 } from "@fabric/contracts";
-import { specialistProposal as VALIDATOR } from "@fabric/fixtures/chat";
-import { studioTeams } from "@fabric/fixtures/teams";
+import { handoff as SCRIPTED_HANDOFF, specialistProposal as SCRIPTED_SPECIALIST, teamProposal as SCRIPTED_TEAM } from "@fabric/fixtures/chat";
 import { STAYED } from "@fabric/fixtures/run";
 import type { Brief } from "@fabric/contracts";
 import { countTokens, preferenceItems, renderBrief } from "../context";
@@ -17,8 +17,6 @@ import type { SessionRow, StoredProposal } from "./store";
 import { specialistCard, teamCard } from "./teams";
 import type { World } from "./teams";
 import type { DecisionDelta, ThreadDelta } from "./thread";
-
-const RESEARCH = studioTeams.find((t) => t.id === "research")!;
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -39,7 +37,7 @@ const LINES = {
 
 const RESTATEMENT =
   "Test whether grafting an n-gram lookup table onto a small open model improves its held-out perplexity, with the table kept on disk rather than RAM.";
-const HANDOFF_SUMMARY = "Brief compiled from your request and the team definition — not your chat transcript.";
+const HANDOFF_SUMMARY = SCRIPTED_HANDOFF.summary;
 const TASK_TITLE = "n-gram fusion on a 135M model";
 
 /** What the fixture turn needs from the server: state plus its side-effect hooks. */
@@ -59,12 +57,12 @@ export interface FixtureDeps {
 let n = 0;
 const id = (prefix: string) => `call-${prefix}-${++n}`;
 
-/** The team card (CARD-1): the canonical Research Team minus Sana, who joins on her own card. */
+/** The team card (CARD-1): the scripted Research Team, without Sana — she joins on her own card. */
 function teamPayload(ctx: FixtureDeps, changes: { supersedes?: string; reworkBudget?: number } = {}): TeamProposal {
   const card = teamCard({
-    name: RESEARCH.name,
-    purpose: RESEARCH.purpose,
-    roster: RESEARCH.members.filter((m) => m.agentId !== "sana").map((m) => m.agentId),
+    name: SCRIPTED_TEAM.name,
+    purpose: SCRIPTED_TEAM.purpose,
+    roster: SCRIPTED_TEAM.roster.map((r) => r.agentId),
     reworkBudget: changes.reworkBudget,
   }, ctx.world);
   return { ...card, ...(changes.supersedes ? { supersedes: changes.supersedes } : {}) };
@@ -72,7 +70,7 @@ function teamPayload(ctx: FixtureDeps, changes: { supersedes?: string; reworkBud
 
 /** The specialist card: the Validator, with the pool persona Dana picked (D1). */
 function specialistPayload(ctx: FixtureDeps, changes: { supersedes?: string } = {}): SpecialistProposal {
-  const card = specialistCard({ name: VALIDATOR.name, purpose: VALIDATOR.purpose, persona: "sana" }, ctx.world);
+  const card = specialistCard({ name: SCRIPTED_SPECIALIST.name, purpose: SCRIPTED_SPECIALIST.purpose, persona: SCRIPTED_SPECIALIST.persona?.id }, ctx.world);
   return { ...card, ...(changes.supersedes ? { supersedes: changes.supersedes } : {}) };
 }
 
@@ -108,7 +106,7 @@ export async function* fixtureTurn(ctx: FixtureDeps): AsyncGenerator<ChatStreamL
       ];
       yield* typeOut(pre, LINES.handoff);
       const payload = await ctx.handoff({
-        sessionId: ctx.sessionId, session: ctx.session, teamName: RESEARCH.name,
+        sessionId: ctx.sessionId, session: ctx.session, teamName: SCRIPTED_HANDOFF.teamName,
         request: RESTATEMENT, title: TASK_TITLE, summary: HANDOFF_SUMMARY,
       });
       yield {
@@ -178,7 +176,7 @@ export async function* fixtureTurn(ctx: FixtureDeps): AsyncGenerator<ChatStreamL
       const toolCallId = id("team");
       const stored = await ctx.propose({
         toolCallId, kind: "team",
-        payload: teamPayload(ctx, { supersedes: pendingTeam.toolCallId ?? undefined, reworkBudget: RESEARCH.reworkBudget + 1 }),
+        payload: teamPayload(ctx, { supersedes: pendingTeam.toolCallId ?? undefined, reworkBudget: (SCRIPTED_TEAM.reworkBudget ?? 2) + 1 }),
       });
       yield {
         content: [...pre, { type: "text", text: LINES.reProposeTeam }, {
