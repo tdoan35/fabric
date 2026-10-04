@@ -41,11 +41,18 @@ export async function provisionTeam(db: Db, input: ProvisionTeamInput): Promise<
   const handoffTo = org.handoffTo ?? "product";
   const question = org.handoffQuestion ?? "Can these results drive a real, value-driven product?";
 
+  // Round trips are batched where order doesn't matter: approval sits in front of Dana's next
+  // model call, and each query is a network hop to Neon.
   // ---- agents (only the missing ones; new ones leave the persona pool) ----
+  const ids = team.members.map((m) => m.agentId);
+  const existing = new Set(
+    ids.length
+      ? (await db.db.execute(sql`select id from agents where id in ${ids}`)).rows.map((r) => (r as { id: string }).id)
+      : [],
+  );
   const createdAgents: string[] = [];
   for (const m of team.members) {
-    const exists = await db.db.execute(sql`select 1 from agents where id = ${m.agentId}`);
-    if (exists.rows.length) continue;
+    if (existing.has(m.agentId)) continue;
     const profile = input.templates?.[m.agentId];
     if (!profile) continue;
     await db.db.transaction(async (tx) => {
@@ -90,14 +97,12 @@ export async function provisionTeam(db: Db, input: ProvisionTeamInput): Promise<
   }
 
   // ---- members (roster order; re-adding a member is a no-op) ----
-  const have = new Set(
-    (await db.db.execute(sql`select id from agents`)).rows.map((r) => (r as { id: string }).id),
-  );
-  for (const [mi, m] of team.members.entries()) {
-    if (!have.has(m.agentId)) continue;
+  const have = new Set([...existing, ...createdAgents]);
+  const rows = [...team.members.entries()].filter(([, m]) => have.has(m.agentId));
+  if (rows.length) {
     await db.db.execute(sql`
       insert into team_members (team_id, agent_id, ord, duty, lead)
-      values (${team.id}, ${m.agentId}, ${mi}, ${m.duty}, ${m.lead ?? false})
+      values ${sql.join(rows.map(([mi, m]) => sql`(${team.id}, ${m.agentId}, ${mi}, ${m.duty}, ${m.lead ?? false})`), sql`, `)}
       on conflict do nothing`);
   }
 
