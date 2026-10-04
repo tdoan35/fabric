@@ -1,0 +1,174 @@
+// RunWriter (WORK-PLAN §4.6): the only way anything writes to a run.
+// Stamps `seq` (atomic per run: advisory lock + max(seq)+1, safe under TEAM's parallel steps) and
+// `t` (seconds since runs.started_at). Cost accumulates from budget.update events.
+import { sql } from "drizzle-orm";
+import { parseRunEventPayload } from "@fabric/contracts";
+import type { ContextSnapshot, RecordingKind, Run, RunEvent, RunEventPayloads, RunEventType, Task } from "@fabric/contracts";
+import type { Db } from "./db";
+import { deriveSegments } from "./derive";
+import type { RunWriter, RunWriterHooks } from "./index";
+import type { RunRowLike } from "./read";
+
+/** The mock's createProject id rule, reused for tasks and projects (apps/web/src/lib/api). */
+export function slugId(name: string): string {
+  return name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "project";
+}
+
+async function emitRow(
+  db: Db,
+  hooks: RunWriterHooks,
+  runId: string,
+  type: RunEventType,
+  actorAgentId: string | undefined,
+  payload: Record<string, unknown>,
+  tOverride?: number,
+): Promise<RunEvent> {
+  const parsed = parseRunEventPayload(type, payload) as Record<string, unknown>;
+  for (let attempt = 1; ; attempt++) {
+    try {
+      return await db.db.transaction(async (tx) => {
+        // Serialize concurrent emits for the same run (TEAM's parallel steps).
+        await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${runId}, 0))`);
+        const next = await tx.execute(sql`
+          select coalesce(max(e.seq), 0) + 1 as seq,
+                 coalesce(round(extract(epoch from (now() - r.started_at))::numeric, 2), 0) as t
+          from runs r left join run_events e on e.run_id = r.id
+          where r.id = ${runId}`);
+        const row = next.rows[0] as { seq: string | number; t: string | number } | undefined;
+        if (!row) throw new Error(`run ${runId} not found`);
+        const seq = Number(row.seq);
+        const t = tOverride ?? Number(row.t);
+        await tx.execute(sql`
+          insert into run_events (run_id, seq, t, type, actor_agent_id, payload)
+          values (${runId}, ${seq}, ${t}, ${type}, ${actorAgentId}, ${JSON.stringify(parsed)}::jsonb)`);
+        if (type === "budget.update" && typeof payload.costUsd === "number") {
+          await tx.execute(sql`update runs set cost_usd = greatest(cost_usd, ${payload.costUsd}) where id = ${runId}`);
+        }
+        const event: RunEvent = { runId, seq, t, type, actorAgentId, payload: parsed };
+        hooks.onEvent?.(event);
+        return event;
+      });
+    } catch (err) {
+      const notFound = err instanceof Error && /not found/i.test(err.message);
+      if (attempt >= 5 || notFound) throw err;
+      const { promise, resolve } = Promise.withResolvers<void>();
+      setTimeout(resolve, 25 * attempt);
+      await promise;
+    }
+  }
+}
+
+export function createRunWriterWith(db: Db, hooks: RunWriterHooks = {}): RunWriter {
+  return {
+    async createTask(i) {
+      const base = slugId(i.title);
+      const counts = await db.db.execute(sql`
+        select count(*) filter (where id = ${base}) as taken, count(*) as total from tasks`);
+      const { taken, total } = counts.rows[0] as { taken: string; total: string };
+      const id = Number(taken) > 0 ? `${base}-${Number(total) + 1}` : base;
+      await db.db.execute(sql`
+        insert into tasks (id, project_id, team_id, title, recording_key, session_id)
+        values (${id}, ${i.projectId}, ${i.teamId}, ${i.title}, ${i.recordingKey ?? null}, ${i.sessionId ?? null})`);
+      const task: Task = { id, projectId: i.projectId, teamId: i.teamId, title: i.title, runIds: [], recordingKey: i.recordingKey, sessionId: i.sessionId };
+      return task;
+    },
+
+    async startRun(taskId, brief, budget) {
+      const runId = await db.db.transaction(async (tx) => {
+        await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${`task:${taskId}`}, 0))`);
+        const taskRow = await tx.execute(sql`select team_id from tasks where id = ${taskId}`);
+        const teamId = (taskRow.rows[0] as { team_id: string } | undefined)?.team_id;
+        if (!teamId) throw new Error(`task ${taskId} not found`);
+        const next = await tx.execute(sql`select coalesce(max(n), 0) + 1 as n from runs where task_id = ${taskId}`);
+        const n = Number((next.rows[0] as { n: string | number }).n);
+        const id = `run-${taskId}-${n}`;
+        await tx.execute(sql`
+          insert into runs (id, task_id, team_id, n, objective, status, brief, budget, rework_budget, assistant_tokens, started_at)
+          values (${id}, ${taskId}, ${teamId}, ${n}, ${brief.objective}, 'running', ${JSON.stringify(brief)}::jsonb,
+                  ${JSON.stringify(budget)}::jsonb, ${budget.rework}, ${brief.tokens}, now())`);
+        return id;
+      });
+      await emitRow(db, hooks, runId, "run.started", undefined, { objective: brief.objective });
+      const run = await db.db.execute(sql`select * from runs where id = ${runId}`);
+      return rowToRun(run.rows[0] as unknown as RunRowLike, [], Date.now());
+    },
+
+    emit: (runId, type, actor, payload) =>
+      emitRow(db, hooks, runId, type, actor, payload as Record<string, unknown>),
+
+    async saveSnapshot(s) {
+      const count = await db.db.execute(sql`select count(*) as n from context_snapshots where run_id = ${s.runId}`);
+      const n = Number((count.rows[0] as { n: string }).n);
+      const id = `snap-${s.runId}-${n + 1}`;
+      await db.db.execute(sql`
+        insert into context_snapshots (id, ord, run_id, agent_id, step, assembled_at_s, sections, total_tokens, tools, last_denied, not_loaded, note, sandbox)
+        values (${id}, ${n + 1}, ${s.runId}, ${s.agentId}, ${s.step}, ${s.assembledAtS}, ${JSON.stringify(s.sections)}::jsonb,
+                ${s.totalTokens}, ${JSON.stringify(s.tools)}::jsonb, ${s.lastDenied ?? null}, ${s.notLoaded}, ${s.note}, ${s.sandbox ?? null})`);
+      const snapshot: ContextSnapshot = { ...s, id };
+      await emitRow(db, hooks, s.runId, "context.snapshot", s.agentId, { snapshotId: id }, s.assembledAtS);
+      return snapshot;
+    },
+
+    async saveArtifact(runId, a) {
+      const count = await db.db.execute(sql`select count(*) as n from artifacts where run_id = ${runId}`);
+      const n = Number((count.rows[0] as { n: string }).n);
+      const id = `art-${runId}-${n + 1}`;
+      const isBinary = typeof a.content !== "string";
+      await db.db.execute(sql`
+        insert into artifacts (id, run_id, name, by, ord, content_type, content)
+        values (${id}, ${runId}, ${a.name}, ${a.by}, ${n + 1}, ${isBinary ? "application/octet-stream" : "text/plain"},
+                ${isBinary ? Buffer.from(a.content as Uint8Array).toString("base64") : (a.content as string)})`);
+      await emitRow(db, hooks, runId, "artifact.created", a.by, { name: a.name, artifactId: id });
+      return { id };
+    },
+
+    async end(runId, status, outcome) {
+      const updated = await db.db.execute(sql`
+        update runs set status = ${status}, ended_at = now(),
+          duration_s = coalesce(duration_s, round(extract(epoch from (now() - started_at))::numeric, 2)),
+          outcome = coalesce(${outcome ?? null}, outcome)
+        where id = ${runId} and finalized_at is null
+        returning id`);
+      if (updated.rows.length !== 1) return; // already finalized: end() is a no-op
+      await hooks.onEnd?.(runId, status);
+    },
+  };
+}
+
+/** Emit with an explicit `t`: import playback and finalize's run.finished at the merged timeline end. */
+export function emitAt(db: Db, runId: string, type: RunEventType, actor: string | undefined, payload: RunEventPayloads[RunEventType], t: number, hooks: RunWriterHooks = {}): Promise<RunEvent> {
+  return emitRow(db, hooks, runId, type, actor, payload as Record<string, unknown>, t);
+}
+
+/** Maps one runs row to the contract Run; segments derive from the given (merged) event log. */
+export function rowToRun(row: RunRowLike, events: Parameters<typeof deriveSegments>[0], nowMs: number): Run {
+  const startedMs = new Date(row.started_at).getTime();
+  const maxEventT = events.reduce((m, e) => Math.max(m, e.t), 0);
+  const durationS =
+    row.duration_s != null ? Number(row.duration_s)
+    : row.ended_at ? (new Date(row.ended_at).getTime() - startedMs) / 1000
+    : Math.max(maxEventT, (nowMs - startedMs) / 1000);
+  return {
+    id: row.id,
+    taskId: row.task_id ?? "",
+    teamId: row.team_id,
+    n: Number(row.n),
+    objective: row.objective,
+    status: row.status as Run["status"],
+    startedAt: new Date(row.started_at).toISOString(),
+    recorded: row.recorded,
+    durationS: Math.round(durationS),
+    etaS: row.eta_s != null ? Number(row.eta_s) : undefined,
+    costUsd: Number(row.cost_usd),
+    budget: row.budget,
+    reworkBudget: row.rework_budget,
+    assistantTokens: row.assistant_tokens,
+    brief: row.brief,
+    segments: deriveSegments(events, durationS),
+    outcome: row.outcome ?? undefined,
+    reportId: row.report_id ?? undefined,
+    recording: row.recording_key
+      ? { key: row.recording_key, kind: (row.recording_kind ?? "illustrative") as RecordingKind, spliceT: row.splice_t != null ? Number(row.splice_t) : undefined }
+      : undefined,
+  };
+}

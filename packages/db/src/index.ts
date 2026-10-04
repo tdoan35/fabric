@@ -1,7 +1,8 @@
 // @fabric/db — DATA owns this package: Drizzle schema, migrations, seed profiles and the RunWriter.
-import { NotImplementedError } from "@fabric/contracts";
 import type { Brief, ContextSnapshot, Run, RunEvent, RunEventPayloads, RunEventType, RunStatus, Task } from "@fabric/contracts";
-
+import { createDb } from "./db";
+import type { Db } from "./db";
+import { createRunWriterWith } from "./writer";
 /** The only way anything writes to a run (WORK-PLAN §4.6). Stamps seq and t; validates payloads. */
 export interface RunWriter {
   createTask(i: { projectId: string; teamId: string; title: string; sessionId?: string; recordingKey?: string }): Promise<Task>;
@@ -19,6 +20,21 @@ export interface RunWriterHooks {
   onEnd?: (runId: string, status: Exclude<RunStatus, "running">) => void | Promise<void>;
 }
 
-export function createRunWriter(_hooks: RunWriterHooks = {}): RunWriter {
-  throw new NotImplementedError("DATA", "createRunWriter");
+/** Spec entry point (§4.6): builds its own pool from DATABASE_URL. The server uses createRunWriterWith. */
+export function createRunWriter(hooks: RunWriterHooks = {}): RunWriter {
+  return createRunWriterWith(createDb(), hooks);
 }
+
+export { createDb, loadRootEnv } from "./db";
+export type { Db } from "./db";
+export { createRunWriterWith, emitAt, slugId, rowToRun } from "./writer";
+export { deriveSegments } from "./derive";
+export { importRecording, exportRecording } from "./recordings";
+export type { ImportedRecording } from "./recordings";
+export {
+  getRunRow, latestRecordingRun, listProjects, listRuns, listSnapshots, listStoredEvents, listTasks,
+  mergedEvents, readArtifact, readRegistry, readReport, readRun, readTask, readWeave,
+} from "./read";
+export type { RunRowLike } from "./read";
+export * as schema from "./schema";
+export type { AgentToolRow } from "./schema";

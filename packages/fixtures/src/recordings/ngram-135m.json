@@ -1,0 +1,1185 @@
+{
+  "key": "ngram-135m",
+  "kind": "illustrative",
+  "exportedAt": "2026-10-03T19:13:46.283Z",
+  "run": {
+    "idHint": "run-ngram-1",
+    "objective": "Does an n-gram lookup table improve a much smaller open model?",
+    "status": "accepted",
+    "startedAt": "2026-09-29T13:04:00-07:00",
+    "durationS": 11520,
+    "costUsd": 0.42,
+    "budget": {
+      "costUsd": 1,
+      "timeS": 14400
+    },
+    "reworkBudget": 2,
+    "assistantTokens": 2140,
+    "brief": {
+      "tokens": 1290,
+      "objective": "Test whether fusing an n-gram lookup table into a 135M open model lowers held-out perplexity, with the table kept on disk instead of in RAM.",
+      "constraints": [
+        "Cached corpus only; no new downloads",
+        "One base model and one interpolation weight to start",
+        "The table stays on disk, never loaded into RAM",
+        "Measured results reported apart from speculation"
+      ],
+      "criteria": [
+        "Baseline and fused model evaluated on the same split",
+        "Held-out split never seen by the n-gram table",
+        "Sana reproduces the headline number",
+        "Report states caveats and what would change the verdict"
+      ],
+      "preferences": [
+        "Short status updates",
+        "Results with evidence, not adjectives"
+      ],
+      "stayed": [
+        "Your chat with Dana",
+        "Dana's memory of you",
+        "Your other threads and projects"
+      ]
+    },
+    "outcome": "Carlos accepted it after one rework. The first attempt's gain came from split overlap and is left out of the report."
+  },
+  "events": [
+    {
+      "t": 0,
+      "type": "run.started",
+      "payload": {
+        "objective": "Does an n-gram lookup table improve a much smaller open model?"
+      }
+    },
+    {
+      "t": 0,
+      "type": "step.started",
+      "actorAgentId": "elliot",
+      "payload": {
+        "label": "Plan",
+        "stage": "Plan",
+        "kind": "work"
+      }
+    },
+    {
+      "t": 2,
+      "type": "agent.message",
+      "actorAgentId": "elliot",
+      "payload": {
+        "text": "Drafting the plan: survey, environment and held-out checks in parallel."
+      }
+    },
+    {
+      "t": 6,
+      "type": "step.started",
+      "actorAgentId": "megan",
+      "payload": {
+        "label": "Survey",
+        "stage": "Prepare",
+        "kind": "work"
+      }
+    },
+    {
+      "t": 6,
+      "type": "step.started",
+      "actorAgentId": "jonah",
+      "payload": {
+        "label": "Setup",
+        "stage": "Prepare",
+        "kind": "work"
+      }
+    },
+    {
+      "t": 6,
+      "type": "step.started",
+      "actorAgentId": "sana",
+      "payload": {
+        "label": "Prep checks",
+        "stage": "Prepare",
+        "kind": "work"
+      }
+    },
+    {
+      "t": 6,
+      "type": "agent.message",
+      "actorAgentId": "megan",
+      "payload": {
+        "text": "exa.search “engram conditional memory n-gram lookup” · fast"
+      }
+    },
+    {
+      "t": 8,
+      "type": "tool.result",
+      "actorAgentId": "jonah",
+      "payload": {
+        "line": "$ sprite exec pip install torch transformers --quiet",
+        "kind": "term"
+      }
+    },
+    {
+      "t": 11,
+      "type": "agent.message",
+      "actorAgentId": "megan",
+      "payload": {
+        "text": "8 results · 3 highlights kept (Engram, kNN-LM, n-gram LM fusion)"
+      }
+    },
+    {
+      "t": 12,
+      "type": "agent.message",
+      "actorAgentId": "sana",
+      "payload": {
+        "text": "Drafting the held-out split spec, independent of Elliot's plan."
+      }
+    },
+    {
+      "t": 17,
+      "type": "tool.result",
+      "actorAgentId": "jonah",
+      "payload": {
+        "line": "installed transformers 4.51 · torch 2.6",
+        "kind": "term"
+      }
+    },
+    {
+      "t": 19,
+      "type": "agent.message",
+      "actorAgentId": "megan",
+      "payload": {
+        "text": "exa.search “offload embedding tables to NAND flash inference” · fast"
+      }
+    },
+    {
+      "t": 24,
+      "type": "tool.result",
+      "actorAgentId": "jonah",
+      "payload": {
+        "line": "$ python setup_baseline.py --model 135m",
+        "kind": "term"
+      }
+    },
+    {
+      "t": 27,
+      "type": "agent.message",
+      "actorAgentId": "megan",
+      "payload": {
+        "text": "6 results · 2 highlights kept"
+      }
+    },
+    {
+      "t": 30,
+      "type": "agent.message",
+      "actorAgentId": "sana",
+      "payload": {
+        "text": "Split fixed: 20% held out."
+      }
+    },
+    {
+      "t": 33,
+      "type": "tool.result",
+      "actorAgentId": "jonah",
+      "payload": {
+        "line": "loading base model · 135M params",
+        "kind": "term"
+      }
+    },
+    {
+      "t": 41,
+      "type": "tool.result",
+      "actorAgentId": "jonah",
+      "payload": {
+        "line": "baseline harness ready",
+        "kind": "term"
+      }
+    },
+    {
+      "t": 720,
+      "type": "step.finished",
+      "actorAgentId": "elliot",
+      "payload": {
+        "label": "Plan",
+        "stage": "Plan",
+        "kind": "work"
+      }
+    },
+    {
+      "t": 720,
+      "type": "artifact.created",
+      "actorAgentId": "elliot",
+      "payload": {
+        "name": "plan.md"
+      }
+    },
+    {
+      "t": 2400,
+      "type": "agent.message",
+      "actorAgentId": "megan",
+      "payload": {
+        "text": "Read 9 papers; Engram reports gains only above 1B parameters."
+      }
+    },
+    {
+      "t": 3000,
+      "type": "step.finished",
+      "actorAgentId": "sana",
+      "payload": {
+        "label": "Prep checks",
+        "stage": "Prepare",
+        "kind": "work"
+      }
+    },
+    {
+      "t": 3300,
+      "type": "step.finished",
+      "actorAgentId": "megan",
+      "payload": {
+        "label": "Survey",
+        "stage": "Prepare",
+        "kind": "work"
+      }
+    },
+    {
+      "t": 3300,
+      "type": "artifact.created",
+      "actorAgentId": "megan",
+      "payload": {
+        "name": "literature-survey.md"
+      }
+    },
+    {
+      "t": 3480,
+      "type": "step.finished",
+      "actorAgentId": "jonah",
+      "payload": {
+        "label": "Setup",
+        "stage": "Prepare",
+        "kind": "work"
+      }
+    },
+    {
+      "t": 3720,
+      "type": "step.started",
+      "actorAgentId": "elliot",
+      "payload": {
+        "label": "Synthesize",
+        "stage": "Synthesize",
+        "kind": "work"
+      }
+    },
+    {
+      "t": 3780,
+      "type": "agent.message",
+      "actorAgentId": "elliot",
+      "payload": {
+        "text": "Synthesis: test a 4-gram table at λ = 0.30 against the plain baseline."
+      }
+    },
+    {
+      "t": 4560,
+      "type": "step.finished",
+      "actorAgentId": "elliot",
+      "payload": {
+        "label": "Synthesize",
+        "stage": "Synthesize",
+        "kind": "work"
+      }
+    },
+    {
+      "t": 4560,
+      "type": "step.started",
+      "actorAgentId": "jonah",
+      "payload": {
+        "label": "Implement",
+        "stage": "Implement",
+        "kind": "work"
+      }
+    },
+    {
+      "t": 4560,
+      "type": "handoff",
+      "actorAgentId": "elliot",
+      "payload": {
+        "to": "jonah",
+        "step": "Implement"
+      }
+    },
+    {
+      "t": 4620,
+      "type": "tool.result",
+      "actorAgentId": "jonah",
+      "payload": {
+        "line": "$ python build_ngram.py --n 4 --corpus data/",
+        "kind": "term"
+      }
+    },
+    {
+      "t": 5400,
+      "type": "tool.result",
+      "actorAgentId": "jonah",
+      "payload": {
+        "line": "table built · 4-gram · stored on disk, not RAM",
+        "kind": "term"
+      }
+    },
+    {
+      "t": 6000,
+      "type": "tool.result",
+      "actorAgentId": "jonah",
+      "payload": {
+        "line": "$ python eval.py --split heldout",
+        "kind": "term"
+      }
+    },
+    {
+      "t": 6480,
+      "type": "tool.result",
+      "actorAgentId": "jonah",
+      "payload": {
+        "line": "evaluating baseline …",
+        "kind": "term"
+      }
+    },
+    {
+      "t": 6900,
+      "type": "tool.result",
+      "actorAgentId": "jonah",
+      "payload": {
+        "line": "evaluating fused (λ = 0.30) …",
+        "kind": "term"
+      }
+    },
+    {
+      "t": 7080,
+      "type": "tool.result",
+      "actorAgentId": "jonah",
+      "payload": {
+        "line": "fused: ppl 19.8 · baseline 34.2",
+        "kind": "term"
+      }
+    },
+    {
+      "t": 7260,
+      "type": "tool.denied",
+      "actorAgentId": "jonah",
+      "payload": {
+        "tool": "network.fetch",
+        "target": "files.example.org",
+        "reason": "not on the egress list"
+      }
+    },
+    {
+      "t": 7320,
+      "type": "step.finished",
+      "actorAgentId": "jonah",
+      "payload": {
+        "label": "Implement",
+        "stage": "Implement",
+        "kind": "work"
+      }
+    },
+    {
+      "t": 7320,
+      "type": "step.started",
+      "actorAgentId": "sana",
+      "payload": {
+        "label": "Validate",
+        "stage": "Validate",
+        "kind": "work"
+      }
+    },
+    {
+      "t": 7320,
+      "type": "artifact.created",
+      "actorAgentId": "jonah",
+      "payload": {
+        "name": "code-bundle.zip"
+      }
+    },
+    {
+      "t": 7440,
+      "type": "agent.message",
+      "actorAgentId": "sana",
+      "payload": {
+        "text": "Running held-out checks on attempt 1."
+      }
+    },
+    {
+      "t": 7800,
+      "type": "criterion.checked",
+      "actorAgentId": "sana",
+      "payload": {
+        "index": 0,
+        "pass": true,
+        "note": "Both models scored on heldout-v1"
+      }
+    },
+    {
+      "t": 8760,
+      "type": "agent.message",
+      "actorAgentId": "sana",
+      "payload": {
+        "text": "Overlap: 41% of eval n-grams are in the table's corpus."
+      }
+    },
+    {
+      "t": 8760,
+      "type": "criterion.checked",
+      "actorAgentId": "sana",
+      "payload": {
+        "index": 1,
+        "pass": false,
+        "note": "41% of eval n-grams appear in the table's corpus"
+      }
+    },
+    {
+      "t": 8880,
+      "type": "step.finished",
+      "actorAgentId": "sana",
+      "payload": {
+        "label": "Validate",
+        "stage": "Validate",
+        "kind": "work"
+      }
+    },
+    {
+      "t": 8880,
+      "type": "step.started",
+      "actorAgentId": "carlos",
+      "payload": {
+        "label": "Bounced",
+        "stage": "Review",
+        "kind": "bounce"
+      }
+    },
+    {
+      "t": 9300,
+      "type": "review.verdict",
+      "actorAgentId": "carlos",
+      "payload": {
+        "verdict": "request_changes",
+        "text": "The first attempt's results are contaminated: the n-gram table was built on text that overlaps the evaluation split. Back to Elliot to re-plan with a held-out corpus."
+      }
+    },
+    {
+      "t": 9300,
+      "type": "rework.requested",
+      "actorAgentId": "carlos",
+      "payload": {
+        "to": "elliot",
+        "used": 1,
+        "budget": 2
+      }
+    },
+    {
+      "t": 9300,
+      "type": "budget.update",
+      "payload": {
+        "reworkUsed": 1,
+        "reworkBudget": 2
+      }
+    },
+    {
+      "t": 9480,
+      "type": "step.finished",
+      "actorAgentId": "carlos",
+      "payload": {
+        "label": "Bounced",
+        "stage": "Review",
+        "kind": "bounce"
+      }
+    },
+    {
+      "t": 9480,
+      "type": "step.started",
+      "actorAgentId": "elliot",
+      "payload": {
+        "label": "Re-plan",
+        "stage": "Plan",
+        "kind": "work"
+      }
+    },
+    {
+      "t": 9480,
+      "type": "handoff",
+      "actorAgentId": "carlos",
+      "payload": {
+        "to": "elliot"
+      }
+    },
+    {
+      "t": 9600,
+      "type": "agent.message",
+      "actorAgentId": "elliot",
+      "payload": {
+        "text": "Re-plan: rebuild the table from train_only/ and re-run both models."
+      }
+    },
+    {
+      "t": 10260,
+      "type": "step.finished",
+      "actorAgentId": "elliot",
+      "payload": {
+        "label": "Re-plan",
+        "stage": "Plan",
+        "kind": "work"
+      }
+    },
+    {
+      "t": 10260,
+      "type": "step.started",
+      "actorAgentId": "jonah",
+      "payload": {
+        "label": "Rework",
+        "stage": "Implement",
+        "kind": "rework"
+      }
+    },
+    {
+      "t": 10320,
+      "type": "tool.result",
+      "actorAgentId": "jonah",
+      "payload": {
+        "line": "$ python build_ngram.py --n 4 --corpus data/train_only/",
+        "kind": "term"
+      }
+    },
+    {
+      "t": 10680,
+      "type": "tool.result",
+      "actorAgentId": "jonah",
+      "payload": {
+        "line": "$ python eval.py --split heldout",
+        "kind": "term"
+      }
+    },
+    {
+      "t": 10920,
+      "type": "tool.result",
+      "actorAgentId": "jonah",
+      "payload": {
+        "line": "fused (λ = 0.30): ppl 30.9 · baseline 34.2",
+        "kind": "term"
+      }
+    },
+    {
+      "t": 10980,
+      "type": "step.finished",
+      "actorAgentId": "jonah",
+      "payload": {
+        "label": "Rework",
+        "stage": "Implement",
+        "kind": "rework"
+      }
+    },
+    {
+      "t": 10980,
+      "type": "step.started",
+      "actorAgentId": "sana",
+      "payload": {
+        "label": "Re-check",
+        "stage": "Validate",
+        "kind": "work"
+      }
+    },
+    {
+      "t": 11040,
+      "type": "agent.message",
+      "actorAgentId": "sana",
+      "payload": {
+        "text": "Re-checking attempt 2 in my own sandbox."
+      }
+    },
+    {
+      "t": 11100,
+      "type": "criterion.checked",
+      "actorAgentId": "sana",
+      "payload": {
+        "index": 1,
+        "pass": true,
+        "note": "Rebuilt on train_only/: 0% overlap"
+      }
+    },
+    {
+      "t": 11280,
+      "type": "step.finished",
+      "actorAgentId": "sana",
+      "payload": {
+        "label": "Re-check",
+        "stage": "Validate",
+        "kind": "work"
+      }
+    },
+    {
+      "t": 11280,
+      "type": "step.started",
+      "actorAgentId": "carlos",
+      "payload": {
+        "label": "Accepted",
+        "stage": "Review",
+        "kind": "work"
+      }
+    },
+    {
+      "t": 11280,
+      "type": "criterion.checked",
+      "actorAgentId": "sana",
+      "payload": {
+        "index": 2,
+        "pass": true,
+        "note": "Reproduced 30.9 ± 0.2 independently"
+      }
+    },
+    {
+      "t": 11280,
+      "type": "artifact.created",
+      "actorAgentId": "sana",
+      "payload": {
+        "name": "eval-log.jsonl"
+      }
+    },
+    {
+      "t": 11400,
+      "type": "review.verdict",
+      "actorAgentId": "carlos",
+      "payload": {
+        "verdict": "accept",
+        "text": "The corrected run is valid and Sana reproduced it. Accepted after one rework."
+      }
+    },
+    {
+      "t": 11460,
+      "type": "criterion.checked",
+      "actorAgentId": "carlos",
+      "payload": {
+        "index": 3,
+        "pass": true,
+        "note": "Caveats and the proxy's limits are stated"
+      }
+    },
+    {
+      "t": 11520,
+      "type": "step.finished",
+      "actorAgentId": "carlos",
+      "payload": {
+        "label": "Accepted",
+        "stage": "Review",
+        "kind": "work"
+      }
+    },
+    {
+      "t": 11520,
+      "type": "run.finished",
+      "payload": {
+        "reportId": "report-ngram-1"
+      }
+    }
+  ],
+  "snapshots": [
+    {
+      "agentId": "elliot",
+      "step": "Plan",
+      "assembledAtS": 1,
+      "sections": [
+        {
+          "label": "Soul / identity",
+          "source": "SOUL.md · IDENTITY.md",
+          "tokens": 904
+        },
+        {
+          "label": "Task brief",
+          "source": "compiled by Dana",
+          "tokens": 1290
+        },
+        {
+          "label": "Tools & policy",
+          "source": "Executor",
+          "tokens": 640
+        },
+        {
+          "label": "User preferences",
+          "source": "USER.md · 2 items",
+          "tokens": 240
+        },
+        {
+          "label": "Artifact references",
+          "source": "links, not content",
+          "tokens": 0
+        },
+        {
+          "label": "Team knowledge",
+          "source": "retrieved on demand",
+          "tokens": 420
+        }
+      ],
+      "tools": [
+        {
+          "name": "artifacts.read",
+          "policy": "allowed"
+        },
+        {
+          "name": "workspace.write",
+          "policy": "allowed"
+        },
+        {
+          "name": "team.assign",
+          "policy": "allowed"
+        },
+        {
+          "name": "network.fetch",
+          "policy": "blocked"
+        }
+      ],
+      "notLoaded": "your chat transcript · personal memory · members' tool schemas",
+      "note": "Soul, brief and the team's workflow. Members' tools stay with them.",
+      "totalTokens": 3494,
+      "idHint": "snap-elliot-plan"
+    },
+    {
+      "agentId": "megan",
+      "step": "Survey",
+      "assembledAtS": 4,
+      "sections": [
+        {
+          "label": "Soul / identity",
+          "source": "SOUL.md · IDENTITY.md",
+          "tokens": 712
+        },
+        {
+          "label": "Task brief",
+          "source": "compiled by Dana",
+          "tokens": 1290
+        },
+        {
+          "label": "Tools & policy",
+          "source": "Executor",
+          "tokens": 520
+        },
+        {
+          "label": "User preferences",
+          "source": "USER.md · 2 items",
+          "tokens": 240
+        },
+        {
+          "label": "Artifact references",
+          "source": "links, not content",
+          "tokens": 0
+        },
+        {
+          "label": "Team knowledge",
+          "source": "retrieved on demand",
+          "tokens": 0
+        }
+      ],
+      "tools": [
+        {
+          "name": "exa.search",
+          "policy": "allowed"
+        },
+        {
+          "name": "artifacts.write",
+          "policy": "allowed"
+        },
+        {
+          "name": "sprite.exec",
+          "policy": "blocked"
+        }
+      ],
+      "notLoaded": "your chat transcript · personal memory · the code sandbox",
+      "note": "Soul, brief and search tools. No sandbox, no personal memory.",
+      "totalTokens": 2762,
+      "idHint": "snap-megan-survey"
+    },
+    {
+      "agentId": "jonah",
+      "step": "Setup",
+      "assembledAtS": 6,
+      "sections": [
+        {
+          "label": "Soul / identity",
+          "source": "SOUL.md · IDENTITY.md",
+          "tokens": 812
+        },
+        {
+          "label": "Task brief",
+          "source": "compiled by Dana",
+          "tokens": 1290
+        },
+        {
+          "label": "Tools & policy",
+          "source": "Executor",
+          "tokens": 1860
+        },
+        {
+          "label": "User preferences",
+          "source": "USER.md · 2 items",
+          "tokens": 240
+        },
+        {
+          "label": "Artifact references",
+          "source": "links, not content",
+          "tokens": 0
+        },
+        {
+          "label": "Team knowledge",
+          "source": "retrieved on demand",
+          "tokens": 0
+        }
+      ],
+      "tools": [
+        {
+          "name": "sprite.exec",
+          "policy": "allowed"
+        },
+        {
+          "name": "workspace.write",
+          "policy": "allowed"
+        },
+        {
+          "name": "artifacts.read",
+          "policy": "allowed"
+        },
+        {
+          "name": "agentmail.send",
+          "policy": "approval"
+        },
+        {
+          "name": "network.fetch",
+          "policy": "blocked"
+        }
+      ],
+      "notLoaded": "your chat transcript · personal memory · other specialists' skills",
+      "note": "Soul, task brief, tool policy. No chat transcript, no personal memory.",
+      "totalTokens": 4202,
+      "idHint": "snap-jonah-setup"
+    },
+    {
+      "agentId": "sana",
+      "step": "Prep checks",
+      "assembledAtS": 10,
+      "sections": [
+        {
+          "label": "Soul / identity",
+          "source": "SOUL.md · IDENTITY.md",
+          "tokens": 640
+        },
+        {
+          "label": "Task brief",
+          "source": "compiled by Dana",
+          "tokens": 1290
+        },
+        {
+          "label": "Tools & policy",
+          "source": "Executor",
+          "tokens": 1010
+        },
+        {
+          "label": "User preferences",
+          "source": "USER.md · 0 items",
+          "tokens": 0
+        },
+        {
+          "label": "Artifact references",
+          "source": "links, not content",
+          "tokens": 0
+        },
+        {
+          "label": "Team knowledge",
+          "source": "retrieved on demand",
+          "tokens": 0
+        }
+      ],
+      "tools": [
+        {
+          "name": "artifacts.read",
+          "policy": "allowed"
+        },
+        {
+          "name": "sprite.exec",
+          "policy": "allowed"
+        },
+        {
+          "name": "workspace.write",
+          "policy": "blocked"
+        },
+        {
+          "name": "agentmail.send",
+          "policy": "blocked"
+        }
+      ],
+      "notLoaded": "your chat transcript · personal memory · Elliot's plan rationale",
+      "note": "Restricted: cannot edit acceptance criteria.",
+      "totalTokens": 2940,
+      "idHint": "snap-sana-prep"
+    },
+    {
+      "agentId": "jonah",
+      "step": "Implement",
+      "assembledAtS": 4560,
+      "sections": [
+        {
+          "label": "Soul / identity",
+          "source": "SOUL.md · IDENTITY.md",
+          "tokens": 812
+        },
+        {
+          "label": "Task brief",
+          "source": "compiled by Dana",
+          "tokens": 1290
+        },
+        {
+          "label": "Tools & policy",
+          "source": "Executor",
+          "tokens": 1860
+        },
+        {
+          "label": "User preferences",
+          "source": "USER.md · 2 items",
+          "tokens": 240
+        },
+        {
+          "label": "Artifact references",
+          "source": "links, not content",
+          "tokens": 310
+        },
+        {
+          "label": "Team knowledge",
+          "source": "retrieved on demand",
+          "tokens": 1900
+        }
+      ],
+      "tools": [
+        {
+          "name": "sprite.exec",
+          "policy": "allowed"
+        },
+        {
+          "name": "workspace.write",
+          "policy": "allowed"
+        },
+        {
+          "name": "artifacts.read",
+          "policy": "allowed"
+        },
+        {
+          "name": "agentmail.send",
+          "policy": "approval"
+        },
+        {
+          "name": "network.fetch",
+          "policy": "blocked"
+        }
+      ],
+      "notLoaded": "your chat transcript · personal memory · other specialists' skills",
+      "note": "Soul, task brief, tool policy, 2 artifact refs. No chat transcript, no personal memory.",
+      "totalTokens": 6412,
+      "idHint": "snap-jonah-implement"
+    },
+    {
+      "agentId": "sana",
+      "step": "Validate",
+      "assembledAtS": 7320,
+      "sections": [
+        {
+          "label": "Soul / identity",
+          "source": "SOUL.md · IDENTITY.md",
+          "tokens": 640
+        },
+        {
+          "label": "Task brief",
+          "source": "compiled by Dana",
+          "tokens": 1290
+        },
+        {
+          "label": "Tools & policy",
+          "source": "Executor",
+          "tokens": 1210
+        },
+        {
+          "label": "User preferences",
+          "source": "USER.md · 0 items",
+          "tokens": 0
+        },
+        {
+          "label": "Artifact references",
+          "source": "links, not content",
+          "tokens": 240
+        },
+        {
+          "label": "Team knowledge",
+          "source": "retrieved on demand",
+          "tokens": 800
+        }
+      ],
+      "tools": [
+        {
+          "name": "artifacts.read",
+          "policy": "allowed"
+        },
+        {
+          "name": "sprite.exec",
+          "policy": "allowed"
+        },
+        {
+          "name": "workspace.write",
+          "policy": "blocked"
+        },
+        {
+          "name": "agentmail.send",
+          "policy": "blocked"
+        }
+      ],
+      "notLoaded": "your chat transcript · personal memory · Elliot's plan rationale",
+      "note": "Restricted: cannot edit acceptance criteria. Sees project facts, never yours.",
+      "totalTokens": 4180,
+      "idHint": "snap-sana-validate"
+    },
+    {
+      "agentId": "carlos",
+      "step": "Review",
+      "assembledAtS": 8880,
+      "sections": [
+        {
+          "label": "Soul / identity",
+          "source": "SOUL.md · IDENTITY.md",
+          "tokens": 760
+        },
+        {
+          "label": "Task brief",
+          "source": "compiled by Dana",
+          "tokens": 1290
+        },
+        {
+          "label": "Tools & policy",
+          "source": "Executor",
+          "tokens": 380
+        },
+        {
+          "label": "User preferences",
+          "source": "USER.md · 0 items",
+          "tokens": 0
+        },
+        {
+          "label": "Artifact references",
+          "source": "links, not content",
+          "tokens": 520
+        },
+        {
+          "label": "Team knowledge",
+          "source": "retrieved on demand",
+          "tokens": 600
+        }
+      ],
+      "tools": [
+        {
+          "name": "artifacts.read",
+          "policy": "allowed"
+        },
+        {
+          "name": "workspace.write",
+          "policy": "blocked"
+        }
+      ],
+      "notLoaded": "your chat transcript · personal memory · Elliot's plan rationale",
+      "note": "Reads the evidence, not the reasoning that produced it, so the review stays independent.",
+      "totalTokens": 3550,
+      "idHint": "snap-carlos-review"
+    }
+  ],
+  "artifacts": [
+    {
+      "name": "plan.md",
+      "by": "elliot",
+      "contentType": "text/markdown",
+      "content": "# Plan — n-gram fusion on a 135M model\n\n(illustrative bundle; the mock loop's plan artifact)\n"
+    },
+    {
+      "name": "literature-survey.md",
+      "by": "megan",
+      "contentType": "text/markdown",
+      "content": "# Literature survey\n\nRead 9 papers; Engram reports gains only above 1B parameters.\n(illustrative bundle)\n"
+    },
+    {
+      "name": "code-bundle.zip",
+      "by": "jonah",
+      "contentType": "application/zip",
+      "content": "(illustrative bundle: binary placeholder for the mock loop's code bundle)\n"
+    },
+    {
+      "name": "eval-log.jsonl",
+      "by": "sana",
+      "contentType": "text/plain",
+      "content": "{\"split\":\"heldout-v1\",\"config\":\"fused λ=0.30\",\"ppl\":30.9}\n{\"config\":\"baseline\",\"ppl\":34.2}\n"
+    }
+  ],
+  "report": {
+    "title": "Does an n-gram lookup table improve a much smaller open model?",
+    "intro": "The Research Team produced this report. Findings separate what was measured from what is speculation.",
+    "summary": "Fusing an inference-time n-gram table with a 135M-parameter model lowers held-out perplexity. The first attempt looked far better, but its table overlapped the evaluation text; Carlos caught this and the corrected run shows a smaller, valid gain. This is a proxy for a trained-in Engram, not a test of one.",
+    "results": [
+      {
+        "config": "Baseline · 135M model",
+        "ppl": 34.2,
+        "delta": "—",
+        "valid": true
+      },
+      {
+        "config": "Fused · attempt 1",
+        "ppl": 19.8,
+        "delta": "−42%",
+        "valid": false
+      },
+      {
+        "config": "Fused · attempt 2 (held-out split)",
+        "ppl": 30.9,
+        "delta": "−9.6%",
+        "valid": true
+      }
+    ],
+    "caveats": [
+      "Inference-time fusion is a proxy; a trained-in Engram may behave differently.",
+      "One base model, one corpus, one interpolation weight.",
+      "Speculation: NAND-offloaded tables would keep this gain at consumer-hardware latency. Not measured."
+    ],
+    "provenance": [
+      {
+        "label": "Loop",
+        "value": "Loop 1 · recorded"
+      },
+      {
+        "label": "Reviewer verdict",
+        "value": "Accepted after 1 rework"
+      },
+      {
+        "label": "Rework used",
+        "value": "1 / 2"
+      },
+      {
+        "label": "Dana's context",
+        "value": "2.1k tokens"
+      }
+    ],
+    "madeBy": [
+      "elliot",
+      "megan",
+      "jonah",
+      "sana",
+      "carlos"
+    ],
+    "artifacts": [
+      {
+        "name": "code-bundle.zip",
+        "from": "Jonah · Sprite"
+      },
+      {
+        "name": "literature-survey.md",
+        "from": "Megan"
+      },
+      {
+        "name": "eval-log.jsonl",
+        "from": "Sana"
+      }
+    ],
+    "emailed": true,
+    "idHint": "report-ngram-1",
+    "kind": "illustrative"
+  }
+}
