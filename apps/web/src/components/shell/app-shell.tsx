@@ -21,7 +21,7 @@ import { useNeedsYouCount } from "@/lib/weave-store";
 import { Portrait } from "@/components/chat/assistant-hero";
 import { teamLead } from "@/components/chat/team-hero";
 import type { ChatAgent } from "@/lib/mock/assistant";
-import { sessionHref } from "@/lib/chat/session";
+import { SESSION_PARAM, sessionHref } from "@/lib/chat/session";
 import { TabsProvider } from "./tabs";
 import { TitleBar } from "./title-bar";
 
@@ -321,13 +321,15 @@ function SidebarResizeHandle({ width, onWidth, onDragging }: { width: number; on
 
 export function AppShell({ children }: { children: React.ReactNode }) {
   const registry = useRegistry();
-  const { pathname } = useLocation();
+  const { pathname, search } = useLocation();
+  // The thread on screen has nothing unread.
+  const openSession = pathname === "/" ? new URLSearchParams(search).get(SESSION_PARAM) : null;
   const [sidebarWidth, setSidebarWidth] = useState(256);
   const [resizing, setResizing] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [removed, setRemoved] = useState<Set<string>>(new Set());
   const [read, setRead] = useState<Set<string>>(new Set());
-  const items = registry.sessions.filter((x) => !x.projectId && !removed.has(x.id)).map((x) => read.has(x.id) && x.status === "unread" ? { ...x, status: "idle" as const } : x);
+  const items = registry.sessions.filter((x) => !x.projectId && !removed.has(x.id)).map((x) => (read.has(x.id) || x.id === openSession) && x.status === "unread" ? { ...x, status: "idle" as const } : x);
   const [pinned, setPinned] = useState<Set<string>>(new Set());
   const togglePin = (id: string) => setPinned((p) => { const n = new Set(p); if (n.has(id)) n.delete(id); else n.add(id); return n; });
   const ordered = [...items.filter((x) => pinned.has(x.id)), ...items.filter((x) => !pinned.has(x.id))];
