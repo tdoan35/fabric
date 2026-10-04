@@ -1,6 +1,6 @@
 import { Link } from "react-router";
 import { useAui, useAuiState, type ToolCallMessagePartProps } from "@assistant-ui/react";
-import { ArrowDown, ArrowRight, Check, ChevronRight, CircleCheck, CornerDownLeft, Mail, Rocket, Users, UserPlus } from "lucide-react";
+import { ArrowDown, ArrowRight, Check, ChevronRight, CircleCheck, CornerDownLeft, LoaderCircle, Mail, Rocket, Users, UserPlus } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { AgentAvatar, InitialAvatar } from "@/components/agent-avatar";
@@ -254,18 +254,37 @@ export function SpecialistProposalCard({ args, result, addResult, toolCallId }: 
 
 // ---- the handoff card ----
 
-export function HandoffCard({ args }: ToolCallMessagePartProps<HandoffPayload>) {
+const isHandoff = (v: unknown): v is HandoffPayload => !!v && typeof v === "object" && typeof (v as HandoffPayload).runId === "string";
+
+/**
+ * The handoff. A live turn streams the call as soon as Dana makes it, with only her own args; the
+ * payload (run, task, members) lands with the result a few seconds later — until then the card says
+ * it's handing off, and there's no loop to link to yet.
+ */
+export function HandoffCard({ args, result }: ToolCallMessagePartProps<HandoffPayload | { teamName?: string }, HandoffPayload>) {
   useRegistry();
-  const loop = args.taskId ? `/work/${args.taskId}?live=1` : `/runs/${args.runId}?live=1`;
+  const payload = isHandoff(result) ? result : isHandoff(args) ? args : undefined;
+  if (!payload) {
+    return (
+      <div className="my-3 rounded-xl border bg-card p-4">
+        <div className="flex items-center justify-between gap-2">
+          <div className="flex min-w-0 items-center gap-2 text-sm font-medium"><Rocket className="size-4 shrink-0" /><span className="truncate">Handing off to {args.teamName ?? "the team"}…</span></div>
+          <Badge variant="secondary" className="gap-1 text-muted-foreground"><LoaderCircle className="size-3 animate-spin" />Starting</Badge>
+        </div>
+        <p className="mt-1 text-xs text-muted-foreground">Compiling the brief and starting the run.</p>
+      </div>
+    );
+  }
+  const loop = payload.taskId ? `/work/${payload.taskId}?live=1` : `/runs/${payload.runId}?live=1`;
   return (
     <div className="my-3 rounded-xl border bg-card p-4">
       <div className="flex items-center justify-between gap-2">
-        <div className="flex min-w-0 items-center gap-2 text-sm font-medium"><Rocket className="size-4 shrink-0" /><span className="truncate">Task handed off to {args.teamName}</span></div>
+        <div className="flex min-w-0 items-center gap-2 text-sm font-medium"><Rocket className="size-4 shrink-0" /><span className="truncate">Task handed off to {payload.teamName}</span></div>
         <Badge className="bg-run-soft text-run hover:bg-run-soft">Running</Badge>
       </div>
-      <p className="mt-1 text-xs text-muted-foreground">{args.summary}</p>
+      <p className="mt-1 text-xs text-muted-foreground">{payload.summary}</p>
       <div className="mt-3 grid grid-cols-2 gap-2 @xl/main:grid-cols-4">
-        {(args.members ?? []).map((m) => (
+        {(payload.members ?? []).map((m) => (
           <div key={m.agentId ?? m.name} className="flex min-w-0 items-center gap-2 rounded-lg bg-muted px-2.5 py-2 text-xs">
             <Face id={m.agentId} name={m.name} className="size-7" />
             <div className="min-w-0">
