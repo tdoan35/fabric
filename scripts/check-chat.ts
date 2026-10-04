@@ -26,8 +26,10 @@ const branch = value("branch", "demo");
 const port = Number(value("port", "8891"));
 const base = `http://localhost:${port}`;
 
+let serverLogs = "";
+let lastParts = "";
 const ok = (cond: boolean, msg: string) => {
-  if (!cond) throw new Error(`✗ ${msg}`);
+  if (!cond) throw new Error(`✗ ${msg}\n  last parts: ${lastParts}\n  server (tail): ${serverLogs.slice(-1500)}`);
   console.log(`  ✓ ${msg}`);
 };
 const info = (msg: string) => console.log(msg);
@@ -68,8 +70,8 @@ const startServer = async (pooled: string) => {
   });
   procs.push(server);
   let logs = "";
-  server.stdout!.on("data", (c) => { logs += c.toString(); });
-  server.stderr!.on("data", (c) => { logs += c.toString(); });
+  server.stdout!.on("data", (c) => { logs += c.toString(); serverLogs = logs; });
+  server.stderr!.on("data", (c) => { logs += c.toString(); serverLogs = logs; });
   server.on("exit", (code) => { if (code !== 0 && code !== null) console.error(`server exited ${code}:
 ${logs.slice(-3000)}`); });
   for (let i = 0; i < 60; i++) {
@@ -107,7 +109,10 @@ async function turn(sessionId: string, messages: unknown[], fixture: boolean): P
       buf = buf.slice(i + 1);
       if (!line) continue;
       const snapshot = JSON.parse(line) as { content: Part[] };
-      if (Array.isArray(snapshot.content)) parts = snapshot.content;
+      if (Array.isArray(snapshot.content)) {
+        parts = snapshot.content;
+        lastParts = JSON.stringify(parts.map((p) => ({ t: p.type, n: p.toolName, r: p.result !== undefined })));
+      }
     }
   }
   return { parts, ms: Date.now() - started };
