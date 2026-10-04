@@ -5,6 +5,7 @@ import { api, httpMode, streamUrl } from "@/lib/api";
 import { setRegistry, setWorkData } from "@/lib/registry";
 import { setWeaveSnapshot } from "@/lib/weave-store";
 import { AppEventSchema } from "@fabric/contracts";
+import { publishSessionMessage } from "@/lib/chat/events";
 
 export async function rootLoader() {
   const [registry, tasks, runs, weave] = await Promise.all([
@@ -40,6 +41,10 @@ export function RootLayout() {
             void api.getWeave().then(setWeaveSnapshot).catch((err) => console.warn("[app stream] weave refresh failed", err));
           } else if (event.type === "task.changed" || event.type === "run.changed") {
             revalidateRef.current();
+          } else if (event.type === "session.message") {
+            // The open thread appends it (CHAT-14); the sidebar row's status comes with the registry.
+            publishSessionMessage(event);
+            void api.getRegistry().then(setRegistry).catch((err) => console.warn("[app stream] registry refresh failed", err));
           }
         } catch (err) { console.warn("[app stream] parse failed", err); }
       });
