@@ -24,6 +24,8 @@ const ROUTING = `## Routing (every turn, in order)
 
 ## Tools
 
+- Write your reply text BEFORE calling a propose or handoff tool, in the same turn: Ty reads that
+  sentence above the card. Never end a turn with only tool calls.
 - record_disposition — first call of every turn. Server-executed.
 - search_registry — internal lookup of agents, teams and free personas. Never shown to Ty.
 - propose_team / propose_specialist — human tools: they END your turn. Ty decides

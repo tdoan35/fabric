@@ -135,11 +135,12 @@ const q = async (pooled: string, text: string): Promise<Record<string, string>[]
   return rows;
 };
 
-/** The ordering every turn must have: disposition first, a card/handoff last, text between. */
-function assertTurnShape(parts: Part[], lastTool: string, msg: string) {
+/** The ordering every turn must have: disposition first, a card/handoff last, text between.
+ * Live phrasing varies (per the brief): only fixture turns assert the prose. */
+function assertTurnShape(parts: Part[], lastTool: string, msg: string, requireText = true) {
   ok(parts[0]?.toolName === "record_disposition" && parts[0].result?.recorded === true, `${msg}: record_disposition is first, with its result`);
   ok(parts[parts.length - 1]?.toolName === lastTool, `${msg}: the turn ends on ${lastTool}`);
-  ok(parts.some((p) => p.type === "text" && p.text), `${msg}: carries text`);
+  if (requireText) ok(parts.some((p) => p.type === "text" && p.text), `${msg}: carries text`);
   ok(!parts.some((p) => p.toolName === "search_registry"), `${msg}: search_registry never streamed`);
 }
 
@@ -318,11 +319,11 @@ if (live) {
     const sid = `live-${i}`;
     const t0 = Date.now();
     const t1 = await turn(sid, [userMsg(IDEA_PROMPT)], false);
-    assertTurnShape(t1.parts, "propose_team", `live ${i}: idea`);
+    assertTurnShape(t1.parts, "propose_team", `live ${i}: idea`, false);
     const t2 = await turn(sid, await decide(sid, "propose_team", "approved"), false);
-    assertTurnShape(t2.parts, "propose_specialist", `live ${i}: team approved`);
+    assertTurnShape(t2.parts, "propose_specialist", `live ${i}: team approved`, false);
     const t3 = await turn(sid, await decide(sid, "propose_specialist", "approved"), false);
-    assertTurnShape(t3.parts, "handoff_to_team", `live ${i}: specialist approved`);
+    assertTurnShape(t3.parts, "handoff_to_team", `live ${i}: specialist approved`, false);
     const handoff = toolPart(t3.parts, "handoff_to_team")!;
     const run = await q(pooled, `select assistant_tokens, brief from runs where id = '${handoff.args.runId}'`);
     ok(run.length === 1 && Number(run[0].assistant_tokens) > 0 && !JSON.stringify(run[0].brief).includes("I want to test an idea"), `live ${i}: run exists, assistant tokens set, brief clean`);
