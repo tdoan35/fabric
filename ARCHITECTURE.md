@@ -306,3 +306,26 @@ How the approval cards resolve:
 - With Mastra, map `approved` → `approveToolCall`, and `declined` / `discuss` → `declineToolCall` with reason `"declined"` / `"discuss"`.
 
 **One agent id space.** The mock has two: role ids (`lead`, `coder`, …) in `mock/agents.ts` feed the chat and Run view, while persona ids (`elliot`, `jonah`, …) in `mock/studio.ts` feed Studio, Teams and Orgs. Use one id space and display agents as "Name · Role" [NAME-1].
+
+## 16. Scheduler (routines, SCH)
+
+Agents also work without being asked: `schedules` holds a routine (recurrence stored as the
+picker's value, derived to cron; tz-aware through croner), and `schedule_fires` holds what
+actually happened at a slot. Claiming a slot is `insert … on conflict do nothing returning` on the
+unique `(schedule_id, scheduled_for)`, so the tick, "Run now", "Skip" and a second server process
+racing all resolve to exactly one winner — firing is idempotent by construction, not by locking.
+
+- **The tick** (`apps/server/src/services/scheduler.ts`, disabled with `SCHEDULER=off`): every 30 s,
+  each enabled schedule's slots in `(now − 10 min, now]` fire — a late tick still catches up. Slots
+  older than that, unclaimed while the server was down, are claimed `missed` and never run late; the
+  sweep starts at the schedule's creation, not the beginning of time.
+- **Two job kinds** (`services/schedule-fire.ts`): a **team** routine goes through the same starter
+  the dev route uses (`startDevTeamRun` → `startTeamJob`) — brief from the routine's prompt plus the
+  team's criteria, task titled "`<routine> · <date>`" in the Routines project, run handed to the
+  team runtime — so `finalizeRun` posts the results into the routine's own thread unchanged. An
+  **assistant** routine is one Dana turn (`Assistant.runScheduled`): read-only tools (Exa search),
+  no proposals, no handoffs — a routine never starts work behind the user's back.
+- **The page** (`/schedule`) reads `GET /schedules/occurrences?from&to`: cron expanded over the
+  window with fires overlaid (a fire wins its slot; "Run now" shows off-pattern; a past slot with no
+  fire renders nothing). `schedule.changed` on the SSE stream revalidates it. Google Calendar and
+  drag-to-create stay out of scope; the occurrences endpoint is the seam outside events merge into.
