@@ -45,28 +45,62 @@ const personaEntry = (p: StudioProfile, role: string): PersonaPoolEntry => ({
   avatar: p.agent.avatar ?? { still: `/agents/${p.agent.id}-happy.webp` },
 });
 
-/** §4.8 demo: only Weave rows whose agent and task exist. An empty inbox is fine. */
-function weaveForDemo(agentIds: Set<string>): SeedWorld["weave"] {
-  const taskIds = new Set<string>(); // demo seeds no tasks
-  const pulseAgent = (e: PulseEntry) => (e.kind === "update" ? e.authorId : e.kind === "event" ? e.actorId : e.agentId);
-  return {
-    items: inboxSeed.filter((i) => agentIds.has(i.agentId) && (!i.taskId || taskIds.has(i.taskId))),
-    pulse: pulseSeed.filter((e) => agentIds.has(pulseAgent(e))),
-    presence: presenceSeed.filter((p) => agentIds.has(p.agentId)),
-    calendar: calendarEvents,
-  };
-}
+// ---- demo (pre-approval): nothing may mention the Research Team, its people or its work ----
+
+const LEAK = /elliot|sana\b|research team/i;
+/** Markers of the seeded tasks/loops (§4.8: demo seeds none of them). */
+const TASK_REF = /135m|360m|nand|n-gram/i;
+
+const pulseAgent = (e: PulseEntry) => (e.kind === "update" ? e.authorId : e.kind === "event" ? e.actorId : e.agentId);
+const pulseText = (e: PulseEntry) =>
+  e.kind === "update" ? `${e.title} ${e.body}` : e.kind === "event" ? e.text : e.kind === "memory" ? `${e.text} ${e.source}` : e.text;
+
+/** IDENTITY.md lists only teams that exist here; a lone membership line disappears. */
+const retagMembership = (p: StudioProfile, teamNames: Set<string>): StudioProfile => {
+  const files = p.workspace.files.map((f) => {
+    if (f.name !== "IDENTITY.md") return f;
+    const match = f.body.match(/^Member of: (.*)$/m);
+    if (!match) return f;
+    const kept = match[1].split(", ").map((t) => t.replace(/\.$/, "")).filter((t) => teamNames.has(t));
+    const body = kept.length
+      ? f.body.replace(match[0], `Member of: ${kept.join(", ")}`)
+      : f.body.replace(`${match[0]}\n`, "");
+    return { ...f, body };
+  });
+  return { ...p, workspace: { ...p.workspace, files } };
+};
+
+/** Memories keep only the clauses that don't mention hidden personas or teams. */
+const clampMemories = (p: StudioProfile): StudioProfile => {
+  if (!p.workspace.memories.some((m) => LEAK.test(m.text))) return p;
+  const memories = p.workspace.memories.map((m) => {
+    const kept = m.text.split("; ").filter((clause) => !LEAK.test(clause)).join("; ");
+    return kept ? { ...m, text: kept.charAt(0).toUpperCase() + kept.slice(1) } : m;
+  });
+  return { ...p, workspace: { ...p.workspace, memories } };
+};
 
 export function buildDemoWorld(): SeedWorld {
   const hidden = new Set(["elliot", "sana"]);
-  const agents = myProfiles.filter((p) => !hidden.has(p.agent.id)).map(handoffWithoutApproval);
+  const teams = studioTeams.filter((t) => t.id !== "research"); // Product Team only, idle
+  const teamNames = new Set(teams.map((t) => t.name));
+  const agents = myProfiles
+    .filter((p) => !hidden.has(p.agent.id))
+    .map((p) => clampMemories(retagMembership(handoffWithoutApproval(p), teamNames)));
   const agentIds = new Set(agents.map((p) => p.agent.id));
+  // Members of teams absent from this world were doing that team's work; their presence leaks it.
+  const absentTeamAgents = new Set(
+    studioTeams.filter((t) => !teams.some((x) => x.id === t.id)).flatMap((t) => t.members.map((m) => m.agentId)),
+  );
+  const taskIds = new Set<string>(); // §4.8: demo seeds no tasks
+  const items = inboxSeed.filter((i) => agentIds.has(i.agentId) && (!i.taskId || taskIds.has(i.taskId)));
+  const itemIds = new Set(items.map((i) => i.id));
   return {
     profile: "demo",
     agents,
     communityAgents: communityProfiles,
     personaPool: [personaEntry(elliot, "Research Lead"), personaEntry(sana, "Validator")],
-    teams: studioTeams.filter((t) => t.id !== "research"), // Product Team only, idle
+    teams,
     communityTeams,
     organizations: [
       {
@@ -82,7 +116,14 @@ export function buildDemoWorld(): SeedWorld {
     tasks: [], // §4.8: no tasks before approval
     runs: [],
     recordings: [{ key: "ngram-135m" }], // taskless: nothing behind it can play yet
-    weave: weaveForDemo(agentIds),
+    weave: {
+      items,
+      pulse: pulseSeed.filter(
+        (e) => agentIds.has(pulseAgent(e)) && !absentTeamAgents.has(pulseAgent(e)) && !LEAK.test(pulseText(e)) && !TASK_REF.test(pulseText(e)),
+      ),
+      presence: presenceSeed.filter((p) => agentIds.has(p.agentId) && !absentTeamAgents.has(p.agentId) && (!p.itemId || itemIds.has(p.itemId))),
+      calendar: calendarEvents.filter((e) => !LEAK.test(e.title) && !TASK_REF.test(e.title)),
+    },
   };
 }
 
