@@ -89,25 +89,32 @@ export async function execInSprite(sprite: Sprite, command: string, opts: Sprite
   const chunks: string[] = [];
   let killed = false;
   const timer = opts.timeoutMs && opts.timeoutMs > 0 ? setTimeout(() => { killed = true; cmd.kill("SIGKILL"); }, opts.timeoutMs) : undefined;
+  const lineJobs: Promise<void>[] = [];
+  const drained: Promise<void>[] = [];
   const pump = (stream: NodeJS.ReadableStream) => {
     const rl = createInterface({ input: stream });
+    drained.push(new Promise<void>((resolve) => rl.once("close", resolve)));
     rl.on("line", (line) => {
       chunks.push(line);
       if (chunks.length > 200) chunks.splice(0, chunks.length - 200);
-      void opts.onLine?.(line);
+      lineJobs.push(Promise.resolve(opts.onLine?.(line)).then(() => undefined));
     });
   };
-  await cmd.start();
+  await new Promise<void>((resolve, reject) => {
+    cmd.once("spawn", () => resolve());
+    cmd.once("error", (err: Error) => reject(err));
+  });
   pump(cmd.stdout);
   pump(cmd.stderr);
   const exitCode = await cmd.wait();
   clearTimeout(timer);
+  await Promise.race([Promise.all([...drained, ...lineJobs]), new Promise((r) => setTimeout(r, 2000))]);
 
   const output = chunks.join("\n");
   // A failed fetch to a host outside the allowlist is the sandbox doing its job: report it as a
   // denied network.fetch so the Tools tab shows the enforcement (S2's blocked-fetch check).
-  const blockedHosts = killed || exitCode === 0 ? [] : [...new Set([...command.matchAll(URL_RE)].map((m) => m[1].split(":")[0]))]
-    .filter((h) => !egressAllowed(h) && (!output || NET_FAIL.test(output)));
+  const blockedHosts = killed ? [] : [...new Set([...command.matchAll(URL_RE)].map((m) => m[1].split(":")[0]))]
+    .filter((h) => !egressAllowed(h) && NET_FAIL.test(output));
   return { exitCode: killed ? 124 : exitCode, tail: output.slice(-2000), blockedHosts };
 }
 
