@@ -39,3 +39,17 @@ Docs: https://docs.expo.dev/eas/index.md
 - If `ios/` and `android/` directories do not exist, they are generated (Continuous Native Generation). Never create or edit them by hand — configure native behavior in `app.json` and config plugins.
 - Expo Go only includes its bundled native modules. After adding a library with native code, the app needs a development build: `npx expo run:ios|android` locally, or `eas build --profile development`.
 - Prefer recommended Expo modules over third-party libraries, and check your available skills before adding dependencies. Docs: https://docs.expo.dev/versions/latest/index.md
+
+## Fabric mobile specifics (MOB-A, MOB-B, MOB-C)
+
+- This app is **outside the root npm workspaces**: never add it to the root `package.json`, never
+  run npm install at the repo root. Install only inside `apps/mobile` (own lockfile). If a stray
+  root `package-lock.json` diff appears after installing, `git checkout -- package-lock.json` at
+  the root and re-run the install with the root `node_modules` moved aside.
+- Server responses are validated with the zod schemas from `@fabric/contracts` via `lib/api.ts`
+  (mirror of `apps/web/src/lib/api/http.ts`). Never fetch past it.
+- `lib/**` and `components/ui/**` are MOB-A's frozen shared layer: request changes via
+  `docs/status/mobile.md` instead of editing.
+- Base URL: `EXPO_PUBLIC_API_URL` in `apps/mobile/.env` (copy `.env.example`; never commit `.env`).
+- Theme tokens live in `lib/theme.ts` (copied from `apps/web/src/styles/globals.css`, dark-first).
+- Persona portraits: `lib/avatar.ts` requires the WebP stills in `assets/portraits/`.

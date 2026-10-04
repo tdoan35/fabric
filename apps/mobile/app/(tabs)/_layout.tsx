@@ -1,70 +1,43 @@
-import { SymbolView } from 'expo-symbols';
-import { Link, Tabs } from 'expo-router';
-import { Platform, Pressable } from 'react-native';
+import { Pressable, StyleSheet, Text, type ColorValue } from "react-native";
+import { Tabs, useRouter } from "expo-router";
 
-import Colors from '@/constants/Colors';
-import { useColorScheme } from '@/components/useColorScheme';
-import { useClientOnlyValue } from '@/components/useClientOnlyValue';
+import { theme } from "@/lib/theme";
+
+function TabIcon({ glyph, color }: { glyph: string; color: ColorValue }) {
+  return <Text style={[styles.icon, { color }]}>{glyph}</Text>;
+}
 
 export default function TabLayout() {
-  const colorScheme = useColorScheme();
-
+  const router = useRouter();
   return (
     <Tabs
       screenOptions={{
-        tabBarActiveTintColor: Colors[colorScheme].tint,
-        // Disable the static render of the header on web
-        // to prevent a hydration error in React Navigation v6.
-        headerShown: useClientOnlyValue(false, true),
+        tabBarActiveTintColor: theme.colors.run,
+        tabBarInactiveTintColor: theme.colors.mutedForeground,
+        tabBarStyle: { backgroundColor: theme.colors.card, borderTopColor: theme.colors.border },
+        headerStyle: { backgroundColor: theme.colors.card },
+        headerTintColor: theme.colors.foreground,
+        // Low-key entry to the hidden debug screen (app/debug.tsx) — the network check.
+        headerRight: () => (
+          <Pressable hitSlop={12} onPress={() => router.push("/debug")} style={styles.debug}>
+            <Text style={styles.debugText}>⌘</Text>
+          </Pressable>
+        ),
       }}>
       <Tabs.Screen
-        name="index"
-        options={{
-          title: 'Tab One',
-          tabBarIcon: ({ color }) => (
-            <SymbolView
-              name={{
-                ios: 'chevron.left.forwardslash.chevron.right',
-                android: 'code',
-                web: 'code',
-              }}
-              tintColor={color}
-              size={28}
-            />
-          ),
-          headerRight: () => (
-            <Link href="/modal" asChild>
-              <Pressable style={{ marginRight: 15 }}>
-                {({ pressed }) => (
-                  <SymbolView
-                    name={{ ios: 'info.circle', android: 'info', web: 'info' }}
-                    size={25}
-                    tintColor={Colors[colorScheme].text}
-                    style={{ opacity: pressed ? 0.5 : 1 }}
-                  />
-                )}
-              </Pressable>
-            </Link>
-          ),
-        }}
+        name="weave"
+        options={{ title: "Weave", tabBarIcon: ({ color }) => <TabIcon glyph="✦" color={color} /> }}
       />
       <Tabs.Screen
-        name="two"
-        options={{
-          title: 'Tab Two',
-          tabBarIcon: ({ color }) => (
-            <SymbolView
-              name={{
-                ios: 'chevron.left.forwardslash.chevron.right',
-                android: 'code',
-                web: 'code',
-              }}
-              tintColor={color}
-              size={28}
-            />
-          ),
-        }}
+        name="work"
+        options={{ title: "Work", tabBarIcon: ({ color }) => <TabIcon glyph="▦" color={color} /> }}
       />
     </Tabs>
   );
 }
+
+const styles = StyleSheet.create({
+  icon: { fontSize: 18, textAlign: "center" },
+  debug: { marginRight: 14 },
+  debugText: { color: theme.colors.mutedForeground, fontSize: 14 },
+});
