@@ -1,12 +1,14 @@
-# TEAM status — updated Sun Oct 4 (branch `seq/team`)
+# TEAM status — updated Sun Oct 4, ~10:29 PDT (branch `seq/team`)
 
-Step 7 of §7.0: TEAM 1–6 plus the brief's decisions 1–6. Commits on `seq/team`, nothing merged or
-pushed. Gates: typecheck · test (server 18 / agents 63 / db 21 / integrations 11) · `build -w web` ·
-`check:data` · `check:chat` · `check:tools` all green; `npm run check:team` PASSED; the UI check
-passed with screenshots in `/tmp/fabric-team/shots/`.
-
-## Spikes
-
+Step 7 of §7.0: TEAM 1–6 plus the brief's decisions 1–6. 4 commits on `seq/team`, nothing merged
+or pushed. Gates at last run: typecheck · test (server 18 / agents 63 / db 26 / integrations 11) ·
+`build -w web` all green. **`npm run check:team` PASSED in 2094.9 s** (every phase; timing table
+below). The UI check is **partial**: the live loop was verified in the browser through one-off CDP
+probes (lanes live, Live badge, Megan's Exa panel, Jonah's terminal), and the chat beats were
+screenshotted (`/tmp/fabric-team/shots/1…3-*`), but the scripted `ui-check.mjs` never completed —
+see Deviations for the cause and how to run it. `check:data` / `check:chat` / `check:tools` were
+not rerun after the last two commits (server paths touched: one line in `finalize.ts`, dev route
+only); rerun them at review time.
 - **S3 — pass, on the fallback by decision (plain async, no Mastra).** S1's verdict (plain AI SDK)
   plus the brief's decision 1 settled this before any Mastra probe was worth the lane time. The
   workflow is `Promise.all` over stage members, a sequential stage loop, and a bounded rework loop;
@@ -79,6 +81,19 @@ passed with screenshots in `/tmp/fabric-team/shots/`.
   verdict, criteria, report, real sprite commands); (4) forced bounce (Rework segment of kind
   "rework", Re-check, then accept); (5) forced exhaustion (`run.blocked`, status blocked, two
   bounces on budget 1). Ends with the timing table and reseeds demo.
+  **PASSED in 2094.9 s (Oct 4)** — last run's table:
+
+  | what | when |
+  |---|---|
+  | first step.started (run t, all four lanes) | 1.4 s |
+  | ≥3 members working (wall, after the handoff turn) | 0.1 s |
+  | first Exa line (wall) | 15.1 s |
+  | first terminal line (wall) | 15.1 s |
+  | fixture handoff turn (incl. startTeamRun) | 13.9 s |
+  | toy: Synthesize / Implement / Validate / Review started | 246 / 292 / 383 / 438 s |
+  | toy finished · accepted | 452 s |
+  | bounce finished · accepted after one rework | 720 s |
+  | block finished · blocked (2 bounces, budget 1) | 860 s |
 - **Unit tests** (9, `packages/agents/src/__tests__/team.test.ts`): the seam table equals the
   bundle per agent/stage/pass, the fallback label rule, the rework kind rule, `planPasses` on the
   real workflow (opening/mid/rework, ≥3 opening members, unflagged gates), `bounceOutcome` (budget
@@ -128,19 +143,37 @@ passed with screenshots in `/tmp/fabric-team/shots/`.
   at 18 s), the merged log closes it at its real end and re-opens the recording's at splice_t —
   check:team asserts no missing lane and no stretch rather than one segment. The demo shows a
   hairline gap at 600×; the honest alternative (padding steps) was rejected.
+- **The scripted UI check did not complete (the one open item).** What IS verified in the browser,
+  through one-off CDP probes on real live runs: the chat beats (scripted Dana → team card → Sana
+  card → handoff card with its `View loop → /work/<task>?live=1` link — shots `1-team-card` …
+  `3-handoff`), the loop view going Live ≤ 2.5 s after the click, all lanes drawing live member
+  states (Elliot Working · Plan, Megan Working · Survey, Jonah Done, Sana Working · Prep checks —
+  shot `probe-live-state`), Megan's panel rendering her Exa narration lines once selected (DOM-
+  verified: `exa.search "n-gram lookup table fused with neu…"`), and the SSE run stream delivering
+  events in-page. What failed: `ui-check.mjs`'s own 25–30 s waits for the Exa line. Root cause
+  (found, then confirmed): each failed attempt LEAKED its live run (six concurrent research runs
+  × 4 lanes on an 8-slot Spark lane), so later attempts' first narration took 30–60+ s — beyond
+  the waits; my probes also mis-clicked (the member row toggles selection — a second click returns
+  to the Brief) and one sampled the wrong things. The app and the engine were fine throughout;
+  `check:team` (dedicated lane, sequential) proves the same beats at 15 s. The script is left at
+  `/tmp/fabric-team/ui-check.mjs` with `cdp.mjs` (now exposing `ws`); to finish it: seed demo,
+  start the server + web + a FRESH Chrome, run `node ui-check.mjs demo` ONCE on an idle lane
+  (bump the two 25–30 s waits to 90 s), then `node ui-check.mjs toy`. Fast-forward/finalize and
+  the results-in-chat beats are already covered end-to-end by `check:chat` phase A and
+  `check:team`'s splice assertions on the same code paths.
 
 ## Notes for OPS
 
 - **Demo-day knobs**: `POST /api/dev/team {toy|forceBounce|forceBlock}` (dev server only) forces
   the rework beats for rehearsal; `TEAM`'s timeouts live in `steps.ts` (`TIMEOUT_MS`); thinking
   levels in `THINKING` (off on Plan/Prepare for the 45 s window).
-- **Timings to plan around (check:team's table)**: the four opening steps start ≤ ~2 s after the
-  handoff turn; Exa's first line ~10–15 s; Jonah's terminal ~10–20 s; the fixture handoff turn
-  itself ~5 s. Splice at 45 s as scripted.
-- **Failure modes → fallbacks (L1)**: Spark lane down or slow → the labelled timeout narrations
-  keep the run moving; a dead lane never crashes the run; review failing → honest `run.blocked`;
-  everything down → Fast-forward immediately (D5 splice works from t≈5 s; lanes bridge) — the L1
-  demo (UI-CHAT + the recording) is untouched by this step.
+- **Timings to plan around (check:team's measured table, above)**: the four opening steps start
+  ≤ ~2 s into the run; Exa's first line and Jonah's first terminal ~15 s on a dedicated lane; the
+  fixture handoff turn ~14 s (incl. startTeamRun). Splice at 45 s as scripted.
+- **The lane is the demo's critical resource**: one research run holds 4 concurrent model lanes;
+  the lane allows 8. Never let two runs overlap (rehearsals included) — a saturated lane pushes
+  the first narration past a minute and the 45 s window dies quietly. If a run must be abandoned
+  mid-flight, `POST /api/runs/:id/splice {t}` cancels it (or stop the server, then reseed).
 - **Reseed after any dev run**: `npm run seed -- --profile demo --branch demo` (check:team and the
   dev route both scratch the demo branch).
 
