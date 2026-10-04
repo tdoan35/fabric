@@ -1,10 +1,11 @@
 // Drizzle schema for WORK-PLAN §4.7. Tables live in `public`; Mastra gets its own schema later.
 // Read models (read.ts) project these rows into the frozen @fabric/contracts shapes.
 import type {
-  AgentWorkspace, Brief, CalendarEvent, ChatAgent, ContextSection, InboxItem, PulseEntry, Presence, Project, Task,
-  Report, RunEventPayloads, RunEventType, RunSegment, SpriteAvatar, ToolPolicy, WorkflowStage,
+  AgentWorkspace, Brief, CalendarEvent, ChatAgent, ContextSection, InboxItem, PulseEntry, Presence, Project,
+  Recurrence, ScheduleFireStatus, Task, Report, RunEventPayloads, RunEventType, RunSegment, SpriteAvatar,
+  ToolPolicy, WorkflowStage,
 } from "@fabric/contracts";
-import { pgTable, text, integer, boolean, numeric, jsonb, timestamp, primaryKey, index } from "drizzle-orm/pg-core";
+import { pgTable, text, integer, boolean, numeric, jsonb, timestamp, primaryKey, index, uniqueIndex } from "drizzle-orm/pg-core";
 
 const ts = (name: string) => timestamp(name, { withTimezone: true });
 
@@ -288,6 +289,40 @@ export const weaveCalendar = pgTable("weave_calendar", {
   ord: integer("ord").notNull().default(0),
   data: jsonb("data").$type<CalendarEvent>().notNull(),
 });
+
+// ---- Schedule (SCH): routines, and the fires that make each occurrence idempotent ----
+
+/** One routine; `recurrence` is the picker's value, `cron` is derived (contracts toCron). */
+export const schedules = pgTable("schedules", {
+  id: text("id").primaryKey(),
+  title: text("title").notNull(),
+  kind: text("kind").$type<"team" | "assistant">().notNull(),
+  agentId: text("agent_id").notNull(), // dana, or the team's lead
+  teamId: text("team_id"),
+  projectId: text("project_id"),
+  prompt: text("prompt").notNull(),
+  recurrence: jsonb("recurrence").$type<Recurrence>().notNull(),
+  cron: text("cron").notNull(),
+  tz: text("tz").notNull(),
+  durationMin: integer("duration_min").notNull().default(30),
+  enabled: boolean("enabled").notNull().default(true),
+  sessionId: text("session_id").notNull(), // the routine's own thread
+  createdAt: ts("created_at").notNull().defaultNow(),
+});
+
+/** One claimed slot. The unique (schedule_id, scheduled_for) makes claiming idempotent: two
+ *  processes racing both insert, exactly one row lands, and the loser's RETURNING is empty. */
+export const scheduleFires = pgTable("schedule_fires", {
+  id: text("id").primaryKey(),
+  scheduleId: text("schedule_id").notNull(),
+  scheduledFor: ts("scheduled_for").notNull(),
+  firedAt: ts("fired_at"),
+  status: text("status").$type<ScheduleFireStatus>().notNull().default("fired"),
+  runId: text("run_id"),
+  taskId: text("task_id"),
+  messageId: text("message_id"),
+  error: text("error"),
+}, (t) => [uniqueIndex("schedule_fires_slot_idx").on(t.scheduleId, t.scheduledFor)]);
 
 /** Written by seed so tests and tools know which profile a branch holds. */
 export const seedState = pgTable("seed_state", {

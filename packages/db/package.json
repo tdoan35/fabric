@@ -8,8 +8,9 @@
   },
   "scripts": {
     "typecheck": "tsc -p tsconfig.json",
-    "seed": "tsx src/seed.ts",
-    "test": "vitest run"
+    "generate": "drizzle-kit generate",
+    "migrate": "drizzle-kit migrate",
+    "seed": "tsx src/seed.ts"
   },
   "dependencies": {
     "@fabric/contracts": "*",

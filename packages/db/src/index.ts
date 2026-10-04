@@ -43,6 +43,11 @@ export {
   getRunRow, latestRecordingRun, listProjects, listRuns, listSnapshots, listStoredEvents, listTasks,
   mergedEvents, readArtifact, readRegistry, readReport, readRun, readTask, readWeave,
 } from "./read";
+export {
+  claimFire, deleteSchedule, finishFire, getSchedule, insertSchedule, listFires, listSchedules,
+  updateSchedule,
+} from "./schedules";
+export type { FireWithRun, NewSchedule } from "./schedules";
 export type { RunRowLike } from "./read";
 export * as schema from "./schema";
 export type { AgentToolRow } from "./schema";
