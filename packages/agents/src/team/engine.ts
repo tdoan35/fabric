@@ -262,10 +262,20 @@ async function reviewStep(ctx: RunCtx, gate: Stage, reviewCount: number): Promis
     }
     let { verdict, text } = raced.value.object;
     try {
-      // Dev hooks (§5.3 TEAM 6), never on by default.
-      if ((ctx.opts.forceBlock || (ctx.opts.forceBounce && reviewCount === 1)) && verdict === "accept") {
+      // Dev hooks (§5.3 TEAM 6), never on by default. forceBounce pins the whole shape —
+      // bounce once, then accept — because the reviewer can also bounce NATURALLY (seen live:
+      // it caught a real inconsistency in the toy run), and the check needs determinism.
+      if (ctx.opts.forceBlock && verdict === "accept") {
         verdict = "request_changes";
-        text = `[dev hook: ${ctx.opts.forceBlock ? "forceBlock" : "forceBounce"} turned an accept into a bounce] ${text}`;
+        text = `[dev hook: forceBlock turned an accept into a bounce] ${text}`;
+      } else if (ctx.opts.forceBounce) {
+        if (reviewCount === 1 && verdict === "accept") {
+          verdict = "request_changes";
+          text = `[dev hook: forceBounce turned an accept into a bounce] ${text}`;
+        } else if (reviewCount > 1) {
+          verdict = "accept";
+          text = `[dev hook: forceBounce accepts after the one bounce] ${text}`;
+        }
       }
       await writer.emit(ctx.runId, "review.verdict", reviewerId, { verdict, text });
       for (const c of raced.value.object.checks ?? []) {
@@ -297,7 +307,7 @@ async function reviewStep(ctx: RunCtx, gate: Stage, reviewCount: number): Promis
       if (bounce) {
         // The recording's Bounced step: the bounce segment the stepper's rework pass reads.
         await writer.emit(ctx.runId, "step.started", reviewerId, { label: "Bounced", stage: gate.label, kind: "bounce" });
-        const used = (await countRework(ctx));
+        const used = (await countRework(ctx)) + 1; // this bounce included, like the recording's {used: 1}
         await writer.emit(ctx.runId, "rework.requested", reviewerId, { to: ctx.leadId, used, budget: ctx.run.reworkBudget });
         await emitBudget(ctx, { used, budget: ctx.run.reworkBudget });
         await writer.emit(ctx.runId, "handoff", reviewerId, { to: ctx.leadId });
