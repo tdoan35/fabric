@@ -144,8 +144,10 @@ describe.skipIf(profile !== "lived-in")("lived-in matches the mock world", () =>
     expect(await get<ContextSnapshot[]>("/api/runs/run-ngram-1/snapshots")).toEqual(snapshots135);
   });
 
-  it("the 135M report equals the fixture plus the D9 illustrative label", async () => {
-    expect(await get<Report>("/api/reports/report-ngram-1")).toEqual({ ...reportFixture, kind: "illustrative" });
+  it("the 135M report equals the fixture plus the D9 label and artifact links", async () => {
+    const report = await get<Report>("/api/reports/report-ngram-1");
+    expect(report.artifacts.every((a) => !!a.id)).toBe(true);
+    expect({ ...report, artifacts: report.artifacts.map(({ name, from }) => ({ name, from })) }).toEqual({ ...reportFixture, kind: "illustrative" });
   });
 
   it("weave equals the fixtures", async () => {
