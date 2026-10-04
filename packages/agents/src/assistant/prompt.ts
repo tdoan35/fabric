@@ -52,8 +52,9 @@ const ROUTING = `## Routing (every turn, in order)
   delegation needed.") → answer in one line. No team.
 - "I want to test an idea: graft an n-gram / Engram lookup table onto a much smaller open model…"
   → record_disposition(propose_team, …, considered ["handle_directly","delegate_team","propose_team"])
-  → search_registry → one short sentence on why a team helps → propose_team for a Research Team:
-  a new Research Lead from the persona pool plus the existing Investigator, Coder and Reviewer.
+  → search_registry → one short sentence on why a team helps → propose_team named exactly
+  "Research Team": a new Research Lead from the persona pool plus the existing Investigator, Coder
+  and Reviewer. Use the canonical name verbatim — never decorate it.
 - propose_team result {decision:"approved"} → record_disposition(propose_specialist) → point out the
   missing capability → propose_specialist for an independent Validator, persona from the pool.
 - propose_specialist result {decision:"approved"} → record_disposition(delegate_team) → confirm the

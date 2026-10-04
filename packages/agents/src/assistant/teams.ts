@@ -18,7 +18,11 @@ export interface ResolvedTeam {
 
 const fixtureTeam = (name: string): StudioTeam | undefined => {
   const slug = slugId(name);
-  return studioTeams.find((t) => t.id === slug) ?? studioTeams.find((t) => t.name.toLowerCase() === name.toLowerCase());
+  const lower = name.toLowerCase();
+  return studioTeams.find((t) => t.id === slug)
+    ?? studioTeams.find((t) => t.name.toLowerCase() === lower)
+    // live phrasing decorates the name ("Engram Research Team") — still the same team
+    ?? studioTeams.find((t) => lower.includes(t.name.toLowerCase()) || t.name.toLowerCase().includes(lower));
 };
 
 /** A fallback definition for a team the fixtures don't know: derived from the card payload. */
