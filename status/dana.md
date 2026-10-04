@@ -1,9 +1,9 @@
-# DANA status — updated Sat Oct 3, ~19:30 PDT (branch `seq/dana`)
+# DANA status — updated Sat Oct 3, ~20:10 PDT (branch `seq/dana`)
 
 Step 4 of §7.0: DANA steps 2–7 (assistant, thread, proposals, handoff, fixture mode, results
-message). 6 commits, nothing merged or pushed. Gates: typecheck · test (server 18 / agents 40 /
-db 21) · `build -w web` · `check:data` (56.5 s) all green; `check:chat` fixture PASSED (99.1 s);
-`check:chat --live --times 5` 5/5 (numbers below).
+message). 14 commits, nothing merged or pushed. Gates: typecheck · test (server 18 / agents 42 /
+db 21) · `build -w web` · `check:data` all green; `check:chat` fixture PASSED (~100 s, every
+branch); `check:chat --live --times 5` **5/5** (numbers below).
 
 ## Spikes
 - None assigned here. S1's verdict (plain AI SDK, not Mastra) is applied: `streamText` with
@@ -82,6 +82,13 @@ db 21) · `build -w web` · `check:data` (56.5 s) all green; `check:chat` fixtur
   already asked for this). Additive; finalize uses it for `session.message`.
 - **`handoff_to_team`'s args AND result are the HandoffPayload** — the brief said "the result is a
   HandoffPayload", ARCH §15/mock said args. Setting both means either consumer works.
+- **Live-turn robustness beyond the plan** (all hit during `--live` runs): a forced-call violation
+  (vLLM ignores `tool_choice`), a hallucinated tool name outside `activeTools`, and a duplicated
+  card/handoff call each invalidate the turn and retry it once; `compileBrief` failing on the lane
+  falls back to the deterministic brief (ARCH §11). `activeTools` is re-asserted every step — a
+  step-level `prepareStep` return overrides the top-level option (wire-level unit test pins it).
+- **The post-approval progression is tool-guarded, not just prompted**: after a team approval the
+  turn's active tools are the specialist card; after the specialist approval, the handoff.
 - **Decline/discuss fixture turns carry a disposition too** (the mock's don't) — every turn records
   one (CHAT-13); `handle_directly`/`clarify` with the considered options.
 - **Fixture mode's brief is deterministic** (`fixtureBrief`), not an LLM call, so scripted Dana works
@@ -147,12 +154,23 @@ curl -N -X POST localhost:8787/api/chat -H 'content-type: application/json' \
   -d '{"sessionId":"demo1","fixture":true,"messages":[{"role":"user","content":[{"type":"text","text":"I want to test an idea: graft an n-gram / Engram lookup table onto a much smaller open model to boost its capability. The table could live on NAND instead of RAM."}]}]}'
 npm run seed -- --profile demo --branch demo                     # leave demo clean afterwards
 ```
-Last runs (Oct 3, evening): fixture `check:chat` PASSED 99.1 s (all 60 asserts); live 5/5 below;
-`check:data` 56.5 s / 20 asserts; suites 18 + 40 + 21.
+Last runs (Oct 3, evening): fixture `check:chat` PASSED 100.2 s (all asserts, every branch); live
+5/5 (table below); `check:data` 56.5 s / 20 asserts; suites 18 + 42 + 21; `git diff main -- apps/web`
+empty.
 
 ## Live results (`--live --times 5`, Spark `qwen3.8-flash-next`, thinking off, temp 0.2)
-<!-- LIVE_RESULTS -->
+**5/5, PASSED in 565.1 s** (branch demo, sequential, re-seeded between passes). Per-turn latency
+(POST → last NDJSON line):
 
-## Spikes (S1 follow-up)
-- Live latencies and 5/5 outcome recorded above; phrasing varied between runs, assertions are on
-  tool names, order and DB state only, per the brief.
+| pass | idea | approve-team | approve-specialist | total |
+|---|---|---|---|---|
+| 1 | 30.8 s | 16.1 s | 40.9 s | 89.3 s |
+| 2 | 33.9 s | 17.8 s | 22.1 s | 75.5 s |
+| 3 | 30.7 s | 17.9 s | 19.5 s | 69.7 s |
+| 4 | 26.5 s | 17.5 s | 37.8 s | 83.4 s |
+| 5 | 35.0 s | 17.1 s | 40.0 s | 93.7 s |
+
+Fixture-mode turns for scale: idea 3.8 s · approve-team 4.3 s · approve-specialist 5.4 s. The live
+idea and specialist turns are slower because they add a `search_registry` step and (for the
+handoff) the `compileBrief` call, on a shared lane that was loaded during the run. Phrasing varied
+between passes; assertions are on tool names, order and DB state only, per the brief.
