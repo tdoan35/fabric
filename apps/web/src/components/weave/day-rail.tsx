@@ -5,7 +5,8 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { type Presence, type PresenceState } from "@/lib/mock/weave";
 import { weaveCalendar, weaveDayMarkers, type WeaveState } from "@/lib/weave-store";
 import { cn } from "@/lib/utils";
-import { clockMinutes, dayKey, dayLabel, fmtTime, fromKey, fullDayLabel, toKey, TODAY, weaveNow } from "./format";
+import { clockMinutes, dayKey, dayLabel, fmtTime, fromKey, TODAY, weaveNow } from "./format";
+import { MiniCalendar } from "@/components/calendar/mini-calendar";
 import { ColumnLabel, Face, agentOf } from "./parts";
 
 const STATE: Record<PresenceState, { label: string; ring: string; dot: string; text: string }> = {
@@ -141,59 +142,6 @@ function PresenceStrip({ presence, onSelectItem }: { presence: Presence[]; onSel
   );
 }
 
-const monthFmt = new Intl.DateTimeFormat("en-US", { timeZone: "UTC", month: "long", year: "numeric" });
-
-function MiniCalendar({ selected, onPick }: { selected: string; onPick: (day: string) => void }) {
-  const [month, setMonth] = useState(selected.slice(0, 7));
-  const [y, m] = month.split("-").map(Number);
-  const first = new Date(Date.UTC(y, m - 1, 1));
-  const offset = first.getUTCDay();
-  const daysInMonth = new Date(Date.UTC(y, m, 0)).getUTCDate();
-  const cells = Array.from({ length: Math.ceil((offset + daysInMonth) / 7) * 7 }, (_, i) => toKey(new Date(Date.UTC(y, m - 1, 1 - offset + i))));
-  const shift = (n: number) => setMonth(toKey(new Date(Date.UTC(y, m - 1 + n, 1))).slice(0, 7));
-  return (
-    <section>
-      <div className="flex items-center px-1">
-        <span className="text-xs font-medium">{monthFmt.format(first)}</span>
-        <span className="ml-auto flex">
-          <button type="button" aria-label="Previous month" onClick={() => shift(-1)} className="flex size-6 items-center justify-center rounded-md text-muted-foreground hover:bg-foreground/5 hover:text-foreground"><ChevronLeft className="size-3.5" /></button>
-          <button type="button" aria-label="Next month" onClick={() => shift(1)} className="flex size-6 items-center justify-center rounded-md text-muted-foreground hover:bg-foreground/5 hover:text-foreground"><ChevronRight className="size-3.5" /></button>
-        </span>
-      </div>
-      <div className="mt-1.5 grid grid-cols-7 text-center text-[10px] text-muted-foreground">
-        {["S", "M", "T", "W", "T", "F", "S"].map((d, i) => <span key={i} className="py-1">{d}</span>)}
-      </div>
-      <div className="grid grid-cols-7 gap-y-0.5 text-center">
-        {cells.map((key) => {
-          const inMonth = key.slice(0, 7) === month;
-          const marks = weaveDayMarkers().filter((d) => d.day === key);
-          const isSel = key === selected;
-          return (
-            <button
-              key={key} type="button" onClick={() => onPick(key)}
-              title={marks.map((d) => d.label).join(" · ") || undefined}
-              aria-pressed={isSel}
-              aria-label={`${fullDayLabel(key)}${marks.length ? ` · ${marks.map((d) => d.label).join(", ")}` : ""}`}
-              className={cn(
-                "relative mx-auto flex size-8 items-center justify-center rounded-lg text-xs tabular-nums outline-none transition-colors hover:bg-foreground/5 focus-visible:ring-2 focus-visible:ring-ring",
-                !inMonth && "text-muted-foreground/50",
-                key === TODAY && !isSel && "font-semibold ring-1 ring-inset ring-foreground/25",
-                isSel && "bg-foreground font-semibold text-background hover:bg-foreground/90",
-              )}
-            >
-              {Number(key.slice(8))}
-              {marks.length > 0 && (
-                <span className="absolute bottom-1 left-1/2 flex -translate-x-1/2 gap-0.5">
-                  {marks.map((d) => <span key={d.label} className={cn("size-1 rounded-full", d.kind === "deadline" ? "bg-warn" : isSel ? "bg-background/70" : "bg-muted-foreground/60")} />)}
-                </span>
-              )}
-            </button>
-          );
-        })}
-      </div>
-    </section>
-  );
-}
 
 const START = 8 * 60, END = 20 * 60, PX = 0.7; // 8 AM–8 PM, px per minute
 const EVENT_STYLE = {
@@ -267,7 +215,7 @@ export function DayRail({ state, day, onPickDay, onSelectItem }: { state: WeaveS
   return (
     <div className="space-y-6 px-4 py-4">
       <PresenceStrip presence={state.presence} onSelectItem={onSelectItem} />
-      <MiniCalendar key={day.slice(0, 7)} selected={day} onPick={onPickDay} />
+      <MiniCalendar key={day.slice(0, 7)} selected={day} onPick={onPickDay} marks={(d) => weaveDayMarkers().filter((m) => m.day === d)} />
       <Timebox day={day} onPickDay={onPickDay} />
     </div>
   );
