@@ -28,7 +28,10 @@ const json = (body: unknown): RequestInit => ({ method: "POST", headers: { "cont
 
 /** POST /api/chat (§4.3): one cumulative snapshot of the assistant message per NDJSON line. */
 async function* chatStream(body: ChatRequest, signal?: AbortSignal): AsyncGenerator<ChatStreamLine> {
-  const response = await fetch(`${apiBase}/api/chat`, { ...json(body), signal });
+  const response = await fetch(`${apiBase}/api/chat`, { ...json(body), signal }).catch((err: unknown) => {
+    if (err instanceof Error && err.name === "AbortError") throw err;
+    throw new Error("Can't reach the server. Check that it's running, then send again.");
+  });
   if (!response.ok || !response.body) {
     const err = await response.json().catch(() => ({})) as { error?: string };
     throw new Error(err.error ?? `Dana is unavailable (${response.status})`);
