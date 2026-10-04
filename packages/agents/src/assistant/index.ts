@@ -170,6 +170,7 @@ export function createAssistant(deps: AssistantDeps): Assistant {
           (p) => p.status === "pending" && final.some((part) => part.type === "tool-call" && part.toolCallId === p.toolCallId),
         );
         await touchSession(db, sessionId, open ? "input" : "unread");
+        publish({ type: "registry.changed" }); // the sidebar row's count and status
       }
 
       // ---- helpers close over the turn above ----
