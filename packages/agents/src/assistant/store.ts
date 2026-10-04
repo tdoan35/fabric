@@ -9,6 +9,8 @@ import type {
 import { slugId } from "@fabric/db";
 import type { Db } from "@fabric/db";
 import { transitionOnReproposal } from "./transitions";
+import type { RegistryBrief } from "./prompt";
+import type { World } from "./teams";
 
 export interface SessionRow {
   id: string;
@@ -270,3 +272,36 @@ export function projectFor(session: SessionRow | undefined, projects: { id: stri
 export { slugId };
 
 export type { Session, Disposition };
+
+/**
+ * Dana's view of the registry in one round trip: the compact brief her prompt shows and the world
+ * her cards resolve against (active, non-community agents and teams, and the persona pool).
+ */
+export async function readDanaView(db: Db): Promise<{ registry: RegistryBrief; world: World }> {
+  const rows = await db.db.execute(sql`
+    select
+      (select coalesce(jsonb_agg(jsonb_build_object('id', id, 'name', name, 'role', role, 'summary', summary, 'avatar', avatar->>'still') order by ord), '[]'::jsonb)
+         from agents where status = 'active' and not community) as agents,
+      (select coalesce(jsonb_agg(jsonb_build_object('id', t.id, 'name', t.name, 'purpose', t.purpose,
+                'members', (select coalesce(jsonb_agg(m.agent_id order by m.ord), '[]'::jsonb) from team_members m where m.team_id = t.id))
+              order by t.ord), '[]'::jsonb)
+         from teams t where not t.community) as teams,
+      (select coalesce(jsonb_agg(jsonb_build_object('id', id, 'name', name, 'role', role, 'avatar', avatar) order by ord), '[]'::jsonb)
+         from persona_pool) as pool`);
+  const row = rows.rows[0] as {
+    agents: { id: string; name: string; role: string; summary: string; avatar: string | null }[];
+    teams: RegistryBrief["teams"];
+    pool: PersonaPoolEntry[];
+  };
+  return {
+    registry: {
+      agents: row.agents.map(({ id, name, role, summary }) => ({ id, name, role, summary })),
+      teams: row.teams,
+      personaPool: row.pool.map(({ id, name, role }) => ({ id, name, role })),
+    },
+    world: {
+      agents: row.agents.map(({ id, name, role, avatar }) => ({ id, name, role, ...(avatar ? { avatar } : {}) })),
+      pool: row.pool,
+    },
+  };
+}
