@@ -19,9 +19,9 @@ export const policyStyle = {
 } as const;
 
 /** Portrait for any chat agent: animated sprite when it has art, initial circle otherwise. */
-export function Portrait({ agent, className }: { agent: ChatAgent; className?: string }) {
+export function Portrait({ agent, working, className }: { agent: ChatAgent; working?: boolean; className?: string }) {
   return agent.avatar
-    ? <AgentAvatar avatar={agent.avatar} name={agent.name} className={className} />
+    ? <AgentAvatar avatar={agent.avatar} name={agent.name} working={working} className={className} />
     : <InitialAvatar initial={agent.name[0]} name={agent.name} tone={agent.tone} className={cn("text-4xl", className)} />;
 }
 

@@ -144,11 +144,13 @@ function AgentTabs({ value, onChange, disabled }: { value: Target; onChange: (v:
 
 /** After the first message: the hero portrait + name pill, flown up (same size) in place of the tabs. */
 function AgentChip({ agent, team, incognito, onBackToDana, onProfileToggle }: { agent: ChatAgent; team?: StudioTeam; incognito?: boolean; onBackToDana: () => void; onProfileToggle: () => void }) {
+  // The portrait switches to its working loop while a reply is in flight.
+  const working = useAuiState((s) => s.thread.isRunning);
   return (
     <div className="flex flex-col items-center">
       <button type="button" onClick={onProfileToggle} aria-label={`Toggle ${agent.name}'s profile`} className="group flex flex-col items-center rounded-full outline-none">
         <motion.div layoutId={portraitLayoutId(agent.id)} transition={FLY} className="rounded-full">
-          <Portrait agent={agent} className={cn("size-28 border-[3px] border-foreground/30 transition-[transform,filter] duration-200 group-hover:scale-105 group-hover:animate-[avatar-glow_1.8s_ease-in-out_infinite] group-focus-visible:animate-[avatar-glow_1.8s_ease-in-out_infinite]", incognito && veil)} />
+          <Portrait agent={agent} working={working} className={cn("size-28 border-[3px] border-foreground/30 transition-[transform,filter] duration-200 group-hover:scale-105 group-hover:animate-[avatar-glow_1.8s_ease-in-out_infinite] group-focus-visible:animate-[avatar-glow_1.8s_ease-in-out_infinite]", incognito && veil)} />
         </motion.div>
         <motion.span layoutId={nameLayoutId(agent.id)} transition={FLY} className="relative z-10 -mt-3 block rounded-full border bg-card px-3 py-1 text-sm font-medium shadow-xs">
           {team?.name ?? agent.name}{incognito && " · incognito"}

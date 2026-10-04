@@ -16,6 +16,8 @@ export interface SpriteAvatar {
   strip?: string;
   frames?: number;
   fps?: number;
+  /** Optional loop played instead of the idle strip while the agent is working (same strip format). */
+  working?: { strip: string; frames: number; fps: number };
 }
 
 export interface ChatAgent {

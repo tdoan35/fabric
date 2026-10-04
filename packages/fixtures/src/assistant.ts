@@ -30,6 +30,7 @@ export const dana: ChatAgent = {
     frames: 73,
     fps: 12,
     still: "/dana/happy-idle-still.webp",
+    working: { strip: "/dana/working-strip.webp", frames: 73, fps: 12 },
   },
 };
 
