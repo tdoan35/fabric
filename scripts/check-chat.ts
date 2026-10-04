@@ -163,6 +163,28 @@ function assertTurnShape(parts: Part[], lastTool: string, msg: string, requireTe
   ok(!parts.some((p) => p.toolName === "search_registry"), `${msg}: search_registry never streamed`);
 }
 
+/** JSON with sorted keys: jsonb reorders object keys, so stored and streamed payloads compare by value. */
+const canon = (v: unknown): string =>
+  JSON.stringify(v, (_k, x) => (x && typeof x === "object" && !Array.isArray(x) ? Object.fromEntries(Object.entries(x).sort(([a], [b]) => a.localeCompare(b))) : x));
+
+/**
+ * The card is the team (DANA, card == creation): the approved card's workflow, criteria, rework
+ * budget and roster are exactly the created team's rows, and the stored proposal payload is the card
+ * that streamed.
+ */
+async function assertCardIsTeam(pooled: string, card: any, msg: string) {
+  const [team] = await q(pooled, `select id, workflow, criteria, rework_budget from teams where lower(name) = lower('${card.name.replace(/'/g, "''")}')`) as any[];
+  ok(!!team, `${msg}: the team the card names exists`);
+  const members = (await q(pooled, `select agent_id from team_members where team_id = '${team.id}' order by ord`)).map((r) => r.agent_id);
+  const stages = (w: any[]) => JSON.stringify(w.map((s) => ({ label: s.label, agentIds: s.agentIds, gate: !!s.gate })));
+  ok(stages(card.workflow ?? []) === stages(team.workflow), `${msg}: the card's workflow is the created team's (${team.workflow.length} stages)`);
+  ok(JSON.stringify(card.criteria) === JSON.stringify(team.criteria), `${msg}: the card's criteria are the created team's`);
+  ok(Number(card.reworkBudget) === Number(team.rework_budget), `${msg}: the card's rework budget is the created team's (${team.rework_budget})`);
+  ok(card.roster.map((r: any) => r.agentId).join() === members.join(), `${msg}: the card's roster is the created members (${members.join(", ")})`);
+  const [stored] = await q(pooled, `select payload from proposals where payload->>'proposalId' = '${card.proposalId}'`) as any[];
+  ok(canon(stored?.payload) === canon(card), `${msg}: the stored proposal payload is the card that streamed`);
+}
+
 // ---- the app event stream (asserts land as they arrive) ----
 const appEvents: { event: { type: string; sessionId?: string; messageId?: string; runId?: string; taskId?: string } }[] = [];
 const pumpApp = async () => {
@@ -238,6 +260,7 @@ const latencies: string[] = [];
   ok(slot[0].n === "1" && edge[0].n === "1", "org slot in ty-lab and the Research → Product preview edge");
   const pool = await q(pooled, "select id from persona_pool order by ord");
   ok(pool.length === 1 && pool[0].id === "sana", "Elliot left the persona pool; Sana waits");
+  await assertCardIsTeam(pooled, card, "fixture team approved");
   const registry = await (await fetch(`${base}/api/registry`)).json();
   ok(registry.teams.some((t: any) => t.id === "research") && registry.agents.some((a: any) => a.agent.id === "elliot"), "GET /api/registry serves the new team and lead");
   ok(!registry.agents.some((a: any) => a.agent.id === "sana"), "Sana is still hidden");
@@ -318,13 +341,16 @@ const latencies: string[] = [];
   const oldCall = (await q(pooled, "select tool_call_id from proposals order by created_at limit 1"))[0].tool_call_id;
   ok(rows[1].sup === oldCall && reCard.supersedes === oldCall, "the new card carries supersedes = the old toolCallId");
   ok(Number(reCard.reworkBudget) === 3 && Number(rows[1].rb) === 3, "the re-proposal actually changed (rework budget 3)");
+  ok(reCard.leadDefaults?.some((r: any) => r.label === "Rework budget" && r.value.startsWith("3 ")), "the lead's rework row follows the budget");
+  await turn("c4", await decide("c4", "propose_team", "approved"), true);
+  await assertCardIsTeam(pooled, reCard, "re-proposed card approved");
 
   await turn("c5", [userMsg(IDEA_PROMPT)], true);
   await turn("c5", await decide("c5", "propose_team", "approved"), true);
   await turn("c5", await decide("c5", "propose_specialist", "discuss"), true);
   const r2 = await turn("c5", [userMsg("Sure, propose the validator again with the changes we discussed.")], true);
   assertTurnShape(r2.parts, "propose_specialist", "specialist re-proposal");
-  const specRows = await q(pooled, "select kind, status, payload->>'supersedes' as sup from proposals order by created_at");
+  const specRows = await q(pooled, "select kind, status, payload->>'supersedes' as sup from proposals where session_id = 'c5' order by created_at");
   ok(specRows.filter((r) => r.kind === "specialist").length === 2, "two specialist proposals");
   ok(specRows.find((r) => r.kind === "specialist" && r.status === "superseded") && specRows.find((r) => r.kind === "specialist" && r.status === "pending")?.sup, "the specialist re-proposal supersedes too");
 }
@@ -342,6 +368,9 @@ if (live) {
     assertTurnShape(t1.parts, "propose_team", `live ${i}: idea`, false);
     const t2 = await turn(sid, await decide(sid, "propose_team", "approved"), false);
     assertTurnShape(t2.parts, "propose_specialist", `live ${i}: team approved`, false);
+    await assertCardIsTeam(pooled, toolPart(t1.parts, "propose_team")!.args, `live ${i}`);
+    const spec = toolPart(t2.parts, "propose_specialist")!.args;
+    ok(spec.persona?.id === "sana" && spec.rows?.length === 4 && spec.rows[0].label === "Tools", `live ${i}: the specialist card: the Sana persona, the Validator template's rows`);
     const t3 = await turn(sid, await decide(sid, "propose_specialist", "approved"), false);
     assertTurnShape(t3.parts, "handoff_to_team", `live ${i}: specialist approved`, false);
     const handoff = toolPart(t3.parts, "handoff_to_team")!;
