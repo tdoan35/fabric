@@ -256,7 +256,7 @@ The inspector shows each tool as `allowed / approval / blocked`, and one blocked
 fabric/
   AGENTS.md CLAUDE.md          # agent conventions; CLAUDE.md points at AGENTS.md
   docs/
-    CONCEPT.md ARCHITECTURE.md MOBILE-PLAN.md SCHEDULE-PLAN.md SERVICES.md
+    CONCEPT.md ARCHITECTURE.md MOBILE-PLAN.md SCHEDULE-PLAN.md SERVICES.md RUNTIME.md
     design/fabric-screens.pen  # earlier Pencil design pass
   assets/                      # source art: agent PNGs, Dana's idle MP4
   scripts/                     # dev, check:*, llm:check, memory import, Sprite setup, build-sprite.sh
