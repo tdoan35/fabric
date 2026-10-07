@@ -1,6 +1,5 @@
 // npm run export-recording -- --run <runId> --key <key> [--kind real|illustrative] [--out <path>]
-// Exports a stored run (events, snapshots, artifacts, report) as a recording bundle JSON
-// (WORK-PLAN §5.3 DATA 6). LAB uses this to lock the real recording at CP-C.
+// Exports a stored run (events, snapshots, artifacts, report) as a recording bundle JSON.
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { createDb, exportRecording, loadRootEnv } from "@fabric/db";

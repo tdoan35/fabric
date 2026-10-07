@@ -138,7 +138,6 @@ The contracts package is frozen at `contracts-v1`, so this is an integrator chan
 
 ## Docs
 - `docs/ARCHITECTURE.md`: a short Scheduler section covering the tick, claims and the two job kinds.
-- `docs/MOCKUP-GAPS.md` AGT-5: Dana's morning digest is now real.
 
 ## Verification
 1. **Unit tests:**

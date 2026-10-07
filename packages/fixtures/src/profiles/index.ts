@@ -1,4 +1,4 @@
-// Seed profiles (WORK-PLAN §4.8): the exact world each branch resets to.
+// Seed profiles: the exact world each branch resets to.
 // `demo` is the pre-approval state (SEED-1 clean); `lived-in` is today's mock world.
 // Both derive from the same fixtures the web's mock mode reads, so lived-in matches the mock.
 import type { ContextSnapshot, InboxItem, Organization, PersonaPoolEntry, Presence, Project, PulseEntry, Run, RunEvent, Schedule, ScheduleFire, Session, StudioProfile, StudioTeam, Task } from "@fabric/contracts";

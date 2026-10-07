@@ -1,4 +1,4 @@
-// DANA owns this folder: the main assistant, proposals, handoff and fixture mode (WORK-PLAN §5.3 DANA).
+// DANA owns this folder: the main assistant, proposals, handoff and fixture mode.
 //
 // createAssistant wires Dana onto the real state: the stored thread is authoritative, every turn
 // opens with a recorded disposition (forced tool call, one retry), proposals are human tools whose
@@ -90,7 +90,7 @@ export interface AssistantDeps {
 
 const RECORDING_KEY = "ngram-135m";
 
-/** Low, fixed: routing should be deterministic (WORK-PLAN DANA "use low temperature"). */
+/** Low, fixed: routing should be deterministic. */
 const TEMPERATURE = 0.2;
 /** Tool-loop bound: disposition → text + propose/handoff is 2; 6 is headroom. */
 const MAX_STEPS = 6;

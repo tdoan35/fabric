@@ -14,7 +14,7 @@ export type ClockStart = "sim" | "now" | "end";
 
 /**
  * One clock for live and replay. Anything faster than 1× pauses on each stop (the reviewer's
- * verdicts), so fast-forward lands on the bounce instead of flying past it (MOCKUP-GAPS RUN-1).
+ * verdicts), so fast-forward lands on the bounce instead of flying past it.
  */
 export function useRunClock(max: number, start: ClockStart, stops: number[], liveStartedAt?: string, liveAllowed = true) {
   const elapsed = () => liveStartedAt ? Math.max(0, (Date.now() - new Date(liveStartedAt).getTime()) / 1000) : max;

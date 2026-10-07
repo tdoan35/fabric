@@ -6,7 +6,7 @@
 |---|---|
 | Status | Concept brief — ready for elaboration |
 | Date | 2026-09-29 |
-| Updated | 2026-10-01 — added §3 supporting concepts, §8.5 and §13 after reviewing the coded mockup (`apps/web`); gap register in `MOCKUP-GAPS.md`. 2026-10-02 — §8.5 and §13 A-11 for the Weave page; §3, §8.2, §8.5 and §13 A-12 for the Work page (tasks and loops) |
+| Updated | 2026-10-01 — added §3 supporting concepts, §8.5 and §13 after reviewing the coded mockup (`apps/web`); gap register in `MOCKUP-GAPS.md` (since retired). 2026-10-02 — §8.5 and §13 A-11 for the Weave page; §3, §8.2, §8.5 and §13 A-12 for the Work page (tasks and loops) |
 | Owner | Ty Thanh Doan |
 | Purpose | Handoff document for agents/teams doing: (1) concept development, (2) technical architecture, (3) UI/UX design |
 
@@ -365,7 +365,7 @@ If this concept becomes the "Build Personal Agents Hack" entry (SF, one day, ~6.
 
 ## 13. Proposed amendments from the mockup (2026-10-01)
 
-The coded mockup adds behaviour this brief doesn't cover. Per §0, each item below is a **proposed amendment**: none is adopted until the owner says so. Details and gap IDs are in `MOCKUP-GAPS.md`.
+The coded mockup adds behaviour this brief doesn't cover. Per §0, each item below is a **proposed amendment**: none is adopted until the owner says so. Gap IDs refer to the retired gap register (`docs/MOCKUP-GAPS.md`, in git history).
 
 **Elaborations consistent with §2 (no amendment needed):**
 - **The escalation chain is explicit:** member → team lead → assistant → user. Leads "report to Dana, not to you directly", and the Reviewer escalates to the assistant once the rework budget is spent (§5, §2.8).

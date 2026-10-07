@@ -24,8 +24,8 @@ async function request<T>(path: string, schema: z.ZodType, init?: RequestInit, m
   return value as T;
 }
 
-/** The M0 surface (MOBILE-PLAN §2) plus `getRegistry`/`listProjects`, closing the Requests in
- * docs/status/mobile-weave.md and mobile-work.md. Chat (POST /api/chat) and SSE (/api/stream) arrive with M1. */
+/** The M0 surface (MOBILE-PLAN §2) plus `getRegistry`/`listProjects`. Chat (POST /api/chat) and SSE
+ * (/api/stream) live in lib/chat.ts and lib/stream.ts. */
 export const httpApi = {
   getRegistry: () => request<Registry>("/registry", RegistrySchema),
   getWeave: () => request<WeaveSnapshot>("/weave", WeaveSnapshotSchema),

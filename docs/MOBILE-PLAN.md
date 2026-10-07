@@ -4,9 +4,9 @@
 |---|---|
 | Status | Draft v0.1, Sun Oct 4 2026 |
 | Owner | Ty Thanh Doan |
-| Workstream | **MOB**: branch `seq/mobile`. Owns `apps/mobile/` and `docs/status/mobile.md` |
+| Workstream | **MOB**: branch `seq/mobile`. Owns `apps/mobile/` |
 | Horizon | **Today:** M0 (and M1 if there's time), demoable through Expo Go. **Phase 2:** M2 (dev build, push notifications, auth, real decisions) |
-| Still binding | `CONCEPT.md` §2 · WORK-PLAN §0 rule 5 ("don't break mock mode") · `DEMO-SCRIPT.md` §3 beats |
+| Still binding | `CONCEPT.md` §2 · don't break mock mode |
 
 ## TL;DR
 
@@ -64,9 +64,9 @@ The app is a tab bar (expo-router `(tabs)`) with **Chat · Weave · Work** tabs 
 
 - **Dev build (EAS) instead of Expo Go.** Expo Go can't receive remote push notifications, so the app moves to an `expo-dev-client` build at this point.
 - **Push:** `expo-notifications`, with an additive server route `POST /api/push-tokens` and table `push_tokens(token, platform, created_at)`. A sender (Expo Push API) triggers on new Weave asks and `run.blocked`, following CONCEPT §8.3.5 "urgency without anxiety": approvals, escalations and results only, never progress.
-- **Real decisions:** `POST /api/weave/items/:id/decision`, shared with the web. This depends on WORK-PLAN §6 **WEAVE** retiring the `DECISIONS` map.
+- **Real decisions:** `POST /api/weave/items/:id/decision`, shared with the web. This depends on the web's Weave retiring the `DECISIONS` map.
 - **Approve proposals from the phone:** an RN thread runtime that holds the same message shape as the web, or a server-side decision endpoint for human tools.
-- **Reachability and auth:** server deployed to Fly plus single-user auth (WORK-PLAN §6 **DESKTOP**). Until then the phone only works on the same network or the tailnet.
+- **Reachability and auth:** server deployed to Fly plus single-user auth. Until then the phone only works on the same network or the tailnet.
 - Join the npm workspaces once React versions are aligned.
 
 ---
@@ -123,7 +123,7 @@ The phone has to reach the laptop's server on :8787. `serve()` in `apps/server/s
 
 ## 6. Build steps (sequential-mode handoff)
 
-Each step ends with a **How to verify** check, written up in `docs/status/mobile.md` using the WORK-PLAN §7.6 template.
+Each step ends with a **How to verify** check.
 
 1. **Scaffold:** `npx create-expo-app@latest apps/mobile --template tabs`, then remove it from any workspace globs it touches.
    *Verify:* `npm run typecheck && npm run build` at the root still pass. The web runs in mock mode unchanged.
@@ -152,22 +152,10 @@ Each step ends with a **How to verify** check, written up in `docs/status/mobile
 | Expo Go SDK mismatch | Use the SDK that current Expo Go ships. Install Expo Go the night before |
 | `contracts` imports something RN can't resolve | Step 2 finds it early. Fall back to copying the few types needed |
 | `expo/fetch` streaming quirks (M1) | M1 is optional. Polling covers live updates |
-| Weave decisions on the phone aren't real | Same as web today. Say "seeded" if asked (DEMO-SCRIPT §4) |
+| Weave decisions on the phone aren't real | Same as web today. Say "seeded" if asked |
 | Tunnel exposes an unauthenticated server | Prefer the hotspot or tailnet. Kill the tunnel right after the demo |
 
 **Open questions**
 - Is there an iOS or Android device for the demo? This decides how the screen is mirrored.
 - Do persona portraits ship as plain PNGs that RN can `require`, or as something web-only?
 - Phase 2: should push go through Expo Push or straight to APNs/FCM? Expo Push is the default; revisit if self-hosting matters.
-
----
-
-## 8. Proposed edits to other docs (for the owner to apply)
-
-- **CONCEPT §10, non-goals:** keep "Mobile-first", and add *"A mobile **companion** (asks, status, results) is in scope; creation and inspection stay desktop."*
-- **WORK-PLAN §6 table:** add a new row:
-
-  | **MOBILE**: Companion app | Dev build (EAS), push notifications for asks / blocked runs / results, decisions from the phone, approving proposals from the phone, workspace merge | CONCEPT §8.3.5 | WEAVE, DESKTOP |
-
-- **DEMO-SCRIPT §3:** the optional 4:40 phone beat in §5, marked cuttable.
-- **DEMO-SCRIPT §5 checklist:** add "Expo Go installed and SDK matches · phone on hotspot or tailnet · mirroring tested".

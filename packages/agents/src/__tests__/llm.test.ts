@@ -1,4 +1,4 @@
-// llm unit tests: thinking request bodies per level, defaults, model mapping, metering (WORK-PLAN CTX/DANA step 1).
+// llm unit tests: thinking request bodies per level, defaults, model mapping, metering.
 // No network: fetch is stubbed at the provider boundary.
 import { describe, expect, it, beforeEach, afterEach, vi } from "vitest";
 import { generateObject, generateText, streamText } from "ai";

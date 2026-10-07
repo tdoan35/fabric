@@ -1,4 +1,4 @@
-// CTX unit tests (WORK-PLAN §5.3 CTX 5): the brief never carries transcript text, section tokens add up,
+// CTX unit tests: the brief never carries transcript text, section tokens add up,
 // empty USER.md → empty preferences, notLoaded per role, plus snapshot contract validation.
 // No network: compileBrief runs against a mock model from the AI SDK test utils.
 import { describe, expect, it } from "vitest";

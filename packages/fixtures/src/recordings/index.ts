@@ -1,4 +1,4 @@
-// Recording bundles (WORK-PLAN §5.3 DATA 6): a recorded loop as one importable JSON file.
+// Recording bundles: a recorded loop as one importable JSON file.
 // `kind: "illustrative"` bundles come from the mock world (D9); `real` ones from scripts/export-recording.ts.
 // Ids are hints: import re-stamps run/report ids (using the hints when free) and always re-stamps
 // event runId/seq, so the same bundle can be imported on any branch.
@@ -9,7 +9,7 @@ export interface RecordingBundle {
   key: string;
   kind: RecordingKind;
   exportedAt: string;
-  /** What the demo splices into; produced by the real team on the real task (PRD §7). */
+  /** What the demo splices into; produced by the real team on the real task. */
   run: {
     idHint: string;
     objective: string;

@@ -1,4 +1,4 @@
-// DANA owns this file. POST /chat streams NDJSON (WORK-PLAN §4.3); GET /sessions/:id/messages
+// DANA owns this file. POST /chat streams NDJSON; GET /sessions/:id/messages
 // restores the thread on reload. The request body is validated by the contract schema; the
 // x-fabric-fixture header turns on scripted Dana for the turn (RUN-12), like `fixture: true`.
 import { Hono } from "hono";

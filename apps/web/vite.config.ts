@@ -4,7 +4,7 @@ import react from "@vitejs/plugin-react-swc";
 import tailwindcss from "@tailwindcss/vite";
 
 // The root .env feeds both the server and the web (only VITE_* reaches the browser).
-// VITE_PORT gives each worktree its own port (WORK-PLAN §4.9).
+// VITE_PORT gives each worktree its own port.
 const envDir = path.resolve(import.meta.dirname, "../..");
 
 export default defineConfig(({ mode }) => {

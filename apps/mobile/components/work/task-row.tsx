@@ -25,7 +25,7 @@ const statusLabel: Record<Run["status"], string> = {
 /**
  * One task on the Work list: title, then its latest loop (the last entry of runIds) with the
  * numbers that matter away from the desk — status, spend against budget, rework, ETA. A recorded
- * loop is marked with a small replay pill (DEMO-SCRIPT §4: replay is always badged). The loop row
+ * loop is marked with a small replay pill (replay is always badged). The loop row
  * opens the report when one exists; otherwise it says the rest lives on desktop.
  */
 export function TaskRow({ task, runsById }: { task: Task; runsById: Map<string, Run> }) {

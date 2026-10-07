@@ -18,17 +18,11 @@
     "lint": "npm run lint -w web",
     "seed": "npm run seed -w @fabric/db --",
     "memory:import": "tsx scripts/import-mnemosyne.ts",
-    "smoke": "node scripts/smoke.mjs",
     "llm:check": "tsx scripts/llm-check.ts",
     "export-recording": "tsx scripts/export-recording.ts",
     "check:data": "node scripts/check-data.mjs",
     "check:tools": "tsx scripts/check-tools.ts",
-    "check:team": "tsx scripts/check-team.ts",
-    "demo:reset": "bash scripts/demo.sh reset",
-    "demo:server": "bash scripts/demo.sh server",
-    "demo:web": "bash scripts/demo.sh web",
-    "demo:electron": "bash scripts/demo.sh electron",
-    "demo:offline": "bash scripts/demo.sh offline"
+    "check:team": "tsx scripts/check-team.ts"
   },
   "devDependencies": {
     "@types/node": "^20",

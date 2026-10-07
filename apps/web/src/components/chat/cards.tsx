@@ -93,7 +93,7 @@ function Actions({ yes, addResult }: { yes: string; addResult: (r: Decision) => 
   const aui = useAui();
   const running = useAuiState((s) => s.thread.isRunning);
   // Local runtime doesn't auto-resume after a human tool result, so start the next turn ourselves.
-  // That run re-sends the thread with the {decision} on this card's part (WORK-PLAN §4.3).
+  // That run re-sends the thread with the {decision} on this card's part.
   const decide = (r: Decision) => {
     addResult(r);
     const msgs = aui.thread().getState().messages;

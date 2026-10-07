@@ -1,4 +1,4 @@
-// HTTP API shapes (WORK-PLAN §4.2–§4.3). Read-model schemas are checked against the domain
+// HTTP API shapes. Read-model schemas are checked against the domain
 // interfaces with `satisfies`, so the two can't drift. DATA validates its responses with them in tests.
 import { z } from "zod";
 import type { Brief, ContextSnapshot, Project, Report, Run, RunEvent, RunSegment, Task } from "./domain";

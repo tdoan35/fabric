@@ -1,2 +1,2 @@
-// Moved to packages/contracts (WORK-PLAN §4.1). Shim kept so imports don't change.
+// Moved to packages/contracts. Shim kept so imports don't change.
 export * from "@fabric/contracts";

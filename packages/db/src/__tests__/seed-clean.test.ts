@@ -1,4 +1,4 @@
-// SEED-1 (PRD §10.8): before approval, no served surface may mention the Research Team, its
+// SEED-1: before approval, no served surface may mention the Research Team, its
 // people or its work. Pure fixture-level: the demo world is what every read model serves.
 import { describe, expect, it } from "vitest";
 import { buildDemoWorld } from "@fabric/fixtures/profiles";

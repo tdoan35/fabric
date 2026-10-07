@@ -1,5 +1,5 @@
 // S1 check: `npm run llm:check [-- --openrouter]` — hits the real lane SEQUENTIALLY (shared, 8 concurrent max).
-// Never prints SPARK_BASE_URL or any key. Steps (WORK-PLAN §5.2 S1):
+// Never prints SPARK_BASE_URL or any key. Steps:
 //   1. Spark routing prompt at thinking off/low/medium: latency + reasoning tokens (off must be 0)
 //   2. A forced tool call
 //   3. Streaming: first-chunk latency, tool-call deltas, usage

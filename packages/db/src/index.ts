@@ -3,7 +3,7 @@ import type { Brief, ContextSnapshot, Run, RunEvent, RunEventPayloads, RunEventT
 import { createDb } from "./db";
 import type { Db } from "./db";
 import { createRunWriterWith } from "./writer";
-/** The only way anything writes to a run (WORK-PLAN §4.6). Stamps seq and t; validates payloads. */
+/** The only way anything writes to a run. Stamps seq and t; validates payloads. */
 export interface RunWriter {
   createTask(i: { projectId: string; teamId: string; title: string; sessionId?: string; recordingKey?: string }): Promise<Task>;
   /**

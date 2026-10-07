@@ -1,4 +1,4 @@
-// Dana on the real server (WORK-PLAN §4.3): POST /api/chat {sessionId, messages} through lib/api and
+// Dana on the real server: POST /api/chat {sessionId, messages} through lib/api and
 // read the NDJSON stream. Each line is a cumulative snapshot of the assistant message, so it replaces
 // the content. The human-tool flow is unchanged: a card's addResult stamps {decision} on its part and
 // starts the next run, which re-sends the thread with the result; the server diffs it against its own copy.

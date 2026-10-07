@@ -1,4 +1,4 @@
-// The one shared "make it exist" path for approved teams and specialists (WORK-PLAN DANA 3, D1).
+// The one shared "make it exist" path for approved teams and specialists.
 // DANA's approval handler and the dev sim both call this, so a real approval and POST /api/dev/sim
 // produce the same registry rows and org edge. DATA owns the package; DANA owns this file's intent.
 //
@@ -20,7 +20,7 @@ export interface ProvisionTeamInput {
   origin?: string;
   /**
    * Org wiring. Defaults to the demo org: a slot in ty-lab and, once the other team exists too,
-   * the Research → Product preview edge (WORK-PLAN §4.8).
+   * the Research → Product preview edge.
    */
   org?: { id?: string; slotKey?: string; handoffTo?: string; handoffQuestion?: string };
 }

@@ -1,4 +1,4 @@
-// Fabric server (WORK-PLAN §3.1, §4.2). Integrator owns this file; each route file has its own owner.
+// Fabric server. Integrator owns this file; each route file has its own owner.
 import { serve } from "@hono/node-server";
 import { Hono } from "hono";
 import { cors } from "hono/cors";

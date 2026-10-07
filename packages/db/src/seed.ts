@@ -1,4 +1,4 @@
-// npm run seed -- --profile demo|lived-in [--branch <name>]   (WORK-PLAN §4.8)
+// npm run seed -- --profile demo|lived-in [--branch <name>]
 // An idempotent reset: migrations (unpooled URL), truncate, insert the profile's world, import its
 // recordings, stamp seed_state. --branch resolves pooled+unpooled URLs through the neon CLI without
 // printing them. Defaults: lived-in, on the .env branch. Never logs connection strings.
@@ -56,7 +56,7 @@ const TABLES = [
   "reports", "artifacts", "context_snapshots", "run_events", "runs", "tasks", "projects",
   "org_handoffs", "org_slots", "organizations", "team_members", "teams", "persona_pool",
   "agent_memories", "agents", "seed_state",
-  // `memories` is deliberately absent: re-seeding must not wipe the Mnemosyne import (docs/status/memory.md).
+  // `memories` is deliberately absent: re-seeding must not wipe the Mnemosyne import.
 ];
 await db.db.execute(sql.raw(`truncate table ${TABLES.map((t) => `public.${t}`).join(", ")} restart identity cascade`));
 

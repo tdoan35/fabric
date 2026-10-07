@@ -4,7 +4,7 @@
 |---|---|
 | Status | Draft v0.2 — §3–§9 and §13 updated against the coded mockup (Oct 1); new §15 frontend contract |
 | Scope | Demo-thin slice of `CONCEPT.md` §9. Hybrid-narrow build: Mastra as runtime; own thin router, brief compiler, context recorder; Neon for all state. |
-| Legend | **[UNVERIFIED]** = assumed from docs, needs a spike. IDs in square brackets, such as [RUN-1], point to `MOCKUP-GAPS.md`. |
+| Legend | **[UNVERIFIED]** = assumed from docs, needs a spike. IDs in square brackets, such as [RUN-1], come from the retired gap register (`docs/MOCKUP-GAPS.md`, in git history before the post-hackathon cleanup). |
 
 ---
 
@@ -47,7 +47,7 @@
 | Layer | Choice | Why / note |
 |---|---|---|
 | Language | TypeScript end to end | Mastra, Assistant UI, `@fly/sprites`, `agentmail`, `exa-js` are all TS. |
-| Web | Next.js 16.3 + React 19.2 + Assistant UI 0.15 + shadcn/ui 4 ("radix-nova", neutral) + Tailwind 4 + motion; Geist | **The coded mockup in `apps/web` is the UI reference**: mock data behind `src/lib/api` (§15). Cards render by tool name through `MessagePrimitive.Parts` (`tools.by_name`). Approval cards currently use assistant-ui human tool results; map them to Mastra approvals starting from `assistant-ui/mastra-hitl` (spike 4). Next 16 differs from older Next, so read `AGENTS.md` first. `docs/design/fabric-screens.pen` is the earlier design pass and is out of date (`MOCKUP-GAPS.md` §4.12). |
+| Web | Next.js 16.3 + React 19.2 + Assistant UI 0.15 + shadcn/ui 4 ("radix-nova", neutral) + Tailwind 4 + motion; Geist | **The coded mockup in `apps/web` is the UI reference**: mock data behind `src/lib/api` (§15). Cards render by tool name through `MessagePrimitive.Parts` (`tools.by_name`). Approval cards currently use assistant-ui human tool results; map them to Mastra approvals starting from `assistant-ui/mastra-hitl` (spike 4). Next 16 differs from older Next, so read `AGENTS.md` first. `docs/design/fabric-screens.pen` is the earlier design pass and is out of date. |
 | Agent runtime | Mastra (agents, workflows, tool approval, observability) | `parallel`, `dountil`, `branch`, `suspend`/`resume`; agents as workflow steps. |
 | DB | Neon Postgres (`@mastra/pg` for Mastra storage; own tables for Fabric) | One database. Registry is small enough to skip pgvector. |
 | LLM | Neon AI Gateway via OpenAI-compatible endpoint or `@neon/ai-sdk-provider` | [UNVERIFIED: tool calling, `usage`, catalog.] See §12 spike 1. |
@@ -250,31 +250,29 @@ The inspector shows each tool as `allowed / approval / blocked`, and one blocked
 | 8 | **Replay** | Record a toy run; replay at 60× through the same UI component | — (must pass) |
 | 9 | (P2) Kernel, Neon branch-per-run | — | Drop |
 
-## 13. Repo layout (actual as of Oct 1, then planned)
+## 13. Repo layout
 
 ```text
 fabric/
   AGENTS.md CLAUDE.md          # agent conventions; CLAUDE.md points at AGENTS.md
   docs/
-    CONCEPT.md PRD.md ARCHITECTURE.md DEMO-SCRIPT.md MOCKUP-GAPS.md
-    status/                    # per-agent status files (WORK-PLAN §7.6)
+    CONCEPT.md ARCHITECTURE.md MOBILE-PLAN.md SCHEDULE-PLAN.md SERVICES.md
     design/fabric-screens.pen  # earlier Pencil design pass
   assets/                      # source art: agent PNGs, Dana's idle MP4
-  scripts/build-sprite.sh      # MP4 → WebP sprite strip + still (12 fps, 192 px)
-  apps/web/                    # Next.js mockup, its own git repo (1 commit + uncommitted work)
-    src/app/                   # routes: / · /agents · /teams · /runs/[id] · /reports/[id]
-    src/components/            # chat/ run/ inspector/ report/ studio/ shell/ ui/ (shadcn)
-    src/lib/api/               # backend seam (mock today; §15)
-    src/lib/mock/              # all mock data
-    public/agents, public/dana # WebP portraits; Dana's idle strip (73 frames)
-  # planned, not created yet:
-  packages/core/               # Mastra agents, tools, workflows; router; brief compiler;
-                               # context recorder; replay service; db access
-  packages/db/                 # schema + migrations
-  scripts/                     # + seed, record-run, replay-cli
+  scripts/                     # dev, check:*, llm:check, memory import, Sprite setup, build-sprite.sh
+  apps/web/                    # Vite + React Router SPA, also shipped inside Electron (electron/)
+    src/routes/                # home · weave · work · task · run · report · agents · schedule
+    src/lib/api/               # the only path to the server (mock or http, VITE_API_MODE)
+    public/agents, public/dana # WebP portraits; Dana's idle and working strips
+  apps/server/                 # Hono on Node: routes/ (HTTP + SSE), services/ (runtime, scheduler, splice)
+  apps/mobile/                 # Expo companion app; not an npm workspace (own lockfile)
+  packages/
+    contracts/                 # zod schemas + types shared by web, server and mobile
+    db/                        # Drizzle schema, migrations (drizzle/), RunWriter, seed
+    fixtures/                  # mock data, seed profiles, recorded loops
+    agents/                    # Dana (assistant/), team runtime, context/brief, llm providers, memory
+    integrations/              # tools and policies: Sprites, Exa, AgentMail, Dana's browser
 ```
-
-Before the event, put the root under git, and decide whether `apps/web` stays a nested repo, so docs and code are versioned together [DATA-8].
 
 ## 14. Known unknowns to close before Oct 4
 

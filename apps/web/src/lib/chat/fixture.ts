@@ -1,6 +1,6 @@
 // The fixture hotkey (RUN-12): Ctrl+Shift+F arms scripted Dana for the next turn — the request goes
 // out with `fixture: true`, same stream, same side effects. The demo's fallback when a live
-// proposal doesn't come (DEMO-SCRIPT §6). One flag for the page; the next turn consumes it.
+// proposal doesn't come. One flag for the page; the next turn consumes it.
 import { useSyncExternalStore } from "react";
 
 let armed = false;

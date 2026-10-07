@@ -1,6 +1,6 @@
 // DANA owns this folder: model access through the Neon AI Gateway, and per-call usage metering (ARCH §10).
 //
-// One factory over three providers, chosen by LLM_PROVIDER (WORK-PLAN §2.1 item 5):
+// One factory over three providers, chosen by LLM_PROVIDER:
 //   spark      — the DGX Spark lane (vLLM, OpenAI-compatible). Every display model maps to SPARK_MODEL.
 //   openrouter — anthropic/claude-* ids, usage accounting on (usage.cost comes back).
 //   neon       — the Neon AI Gateway at the venue (@neon/ai-sdk-provider, NEON_AI_GATEWAY_* env).
@@ -47,7 +47,7 @@ export interface ModelOptions {
 
 export const DANA = "dana";
 
-/** Thinking defaults (WORK-PLAN DANA 1): Dana off for latency, everyone else medium. */
+/** Thinking defaults: Dana off for latency, everyone else medium. */
 export function defaultThinking(agentId: string | undefined): ThinkingLevel {
   return agentId === DANA ? "off" : "medium";
 }

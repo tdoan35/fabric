@@ -1,5 +1,5 @@
 // Weave types (moved from apps/web/src/lib/mock/weave.ts). Phase 1 serves the seeded world;
-// phase 2 generates these from real events (WORK-PLAN §6, WEAVE).
+// phase 2 generates these from real events.
 import type { ToolPolicy } from "./domain";
 
 export type PresenceState = "working" | "waiting" | "blocked" | "idle";

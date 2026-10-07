@@ -6,7 +6,7 @@
 //
 //   1. the live start through fixture-Dana's handoff (the real demo path):
 //        - the four opening step.started within the first seconds (the ~6 s seam window)
-//        - at least 3 members with an open step by 45 s (PRD §10.3)
+//        - at least 3 members with an open step by 45 s
 //        - Megan's Exa narration and Jonah's terminal lines arriving live
 //        - a snapshot with real section content for every started step
 //   2. POST /splice at ~45 s: cancelRun stops new events (nothing after splice_t but the

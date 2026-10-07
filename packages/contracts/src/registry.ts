@@ -1,5 +1,5 @@
 // Registry types: who exists (agents, teams, orgs) and where you talk to them (sessions).
-// Moved from apps/web/src/lib/mock/{assistant,studio,teams,sessions,suggestions}.ts (WORK-PLAN §4.1).
+// Moved from apps/web/src/lib/mock/{assistant,studio,teams,sessions,suggestions}.ts.
 import type { Project } from "./domain";
 
 export interface Suggestion {

@@ -52,7 +52,7 @@ export const quiet = (err: unknown): boolean => err instanceof RunClosedError ||
 
 // ---- per-stage knobs ----
 
-/** Thinking (WORK-PLAN setup): off where the live start's latency matters, low afterwards. */
+/** Thinking: off where the live start's latency matters, low afterwards. */
 const THINKING: Record<string, ThinkingLevel> = { Plan: "off", Prepare: "off", Synthesize: "low", Implement: "low", Validate: "low", Review: "off" };
 
 /** Per-step timeouts: bounds against hangs, not pacing — real work on the shared Spark lane is

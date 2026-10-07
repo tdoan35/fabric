@@ -1,4 +1,4 @@
-// DANA unit tests (WORK-PLAN §5.3 DANA "Done when"): the thread-diff logic, the proposal state
+// DANA unit tests: the thread-diff logic, the proposal state
 // transitions, and the first record_disposition call (asked for, not forced). No network, no database: the model
 // is the AI SDK's MockLanguageModelV4 and the pure modules are exercised directly.
 import { describe, expect, it } from "vitest";

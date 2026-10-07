@@ -1,4 +1,4 @@
-// Drizzle schema for WORK-PLAN §4.7. Tables live in `public`; Mastra gets its own schema later.
+// Drizzle schema. Tables live in `public`.
 // Read models (read.ts) project these rows into the frozen @fabric/contracts shapes.
 import type {
   AgentWorkspace, Brief, CalendarEvent, ChatAgent, ContextSection, InboxItem, PulseEntry, Presence, Project,

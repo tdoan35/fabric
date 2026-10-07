@@ -1,4 +1,4 @@
-// Server config (WORK-PLAN §4.9). Every integration is optional so the server boots with an empty .env;
+// Server config. Every integration is optional so the server boots with an empty .env;
 // features check their own keys. Shell variables win over the root .env (per-worktree ports).
 import path from "node:path";
 import { z } from "zod";
@@ -25,7 +25,7 @@ export const env = z.object({
   /** Neon's own names, so Mastra `neon/<model>` and @neon/ai-sdk-provider read them with no config. Paid plan only. */
   NEON_AI_GATEWAY_BASE_URL: z.string().optional(),
   NEON_AI_GATEWAY_TOKEN: z.string().optional(),
-  /** Which model provider every agent uses (WORK-PLAN §4.9): spark for dev, neon at the venue, openrouter as backup. */
+  /** Which model provider every agent uses: spark for dev, neon at the venue, openrouter as backup. */
   LLM_PROVIDER: z.enum(["spark", "openrouter", "neon"]).default("spark"),
   /** OpenAI-compatible vLLM lane on the DGX Spark, reached over the tailnet. The server doesn't enforce the key. */
   SPARK_BASE_URL: z.string().optional(),

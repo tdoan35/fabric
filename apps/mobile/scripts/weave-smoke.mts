@@ -1,9 +1,8 @@
 /**
  * Weave live-payload smoke (MOB-B): the server's GET /api/weave through the list's pure logic —
  * contracts validation, kind grouping/order, action href classification, time formatting.
- * Needs the server on :8787 (see docs/status/mobile-weave.md). Run from apps/mobile with any
- * tsx, e.g. the root install of the seq/mobile worktree:
- *   ../../fabric-mobile/node_modules/.bin/tsx scripts/weave-smoke.mts
+ * Needs the server on :8787. Run from apps/mobile with any tsx, e.g. the root install:
+ *   ../../node_modules/.bin/tsx scripts/weave-smoke.mts
  * The read-model WeaveSnapshotSchema is deliberately loose (it strips rich fields), so the
  * fields asserted here get their own schema — no unchecked casts on network data.
  */

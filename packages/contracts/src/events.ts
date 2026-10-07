@@ -1,4 +1,4 @@
-// Run event payloads (WORK-PLAN §4.5) and the app invalidation stream (§4.4).
+// Run event payloads and the app invalidation stream.
 // Writers validate with these schemas; the web keeps reading `RunEvent.payload` loosely.
 import { z } from "zod";
 import type { RunEvent, RunEventType } from "./domain";

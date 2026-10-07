@@ -58,7 +58,7 @@ describe("planPasses (data-driven over teams.workflow)", () => {
   it("keeps at least three members working in the opening stages", () => {
     const { opening } = planPasses(research.workflow, "elliot");
     const members = new Set(opening.flatMap((s) => s.agentIds));
-    expect(members.size).toBeGreaterThanOrEqual(3); // PRD §10.3
+    expect(members.size).toBeGreaterThanOrEqual(3);
   });
 
   it("treats the last stage as the gate when none is flagged", () => {

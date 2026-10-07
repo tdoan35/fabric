@@ -1,5 +1,4 @@
-// @fabric/contracts — frozen at Checkpoint 0 (tag contracts-v1). Changes go through the integrator
-// (WORK-PLAN §0): file a request in your docs/status/<code>.md.
+// @fabric/contracts — the types and zod schemas shared by the web app, the server and the mobile app.
 export * from "./domain";
 export * from "./registry";
 export * from "./weave";

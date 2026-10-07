@@ -2,10 +2,10 @@
  * Chat + app-stream smoke (MOB-E): drives the app's own chatStream generator and app-stream
  * manager against the running server, under node. The fetch implementation is injected, so this
  * exercises exactly the code the phone runs (lib/chat.ts, lib/stream.ts) minus expo/fetch itself
- * — that part is only provable on a device (see docs/status/mobile-chat.md).
+ * — that part is only provable on a device.
  *
- * Run from apps/mobile (server first — see docs/status/mobile-chat.md):
- *   ../../fabric-mobile-demo/node_modules/.bin/tsx scripts/chat-smoke.mts   # any tsx will do
+ * Run from apps/mobile, with the server running:
+ *   ../../node_modules/.bin/tsx scripts/chat-smoke.mts   # any tsx will do
  *
  * What it proves:
  *  1. GET /api/sessions/c1/messages parses with SessionMessagesSchema (the history the screen loads).

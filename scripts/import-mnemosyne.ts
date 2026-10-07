@@ -27,7 +27,7 @@ const flag = (name: string) => {
 };
 const dryRun = args.includes("--dry-run");
 
-// ---- selection rules (docs/status/memory.md) ----
+// ---- selection rules ----
 
 interface Candidate {
   id: string;

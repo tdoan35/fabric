@@ -1,4 +1,4 @@
-// RunWriter (WORK-PLAN §4.6): the only way anything writes to a run.
+// RunWriter: the only way anything writes to a run.
 // Stamps `seq` (atomic per run: advisory lock + max(seq)+1, safe under TEAM's parallel steps) and
 // `t` (seconds since runs.started_at). Cost accumulates from budget.update events.
 import { sql } from "drizzle-orm";

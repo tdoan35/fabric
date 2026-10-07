@@ -3,7 +3,7 @@
 // last verdict, attaches the report (copied from the recording when spliced, synthesized after a
 // real finish), emits run.finished, adds the Weave result item, then calls assistant.postResultsMessage
 // (DANA) and — only when FEATURE_AGENTMAIL=on — sendReportEmail (TOOLS). Stub calls log one line and
-// carry on, so both paths work today (WORK-PLAN §5.3 DATA 8).
+// carry on, so both paths work today.
 import { NotImplementedError } from "@fabric/contracts";
 import type { Report, ResultItem, RunEvent } from "@fabric/contracts";
 import { sendReportEmail } from "@fabric/integrations";

@@ -1,5 +1,5 @@
 // npm run dev: the server and the web dev server together, with prefixed output. Ctrl-C stops both.
-// Ports come from the shell or the root .env (PORT, VITE_PORT; WORK-PLAN §4.9).
+// Ports come from the shell or the root .env (PORT, VITE_PORT).
 import { spawn } from "node:child_process";
 
 const procs = [

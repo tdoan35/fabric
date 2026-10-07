@@ -1,4 +1,4 @@
-// CTX owns this folder (TEAM in the 7-agent setup): the brief compiler and context assembly (WORK-PLAN §5.3 CTX).
+// CTX owns this folder (TEAM in the 7-agent setup): the brief compiler and context assembly.
 //
 // Two rules shape everything here (CONCEPT §2.6, §6):
 //   1. A brief is compiled, never copied: BriefInput has no transcript field, and compileBrief never sees one.

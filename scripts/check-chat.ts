@@ -431,7 +431,7 @@ console.log(`\ncheck:chat PASSED in ${((Date.now() - startedAll) / 1000).toFixed
 stopAll();
 process.exit(0);
 
-/** The live per-turn timing table (markdown, so it pastes into docs/status/dana.md), plus medians. */
+/** The live per-turn timing table (markdown), plus medians. */
 function printTimingTable(rows: { pass: number; turn: string; timing: Timing }[]) {
   const sec = (ms?: number) => (ms === undefined ? "—" : `${(ms / 1000).toFixed(1)} s`);
   const median = (xs: number[]) => {

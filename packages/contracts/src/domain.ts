@@ -1,4 +1,4 @@
-// Domain types shared by the web app and the server. Moved from apps/web/src/lib/types.ts (WORK-PLAN §4.1).
+// Domain types shared by the web app and the server. Moved from apps/web/src/lib/types.ts.
 // Fields added in contracts-v1 are optional where today's mock fixtures don't carry them yet;
 // the server always sets them.
 

@@ -13,7 +13,7 @@ const MARK: Record<RunMarker["kind"], string> = {
   denied: "h-2.5 w-0.5 rounded-full bg-warn",
 };
 
-/** Live / Replay · N×. Replay is always badged (PRD §11: "Was this real?"). */
+/** Live / Replay · N×. Replay is always badged ("Was this real?"). */
 export function ClockBadge({ clock, start, liveActive = true }: { clock: RunClock; start: ClockStart; liveActive?: boolean }) {
   return clock.source === "live" && liveActive
     ? (

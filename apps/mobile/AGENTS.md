@@ -48,8 +48,8 @@ Docs: https://docs.expo.dev/eas/index.md
   the root and re-run the install with the root `node_modules` moved aside.
 - Server responses are validated with the zod schemas from `@fabric/contracts` via `lib/api.ts`
   (mirror of `apps/web/src/lib/api/http.ts`). Never fetch past it.
-- `lib/**` and `components/ui/**` are MOB-A's frozen shared layer: request changes via
-  `docs/status/mobile.md` instead of editing.
+- `lib/**` and `components/ui/**` are the shared layer every screen uses; keep screen-specific
+  code out of them.
 - Base URL: `EXPO_PUBLIC_API_URL` in `apps/mobile/.env` (copy `.env.example`; never commit `.env`).
 - Theme tokens live in `lib/theme.ts` (copied from `apps/web/src/styles/globals.css`, dark-first).
 - Persona portraits: `lib/avatar.ts` requires the WebP stills in `assets/portraits/`.

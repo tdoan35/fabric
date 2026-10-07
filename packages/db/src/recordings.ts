@@ -1,5 +1,5 @@
 // Recording bundles: import makes a run (recorded = true, no task unless attached), export turns a
-// real run into a bundle for scripts/export-recording.ts (WORK-PLAN §5.3 DATA 6).
+// real run into a bundle for scripts/export-recording.ts.
 import { sql } from "drizzle-orm";
 import { parseRunEventPayload } from "@fabric/contracts";
 import type { RecordingBundle } from "@fabric/fixtures/recordings";
