@@ -1,4 +1,5 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
+import { expect, fn, userEvent, within } from "storybook/test";
 import { ArrowUpRight } from "lucide-react";
 import { Button } from "./button";
 
@@ -13,6 +14,16 @@ type Story = StoryObj<typeof meta>;
 
 const VARIANTS = ["default", "secondary", "outline", "destructive", "ghost", "link"] as const;
 
+/** Signature classes per variant: each assertion fails if the variant loses its styling. */
+const VARIANT_CLASSES: Record<(typeof VARIANTS)[number], string[]> = {
+  default: ["bg-primary", "text-primary-foreground"],
+  secondary: ["bg-secondary", "text-secondary-foreground"],
+  outline: ["border-border", "bg-background"],
+  destructive: ["bg-destructive/10", "text-destructive"],
+  ghost: ["hover:bg-muted", "hover:text-foreground"],
+  link: ["text-primary", "underline-offset-4"],
+};
+
 export const Variants: Story = {
   name: "Variants",
   render: () => (
@@ -24,26 +35,91 @@ export const Variants: Story = {
       ))}
     </div>
   ),
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    const buttons = canvas.getAllByRole("button");
+
+    // One real <button> per variant, each tagged with its variant...
+    expect(buttons).toHaveLength(VARIANTS.length);
+    VARIANTS.forEach((variant, index) => {
+      const button = buttons[index];
+      expect(button.tagName).toBe("BUTTON");
+      expect(button.dataset.variant).toBe(variant);
+      // ...and carrying that variant's signature classes.
+      for (const cls of VARIANT_CLASSES[variant]) {
+        expect(button.classList.contains(cls)).toBe(true);
+      }
+    });
+  },
+};
+
+const SIZES = ["xs", "sm", "default", "lg"] as const;
+const ICON_SIZES = ["icon-xs", "icon-sm", "icon", "icon-lg"] as const;
+
+/** Signature classes per size: each assertion fails if the size loses its metrics. */
+const SIZE_CLASSES: Record<(typeof SIZES)[number] | (typeof ICON_SIZES)[number], string[]> = {
+  xs: ["h-6", "text-xs"],
+  sm: ["h-7", "text-[0.8rem]"],
+  default: ["h-8"],
+  lg: ["h-9"],
+  "icon-xs": ["size-6"],
+  "icon-sm": ["size-7"],
+  icon: ["size-8"],
+  "icon-lg": ["size-9"],
 };
 
 export const Sizes: Story = {
   name: "Sizes",
   render: () => (
     <div className="flex items-center gap-3">
-      {(["xs", "sm", "default", "lg"] as const).map((size) => (
+      {SIZES.map((size) => (
         <Button key={size} size={size}>
           {size}
         </Button>
       ))}
-      {(["icon-xs", "icon-sm", "icon", "icon-lg"] as const).map((size) => (
+      {ICON_SIZES.map((size) => (
         <Button key={size} size={size} aria-label="Open">
           <ArrowUpRight />
         </Button>
       ))}
     </div>
   ),
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    const buttons = canvas.getAllByRole("button");
+    const labelled = [...SIZES, ...ICON_SIZES];
+
+    // One real <button> per size, labelled with its own name...
+    expect(buttons).toHaveLength(labelled.length);
+    labelled.forEach((size, index) => {
+      const button = buttons[index];
+      expect(button.tagName).toBe("BUTTON");
+      expect(button.dataset.size).toBe(size);
+      expect(button.textContent).toBe(size);
+      // ...and carrying that size's signature metrics.
+      for (const cls of SIZE_CLASSES[size]) {
+        expect(button.classList.contains(cls)).toBe(true);
+      }
+    });
+
+    // Icon-only buttons stay accessible via aria-label.
+    expect(canvas.getAllByRole("button", { name: "Open" })).toHaveLength(ICON_SIZES.length);
+  },
 };
 
 export const Disabled: Story = {
-  args: { disabled: true, children: "Disabled" },
+  args: { disabled: true, children: "Disabled", onClick: fn() },
+  play: async ({ canvasElement, args }) => {
+    const canvas = within(canvasElement);
+    const button = canvas.getByRole("button", { name: "Disabled" });
+
+    // The button is actually disabled in the DOM, not just styled to look it.
+    expect(button).toBeDisabled();
+    expect(button).toHaveAttribute("disabled");
+
+    // A click is swallowed: the handler never fires.
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    await user.click(button);
+    expect(args.onClick).not.toHaveBeenCalled();
+  },
 };
