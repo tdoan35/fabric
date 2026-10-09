@@ -2,7 +2,7 @@
 // mutable: never compare its rows to a pristine fixture world or delete
 // unrelated rows to make an assertion deterministic.
 import { randomUUID } from "node:crypto";
-import { createDb, sql } from "@fabric/db";
+import { createDb, loadRootEnv, sql } from "@fabric/db";
 import { afterAll, describe, expect, it } from "vitest";
 import { Hono } from "hono";
 import { AppEventSchema, ContextSnapshotSchema, ProjectSchema, ReportSchema, RunEventSchema, RunSchema, TaskSchema } from "@fabric/contracts";
@@ -19,9 +19,15 @@ import { stream } from "../routes/stream";
 import { weave } from "../routes/weave";
 import { work } from "../routes/work";
 
-const db = createDb();
+// Hermetic skip (same pattern as packages/agents memory.test.ts): this suite
+// exercises live-DB contracts against DATABASE_URL. With no DATABASE_URL —
+// e.g. unit CI, which must never touch the real Neon DB — everything skips.
+loadRootEnv();
+const hasDb = !!process.env.DATABASE_URL;
+const db = hasDb ? createDb() : (undefined as unknown as ReturnType<typeof createDb>);
+const suite = hasDb ? describe : describe.skip;
 afterAll(async () => {
-  await db.close();
+  if (hasDb) await db.close();
 });
 
 const app = new Hono()
@@ -37,7 +43,7 @@ const get = async <T>(path: string): Promise<T> => {
   return (await res.json()) as T;
 };
 
-describe("contract: every DATA GET validates", () => {
+suite("contract: every DATA GET validates", () => {
   it("GET /api/health", async () => {
     const res = await app.request("/api/health");
     expect(res.status).toBe(200);
@@ -115,7 +121,7 @@ describe("contract: schedule schemas", () => {
   });
 });
 
-describe("POST /api/projects", () => {
+suite("POST /api/projects", () => {
   it("keeps project identities distinct when display names collide", async () => {
     const name = `contract-collision-${randomUUID()}`;
     const post = () => app.request("/api/projects", {
