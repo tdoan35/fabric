@@ -1,29 +1,30 @@
-# Fabric — Durable Runtime (proposal)
+# Fabric — Durable Runtime
 
 | | |
 |---|---|
-| Status | Draft proposal, 2026-10-06. Not built. Supersedes the in-process team engine for runs, errands and routines |
-| Scope | How long-running work is stored, resumed and observed, for one self-hosted user and for a many-user cloud, with the same code |
-| Decision | Event-sourced run logs in Postgres, a Postgres job queue, and stateless workers. No message broker, no workflow engine |
+| Status | Draft, 2026-10-06; updated 2026-10-08 for sessions, delegation, channels and the local server. Not built |
+| Scope | How sessions, runs and delegations are stored, resumed and observed: inside the desktop app, on a host you run, and in the cloud, with the same code. The system around it is in `ARCHITECTURE.md` |
+| Decision | Event-sourced logs in Postgres (PGlite inside the desktop app), a Postgres job queue, and stateless workers. No message broker, no workflow engine |
 
 ## 0. Summary
 
-Every run is an append-only **log** of events in Postgres. The log is the source of truth, the inspector's data and the resume point. A pure **fold** turns the log into the run's current state; a **decide** function looks at that state and queues the next **jobs** (call a model, run a tool, wait for a person, finish). Stateless **workers** pull jobs from a Postgres queue, do the work, and append the result in the same transaction that queues the next decision. A crash loses at most the job in flight, which is retried; results are keyed by job, so a retry can't record anything twice.
+Every session and every run is an append-only **log** of events in Postgres. The log is the source of truth, the inspector's data and the resume point. A pure **fold** turns the log into the current state; a **decide** function looks at that state and queues the next **jobs** (call a model, run a tool, start a delegated run, wait for a person, deliver a message, finish). Stateless **workers** pull jobs from a Postgres queue, do the work, and append the result in the same transaction that queues the next decision. A crash loses at most the job in flight, which is retried; results are keyed by job, so a retry can't record anything twice.
 
-Self-hosted: one process runs the API and a worker, against one Postgres. Cloud: API servers plus an autoscaled worker pool, against Postgres partitioned by tenant.
+Local: the desktop app runs the API and a worker in one process against PGlite. Remote host: one process against one Postgres. Cloud: API servers plus an autoscaled worker pool, against Postgres scoped by workspace.
 
 ```
- triggers: user message · approval · schedule · inbound email · webhook
+ triggers: app or channel message · approval · schedule · inbound email · webhook
         │ append
         ▼
  ┌───────────────────────────── Postgres ─────────────────────────────┐
- │ events (per-run logs, append-only)    ◀── results ──┐               │
- │ jobs (Graphile Worker or pg-boss)     ─── jobs ──┐  │               │
- │ NOTIFY on append → API servers → SSE to clients  │  │               │
- └──────────────────────────────────────────────────┼──┼───────────────┘
-                                                    ▼  │
-        workers: fold(log) → decide(state, now) → jobs │
-                 llm.call · tool.exec · finalize ──────┘
+ │ events (per-stream logs, append-only)  ◀── results ──┐              │
+ │ jobs                                   ─── jobs ──┐  │              │
+ │ notify on append → API servers → SSE to clients   │  │              │
+ └───────────────────────────────────────────────────┼──┼──────────────┘
+                                                     ▼  │
+        workers: fold(log) → decide(state, now) → jobs  │
+                 llm.call · tool.exec · delegate.resolve│
+                 deliver · finalize ────────────────────┘
 ```
 
 ## 1. Why: what happens today
@@ -34,22 +35,25 @@ The same trace shows two more costs of the current shape:
 - **Narration arrives late.** `generateText` runs a step's whole tool loop and returns all its text at the end, so Megan's narration of searches at t=20–47 s was written at t=172–200 s.
 - **The log is mostly terminal output.** 166 of the run's 203 events are `tool.result` terminal lines.
 
+Chat turns have the same weakness: a turn lives in one HTTP response, so a turn that dies midway leaves a saved question, no reply, and possibly side effects nobody was told about.
+
 ## 2. The model
 
 | Concept | What it is |
 |---|---|
-| **Stream** | One log: `run:<runId>` now; `session:<sessionId>` later for chat. Has a head sequence number and a tenant |
+| **Stream** | One log: `session:<sessionId>` for a conversation, `run:<runId>` for an agent run or a team run. Has a head sequence number and a workspace |
 | **Event** | An immutable record appended to a stream: type, actor, payload, `seq`, `v` (payload version), `causation` (the job that produced it), `class` |
-| **Fact** | An event the fold reads: lifecycle, model replies, tool results, verdicts, human responses |
-| **Telemetry** | An event only the UI reads: terminal lines, narration copies, budget ticks. The fold skips them |
-| **Fold** | `fold(facts) → RunState`. Pure and deterministic; the only code that must be |
-| **Decide** | `decide(state, definition, now) → { events, jobs }`. Runs after every fact; its output is recorded, never replayed, so it is free to change between deploys |
+| **Fact** | An event the fold reads: lifecycle, inputs, model replies, tool results, delegation results, verdicts, human responses, memory writes |
+| **Telemetry** | An event only the UI reads: terminal lines, narration copies, progress, budget ticks, delivery receipts. The fold skips them |
+| **Fold** | `fold(facts) → State`. Pure and deterministic; the only code that must be |
+| **Decide** | `decide(state, definition, now) → { events, jobs }`. Two kinds: the agent loop and the team loop (§5). Runs after every fact; its output is recorded, never replayed, so it is free to change between deploys |
 | **Job** | A unit of work in the queue with an idempotency key. Executed at least once; its result is recorded at most once |
-| **Definition** | The team workflow, members, brief, budgets and engine version, snapshotted into `run.created`. Editing a team never changes a run already under way |
+| **Definition** | The agent or team definition, brief, grants, budgets and engine version, snapshotted into `run.created`. Editing an agent or team never changes a run already under way |
+| **Parent** | A delegated run records its parent `{runId or sessionId, callId}`. Runs form a tree |
 
-**Append** is one transaction: bump the stream head, insert the events, `pg_notify` the stream, and queue `run.decide` for the stream. A unique index on `(stream_id, causation)` for result events makes a retried job's second append a no-op.
+**Append** is one transaction: bump each touched stream's head, insert the events, notify the streams, and queue `decide` for each stream that gained a fact. A transaction may touch several streams (a delegation creates the child's stream while recording the parent's tool call). A unique index on `(stream_id, causation)` for result events makes a retried job's second append a no-op.
 
-**One decision at a time per run**: `run.decide` jobs are serialized per run (a named queue per run in Graphile Worker, or `groupConcurrency: 1` grouped by run in pg-boss). Executor jobs aren't, so a stage's lanes run in parallel.
+**One decision at a time per stream.** `decide` jobs are serialized per stream. Executor jobs aren't, so a stage's lanes and a turn's parallel tool calls run at the same time.
 
 ## 3. Events
 
@@ -57,28 +61,36 @@ Existing types keep their names and payloads so the web app's read model (`deriv
 
 | Type | Class | Payload (new fields in bold) | Appended by |
 |---|---|---|---|
-| `run.created` | fact | **definition snapshot, engineVersion, budgets** | API / Dana handoff / schedule fire |
+| `run.created` | fact | **definition snapshot, engineVersion, brief, grants, budgets, parent** | API / `delegate` / schedule fire |
 | `run.started` | fact | objective | decide |
-| `step.started` | fact | label, stage, kind, **stepKey, pass** | decide |
-| `llm.requested` | fact | **stepKey, callNo, model, params, snapshotId** | decide |
-| `llm.completed` | fact | **stepKey, callNo, text, toolCalls[], usage, finishReason, model** | `llm.call` |
-| `llm.failed` | fact | **stepKey, callNo, error, retryable** | `llm.call` |
+| `message.received` | fact | **text, attachments, surface (app · channel), sender, platformMessageId** | API / channel adapter |
+| `disposition.recorded` | fact | **kind (direct · agent · team · propose · clarify), target, reason** | decide (Dana) |
+| `step.started` | fact | label, stage, kind, **stepKey, pass, childRunId** | decide (team loop) |
+| `llm.requested` | fact | **turn, callNo, model, params, snapshotId** | decide |
+| `llm.completed` | fact | **turn, callNo, text, toolCalls[], usage, finishReason, model** | `llm.call` |
+| `llm.failed` | fact | **turn, callNo, error, retryable** | `llm.call` |
+| `context.compacted` | fact | **upToSeq, summary** | `llm.call` (compaction) |
 | `tool.call` | fact | tool, summary, **callId, args, effect** | decide (was: the tool itself) |
-| `tool.completed` | fact | **callId, ok, result or resultRef, error** | `tool.exec` |
+| `tool.completed` | fact | **callId, ok, result or resultRef, error** | `tool.exec` / `delegate.resolve` |
 | `tool.interrupted` | fact | **callId, effect, note** | `tool.exec` on recovery (§6) |
 | `tool.denied` | fact | tool, target, reason, **callId** | decide (policy check) |
+| `delegation.result` | fact | **childRunId, outcome, summary, output, artifacts, costUsd** | `delegate.resolve` (background mode) |
 | `step.finished` | fact | label, stage, kind, **stepKey, outcome: done · timed_out · failed · cancelled** | decide |
-| `review.verdict`, `criterion.checked` | fact | unchanged (from `llm.completed` structured output) | decide |
+| `review.verdict`, `criterion.checked` | fact | unchanged (from the reviewer's structured output) | decide |
 | `rework.requested` | fact | to, used, budget | decide |
-| `human.requested` | fact | **waitId, kind: confirm · approve · answer, prompt, deadline** | decide |
-| `human.responded` | fact | **waitId, decision, by** | API |
-| `run.cancel_requested` | fact | **by** | API |
-| `run.blocked`, `run.stopped`, `run.finished` | fact | unchanged | decide / `run.finalize` |
+| `human.requested` | fact | **waitId, kind: confirm · approve · answer, gated, prompt, deadline** | decide |
+| `human.responded` | fact | **waitId, decision, by, surface** | API |
+| `memory.written` | fact | **scope, itemId, op: add · update · forget, content** | `tool.exec` |
+| `proposal.created`, `proposal.decided` | fact | **kind, definition, decision, by** | decide / API |
+| `run.cancel_requested` | fact | **by** | API / parent's cancellation |
+| `run.blocked`, `run.stopped`, `run.finished` | fact | unchanged, plus **result, costUsd** on `run.finished` | decide / `run.finalize` |
 | `artifact.created` | fact | name, artifactId | `tool.exec` |
 | `context.snapshot` | telemetry | snapshotId (the snapshot row is written before the model call) | `llm.call` |
 | `tool.result` (term line) | telemetry | line, kind | `tool.exec`, streamed |
 | `agent.message` | telemetry | text (a copy of `llm.completed.text` for the UI) | decide |
+| `run.progress` | telemetry | **text, milestone** | decide |
 | `budget.update` | telemetry | costUsd (folded from usage), rework counts | decide |
+| `message.delivered` | telemetry | **eventId, target, platformMessageId** | `deliver` |
 | `handoff` | telemetry | to, step | decide |
 
 Model token deltas never enter the log: they are pushed live (§8) and the final text lands in `llm.completed`.
@@ -87,48 +99,101 @@ Model token deltas never enter the log: they are pushed live (§8) and the final
 
 | Job | Idempotency key | Does | Appends |
 |---|---|---|---|
-| `run.decide` | per-run serial queue | Fold, decide, append decisions, queue jobs | step/llm/tool/human/lifecycle facts |
-| `llm.call` | `run:step:llm:n` | Assemble context, save snapshot, call the model **once** with tools that have no `execute` (the SDK returns tool calls instead of running them), stream deltas live | `llm.completed` or `llm.failed`, `context.snapshot` |
-| `tool.exec` | `run:callId` | Run one tool from `@fabric/integrations` with the step's policies; stream terminal lines | `tool.completed` or `tool.interrupted`, `artifact.created`, term lines |
-| `run.timer` | `run:timer:<id>` | A `run.decide` scheduled with `run_at`: step timeouts, human deadlines, time budgets | via decide |
-| `run.finalize` | `run:finalize` | Report, Weave item, Dana's results message, report email; each part checks its own "done" fact first | `run.finished`, report facts |
-| `schedule.fire` | `schedule:<id>:<slot>` | Scheduled with `run_at = slot`. Late beyond 10 minutes: marks the fire missed. Otherwise creates the run and plans the next slot | `run.created` |
+| `decide` | per-stream serial queue | Fold, decide, append decisions, queue jobs | lifecycle, step, llm, tool, delegation, human facts |
+| `llm.call` | `stream:turn:llm:n` | Assemble context, save snapshot, call the model **once** with tools that have no `execute` (the SDK returns tool calls instead of running them), stream deltas live | `llm.completed` or `llm.failed`, `context.snapshot` |
+| `tool.exec` | `stream:callId` | Run one tool with the run's effective access; stream terminal lines | `tool.completed` or `tool.interrupted`, `artifact.created`, `memory.written`, term lines |
+| `delegate.resolve` | `run:<child>:resolve` | When a child run ends, report it to the parent: `tool.completed` (await mode) or `delegation.result` (background mode). Release the unused budget | parent facts |
+| `deliver` | `deliver:<eventId>:<target>` | Send one outbound message to a channel, push or email, with formatting, chunking, rate limits and retries | `message.delivered` |
+| `run.timer` | `stream:timer:<id>` | A `decide` scheduled with `run_at`: step timeouts, wait deadlines and reminders, stall watchdogs, time budgets | via decide |
+| `run.finalize` | `run:finalize` | Report, Weave item, results message, report email; each part checks its own "done" fact first | `run.finished`, report facts |
+| `schedule.fire` | `schedule:<id>:<slot>` | Scheduled with `run_at = slot`. Applies the schedule's overlap and catch-up rules (§9). Creates the run or posts into the session, and plans the next slot | `run.created` or `message.received` |
 
-## 5. Team runs: state and decisions
+**Timeouts and retries are declared per job type**, not scattered through `decide`:
+
+| Job | Runs at most | Heartbeat | Retries |
+|---|---|---|---|
+| `decide` | 30 s | — | 3, then `run.blocked` with the error |
+| `llm.call` | 10 min | stream activity every 60 s | 429 and 5xx with backoff, honouring `retry-after`; one retry for other retryable errors (§5.1) |
+| `tool.exec` | per tool (default 5 min; sandbox commands up to 60 min) | 30 s for long tools | by effect class (§6) |
+| `delegate.resolve`, `run.finalize` | 30 s | — | until done (idempotent) |
+| `deliver` | 30 s | — | backoff up to 24 h, then a failed-delivery fact the UI shows |
+
+Starting values; the spike adjusts them. A job whose heartbeat goes stale is handed to another worker.
+
+## 5. Decide
+
+### 5.1 Agent loop (sessions and agent runs)
 
 ```ts
-interface RunState {
+interface AgentState {
+  status: "idle" | "running" | "waiting" | "blocked" | "finished" | "stopped";
+  def: Definition;                  // from run.created, or the session's agent version
+  turn: number;
+  pendingInputs: Input[];           // message.received, delegation.result, human.responded not yet answered
+  calls: number;                    // llm.completed in this turn
+  openToolCalls: Map<string, ToolCall>;  // tool.call without tool.completed/interrupted
+  waits: Map<string, Wait>;
+  costUsd: number; reservedUsd: number;  // reserved for child runs
+  compactedUpTo: number;            // latest context.compacted
+  cancelRequested: boolean;
+}
+```
+
+`decide` for the agent loop, in order:
+1. **Cancel or budget.** `cancelRequested` → `run.cancel_requested` to every open child run, close open tool calls as cancelled, append `run.stopped`. Cost or time over budget → `run.blocked` with the reason, escalated to the parent.
+2. **Last fact is `llm.completed` with tool calls** → for each call, check policy and route it:
+   - denied → `tool.denied`;
+   - `delegate` → §5.2;
+   - `ask_user` → `human.requested`, status `waiting`, a `run.timer` at the deadline;
+   - anything else → `tool.call` and queue `tool.exec`.
+3. **All of the turn's tool calls resolved** → `llm.requested` for call n+1, unless `calls = MAX_STEPS`.
+4. **`llm.completed` with no tool calls, or `MAX_STEPS` reached** → the turn ends. A session copies the reply to `agent.message`, queues `deliver` for each surface that should receive it, and goes `idle`. A run appends `run.finished` with its result and queues `delegate.resolve` when it has a parent.
+5. **`llm.failed`** → one retry if retryable; otherwise the turn ends with a narration of the failure (today's behaviour).
+6. **Idle with pending inputs** → start a turn: `llm.requested` for call 1.
+7. **Context too long** → the next `llm.call` compacts first and appends `context.compacted`.
+
+The conversation for each call is rebuilt from facts: the snapshot's system prompt, the latest compaction summary, then each later input, `llm.completed` (text and tool calls) and its results. Large tool results live in object storage, referenced by `resultRef`.
+
+### 5.2 Delegation
+
+When a turn's tool call is `delegate`, one append does all of this in one transaction:
+- the parent's `tool.call` (`delegate`, effect `idempotent`);
+- the child's `run.created` on a new stream, with an ID derived from the parent's stream and `callId` (so a retried `decide` can't create two runs), the callee's definition snapshot, the brief, the effective grants, the budget reserved from the parent, and the parent reference;
+- a `decide` job for the child.
+
+In **await** mode the parent's tool call stays open. In **background** mode `decide` also appends `tool.completed {runId}` at once, and the parent's turn continues.
+
+The child runs its own agent loop (or team loop). When it ends, `delegate.resolve` appends `tool.completed` with the result to the parent (await) or `delegation.result` (background), releases the unused budget, and queues the parent's `decide`. A `delegation.result` on an idle session starts a turn, so Dana tells you the outcome.
+
+The brief is checked before the child starts (`ARCHITECTURE.md` §8.1); a failing brief returns to the caller as a tool error with one correction turn.
+
+### 5.3 Team loop (team runs)
+
+```ts
+interface TeamState {
   status: "running" | "waiting" | "blocked" | "accepted" | "stopped";
-  def: Definition;                  // from run.created
+  def: TeamDefinition;              // from run.created
   pass: 1 | 2; reworkUsed: number; reviews: number;
-  steps: Map<string, StepState>;    // stepKey = stage|agent|pass
-  costUsd: number;                  // Σ llm.completed.usage, priced
+  lanes: Map<string, LaneState>;    // stepKey = stage|agent|pass
+  costUsd: number;                  // Σ child costs
   waits: Map<string, Wait>;
   cancelRequested: boolean;
 }
-interface StepState {
+interface LaneState {
   agentId: string; stage: string; label: string;
-  status: "running" | "done";
-  calls: number;                    // llm.completed so far
-  openToolCalls: Set<string>;       // tool.call without tool.completed/interrupted
+  childRunId: string;
+  status: "running" | "done" | "failed" | "timed_out" | "cancelled";
   startedAt: number;
 }
 ```
 
 `decide` for a team run, in order:
-1. **Cancel or budget.** `cancelRequested` → finish open steps as `cancelled`, append `run.stopped`. Cost or time over budget → `run.blocked` with the reason.
-2. **Current stage(s).** From `planPasses(def.workflow)` (unchanged): Plan runs alongside Prepare, then the middle stages in order. For each lane of the current stage without a step: `step.started`, `llm.requested`, queue `llm.call`.
-3. **Each running step:**
-   - last fact is `llm.completed` with tool calls → for each call, check policy: `tool.denied` or `tool.call` + queue `tool.exec`;
-   - all of its tool calls resolved → `llm.requested` for call n+1, unless `calls = MAX_STEPS`;
-   - `llm.completed` with no tool calls, or `MAX_STEPS` reached → `agent.message` copies, `step.finished(done)`;
-   - `llm.failed` → one retry if retryable, else `step.finished(failed)` with a narration (today's behaviour);
-   - past its timeout → `step.finished(timed_out)`; a `run.timer` is queued at each step's deadline.
-4. **Stage complete** (all lanes finished) → the next stage; at the gate, the reviewer's structured `llm.call` → `review.verdict`:
-   - accept → `run.finished` path: queue `run.finalize`;
+1. **Cancel or budget**, as in §5.1.
+2. **Current stage(s).** From `planPasses(def.workflow)` (unchanged): Plan runs alongside Prepare, then the middle stages in order. For each lane of the current stage without a child: `step.started` and a delegation to the member (§5.2), with a brief built from the team's brief and the stage.
+3. **Each lane's child ends** → `step.finished` with its outcome. A failed child gets one retry if its failure was retryable, else the lane is `failed` with a narration.
+4. **Stage complete** (all lanes finished) → the next stage. At the gate, the reviewer's delegation returns a structured verdict → `review.verdict`:
+   - accept → queue `run.finalize`;
    - request changes → `rework.requested` and pass 2 (Re-plan → Rework → Re-check), or `run.blocked` when `bounceOutcome` says the budget is spent.
-
-The step's conversation for call n+1 is rebuilt from facts: the snapshot's system prompt, the step prompt, then each earlier `llm.completed` (text + tool calls) followed by its `tool.completed` results. Large tool results live in object storage, referenced by `resultRef`.
 
 ## 6. Side effects
 
@@ -136,53 +201,66 @@ Every tool declares its effect class. `tool.call` (with the class) is appended *
 
 | Effect | Tools | A retried `tool.exec` finds no result |
 |---|---|---|
-| `read` | `exa.search`, `artifacts.read` | Runs again |
-| `idempotent` | `artifacts.write`, `workspace.write` (upsert by name/path) | Runs again |
-| `rerunnable` | `sprite.exec` | Appends `tool.interrupted` ("interrupted by a restart; effects may be partial"). The model sees it as the result and decides whether to run it again |
-| `once` | `agentmail.send`, `browser.task` submit, anything that pays or books | Never runs again. Appends `tool.interrupted`, then `human.requested` ("check whether this happened"). Uses the provider's idempotency key where one exists |
+| `read` | `exa.search`, `artifacts.read`, `memory.search` | Runs again |
+| `idempotent` | `artifacts.write`, `workspace.write` (upsert by name/path), `memory.write` (keyed by callId), `delegate` (child ID from callId) | Runs again |
+| `rerunnable` | `sprite.exec`, sandbox shell | Appends `tool.interrupted` ("interrupted by a restart; effects may be partial"). The model sees it as the result and decides whether to run it again |
+| `once` | `send` and `agentmail.send`, `browser.task` submit, anything that pays or books | Never runs again. Appends `tool.interrupted`, then `human.requested` ("check whether this happened"). Uses the provider's idempotency key where one exists |
 
-## 7. Waits, cancellation, budgets
+Outbound messages that are part of a reply (not a `send` tool call) go through `deliver`, which is keyed by event ID and so never duplicates a message within its retry window.
 
-- **Waits.** `human.requested` sets status `waiting` and queues a `run.timer` at the deadline. The API appends `human.responded` when the person answers. The browser booking confirmation becomes exactly this, replacing the `pendingAction` patched into `runs.budget`.
-- **Cancellation.** The API appends `run.cancel_requested`. Workers holding jobs for that run get a NOTIFY and abort in-flight model calls; late results are refused by the append guard (today's `RunClosedError`).
-- **Budgets.** Cost is folded from `llm.completed.usage`, so it survives restarts. Time budgets and step timeouts are `run.timer` jobs.
+## 7. Waits, cancellation, budgets, stalls
+
+- **Waits.** `human.requested` sets status `waiting` and queues a `run.timer` at the deadline, plus reminders per the run's policy. The API appends `human.responded` only if the wait is still open: the check and the append are one transaction, and the API returns `accepted` or `refused` (expired, already answered, run cancelled). The browser booking confirmation becomes exactly this, replacing the `pendingAction` patched into `runs.budget`. Gated waits (merge, deploy, spend, credentials, external send) accept answers only from the app, never from a channel.
+- **Cancellation.** The API appends `run.cancel_requested`; `decide` passes it to every open child run, so cancellation reaches the whole subtree. Workers holding jobs for a cancelled stream get a notification and abort in-flight model calls; late results are refused by the append guard (today's `RunClosedError`).
+- **Budgets.** Cost is folded from `llm.completed.usage` and children's `run.finished.costUsd`, so it survives restarts. A delegation reserves budget from its parent; `delegate.resolve` releases what the child didn't use. Time budgets and step timeouts are `run.timer` jobs.
+- **Stalls.** Every running stream has a watchdog `run.timer`, re-armed by each new fact. When it fires with no progress, `decide` re-queues a lost job if there is one; if the stream is still stuck at the next firing, it appends `run.blocked` with the reason and escalates.
 
 ## 8. Live updates
 
-Every append calls `pg_notify('stream', '<tenant>:<stream>:<seq>')`. API servers `LISTEN`, read new events, and push them over SSE; clients resume with `Last-Event-ID = seq`. Model token deltas from `llm.call` go out on the same channel, batched about every 100 ms, and never enter the log. This replaces the in-process hub and the 400 ms database poll per stream. When NOTIFY stops scaling, the same outbox feeds Redis or NATS.
+Every append notifies its streams. API servers read the new events and push them over SSE; clients resume with `Last-Event-ID = seq`. Model token deltas from `llm.call` go out on the same channel, batched about every 100 ms, and never enter the log. This replaces the in-process hub and the 400 ms database poll per stream.
 
-`LISTEN` and the job queue need a direct (unpooled) connection; HTTP handlers keep using the pooled one.
+| | Notify | Token deltas |
+|---|---|---|
+| Local (one process) | In-process event emitter | Same emitter |
+| Remote host, cloud | `pg_notify('stream', '<workspace>:<stream>:<seq>')`; API servers `LISTEN` | Same channel; Redis or NATS when NOTIFY stops scaling |
+
+`LISTEN` and the job queue need a direct (unpooled) connection; HTTP handlers keep using the pooled one. Postgres serializes the commits of all transactions that sent a NOTIFY, so at cloud scale the notify moves to Redis or NATS before the commit lock becomes the bottleneck.
 
 ## 9. Schedules
 
-Each enabled schedule always has its next `schedule.fire` job queued with `run_at = slot`. There is no 30-second tick, so an idle tenant does no work and its database can scale to zero. The "older than 10 minutes counts as missed" rule moves into the job.
+Each enabled schedule always has its next `schedule.fire` job queued with `run_at = slot`. There is no 30-second tick.
+
+- **Overlap.** Each schedule says what happens when its previous run is still going: `skip` (default), `queue_one`, or `allow`.
+- **Catch-up.** A fire more than 10 minutes late is marked missed. After a local server wakes from sleep, only the most recent missed slot fires, and only if it is inside the catch-up window; the others are marked missed. Nothing is dropped silently.
+- **Idle cost.** No tick means no scheduler traffic, but the queue's own polling (§14) keeps a database awake. A scale-to-zero database is a spike measurement, not a promise.
 
 ## 10. Versioning
 
 - **Events** carry `v`. Old payloads are upgraded on read (upcasters), never rewritten.
-- **Runs** pin `engineVersion` in `run.created`. `decide` dispatches on it; an old version's `decide` stays in the code until no unfinished run uses it.
-- **Fold** changes must read every older event shape. That's the one place deploys need care, and it's plain data code with tests over recorded logs.
+- **Runs** pin `engineVersion` in `run.created`. `decide` dispatches on it; an old version's `decide` stays in the code until no unfinished run uses it. Sessions pin per turn.
+- **Fold** changes must read every older event shape. That's the one place deploys need care, and it's plain data code.
+- **Replay tests in CI.** Every recorded log in the fixtures is folded with the current code for every `engineVersion` still in use; a fold that changes state for an old log fails the build.
 
 ## 11. Tenancy
 
-`tenant_id` on streams, events, jobs and every domain table. Workers run each job in a transaction with `SET LOCAL app.tenant_id`, and row-level security enforces it. Self-hosted is one tenant. Per-tenant queues or concurrency caps come later if one tenant's runs starve others.
+`workspace_id` on streams, events, jobs and every domain table. In the cloud, workers run each job in a transaction with `SET LOCAL app.workspace_id`, and row-level security enforces it. Local and remote servers hold one workspace with the same schema. Per-workspace caps on concurrent jobs keep one workspace from starving others (§14).
 
 ## 12. Paper test: the stuck production run
 
-The real trace of `run-engram-lookup-table-on-nand-for-small-models-1`, replayed through this design:
+The real trace of `run-engram-lookup-table-on-nand-for-small-models-1`, replayed through this design. Each member's lane is now a child run with its own agent loop.
 
 | t (s) | Today | This design |
 |---|---|---|
 | 0.7 | `run.started` | `run.created` → decide: `run.started` |
-| 4.1 | 4× `step.started` (Plan ∥ Prepare) | decide: 4× `step.started` + `llm.requested`, 4 `llm.call` jobs run in parallel |
-| 4–55 | Tool events stream; narration held back | Each lane cycles `llm.completed` → `tool.call` → `tool.exec` → `tool.completed` → next `llm.call`. Narration is in each `llm.completed`, visible as it happens |
+| 4.1 | 4× `step.started` (Plan ∥ Prepare) | decide: 4× `step.started`, 4 child runs created, their first `llm.call` jobs run in parallel |
+| 4–55 | Tool events stream; narration held back | Each child cycles `llm.completed` → `tool.call` → `tool.exec` → `tool.completed` → next `llm.call`. Narration is in each `llm.completed`, visible as it happens |
 | 20–47 | Megan's 3 searches run | Same, each a `tool.exec` (`read`) |
-| 166 | Jonah's Setup finishes | `step.finished(done)` for Jonah |
+| 166 | Jonah's Setup finishes | Jonah's child `run.finished` → `delegate.resolve` → `step.finished(done)` |
 | 172–200 | Megan's narration finally written | Already shown at t=20–47 |
 | 206.9 | Elliot's Plan finishes. Sana still mid-step | Same |
-| ~207 | **Process dies. Run stuck as `running` forever** | Process dies. Last facts for Sana: `llm.completed` (call 3) asking for `sprite_exec`, and its `tool.call`, without a result |
-| restart | Nothing | The worker comes back (self-hosted) or another worker takes the job once its lease lapses (cloud). `tool.exec` finds no result for a `rerunnable` call → `tool.interrupted` → decide → Sana's `llm.call` 4 sees "interrupted" and re-runs her check |
-| then | — | Sana's step finishes → Prepare is complete → decide starts Synthesize (Elliot). The run continues |
+| ~207 | **Process dies. Run stuck as `running` forever** | Process dies. Last facts in Sana's run: `llm.completed` (call 3) asking for `sprite_exec`, and its `tool.call`, without a result |
+| restart | Nothing | The worker comes back (local, remote host) or another worker takes the job once its heartbeat goes stale (cloud). `tool.exec` finds no result for a `rerunnable` call → `tool.interrupted` → decide → Sana's `llm.call` 4 sees "interrupted" and re-runs her check |
+| then | — | Sana's run finishes → `delegate.resolve` → Prepare is complete → decide starts Synthesize (Elliot). The run continues |
 
 Cost of the crash: one interrupted sandbox command and one extra model call. Changes this test forced into the design: telemetry is a separate event class so the fold ignores 80% of the log; narration comes from each model reply instead of the end of the step; tool-argument failures (Elliot's "the content parameter isn't attaching") become `tool.completed {ok: false}` facts that are visible and countable.
 
@@ -190,58 +268,50 @@ Cost of the crash: one interrupted sandbox command and one extra model call. Cha
 
 | Today | Becomes |
 |---|---|
-| `run_events` + `RunWriter.emit` (advisory lock + `max(seq)+1`) | `events` with `tenant_id`, `v`, `causation`, `class`; `append()` bumps a stream head row and notifies |
+| `run_events` + `RunWriter.emit` (advisory lock + `max(seq)+1`) | `events` with `workspace_id`, `v`, `causation`, `class`; `append()` bumps stream head rows and notifies |
 | `team/engine.ts` `executeWorkflow` (in-memory, long-lived) | `team/decide.ts`, pure; `planPasses` and `bounceOutcome` reused as they are |
-| `team/steps.ts` `runStep` (whole tool loop in one `generateText`) | `llm.call` (one model call, tools without `execute`) and `tool.exec` (one tool) |
+| `team/steps.ts` `runStep` (whole tool loop in one `generateText`) | The agent loop: `llm.call` (one model call, tools without `execute`) and `tool.exec` (one tool), in a child run per lane |
+| Dana's chat turn (one HTTP response) | The agent loop on a `session:` stream; the client posts the message, then follows the stream |
 | `tool-context.ts` `ToolIO` emitting `tool.call` itself | decide appends `tool.call`; `ToolIO` keeps streaming term lines |
 | `llm` meter `runCostUsd` (in memory) | `llm.completed.usage`, folded |
 | `services/finalize.ts` (called from `RunWriter.end`) | `run.finalize` job, each part idempotent |
 | `services/scheduler.ts` 30 s tick + claims | `schedule.fire` jobs at each slot |
-| `assistant/errand.ts` + `pendingAction` in `runs.budget` | Errand `decide`: browser steps as `tool.exec`, confirmation as `human.requested` |
-| `services/hub.ts` + 400 ms poll per stream | NOTIFY → SSE (§8) |
+| `assistant/errand.ts` + `pendingAction` in `runs.budget` | An agent run: browser steps as `tool.exec`, confirmation as `human.requested` |
+| `services/hub.ts` + 400 ms poll per stream | Notify → SSE (§8) |
 | `labels.ts` splice-seam labels, recording splice, Illustrative loops, `DANA_MODE=fixture` | Dropped (decided 2026-10-06). Labels move into the team definition; recorded logs survive only as test fixtures for the fold |
 
 ## 14. Decisions and open questions
 
-**Decided (2026-10-06)**
-- **Demo machinery is dropped:** the recording splice, Illustrative loops, scripted Dana (`DANA_MODE=fixture`) and the splice-seam label constraints.
-- **No per-provider concurrency limiter.** Every `llm.call` retries a 429 with backoff, honouring `retry-after`. Self-hosters bring their own keys and set one knob, the worker's job concurrency. In the cloud, the concern is fairness between tenants, not provider limits: cap concurrent jobs per tenant (see the queue comparison).
+**Decided**
+- **2026-10-06: Demo machinery is dropped:** the recording splice, Illustrative loops, scripted Dana (`DANA_MODE=fixture`) and the splice-seam label constraints.
+- **2026-10-06: No per-provider concurrency limiter.** Every `llm.call` retries a 429 with backoff, honouring `retry-after`. Self-hosters bring their own keys and set one knob, the worker's job concurrency. In the cloud, the concern is fairness between workspaces, not provider limits: cap concurrent jobs per workspace.
+- **2026-10-08: Sessions run on the log in v1.** Channels, sessions that continue across devices, and long-running delegations all need a turn to outlive the client that started it. The spike's chat measurement still applies: first token through the queue within ~200 ms of a direct call.
+- **2026-10-08: No workflow engine.** Temporal was reviewed as the alternative: the same model (event history, workflow tasks, activities), mature, with an AI SDK integration. It was set aside because the local server runs inside the desktop app, where Temporal's server can't. Five of its features became amendments above: per-job timeouts, heartbeats and retries (§4); validated answers to waits (§7); idempotent run creation (§5.2); schedule overlap rules (§9); replay tests in CI (§10). Its history limits motivated compaction for long sessions (§5.1).
+- **2026-10-08: Large outputs** go to object storage: files in the app's data directory locally, S3-compatible elsewhere.
 
-**Chat turns (phase 2, after runs).** Today a turn writes the user's message first and Dana's reply only when the stream ends; side effects in between (stored proposals, dispositions, a handoff's task and run, an errand) are written as they happen. A turn that dies midway leaves a saved question, no reply, and possibly side effects nobody was told about. Two ways out:
+**Queue: decided by the spike.** It must run unchanged on PGlite (single connection, in-process) and on Postgres.
 
-| | Request-scoped, hardened | On the log (`session:` streams) |
-|---|---|---|
-| Consistency | Side effects keyed by tool-call id; reply and tool results in one transaction; a "retry" for a question without a reply | Each step appends facts and queues the next job in one transaction; the thread is a projection of the log |
-| Survives a disconnect or restart | No: the turn lives in one HTTP response and one process | Yes: close the laptop and the reply is waiting; the phone gets a push |
-| Latency | Direct stream, no queue | A queue hop per step: milliseconds with push pickup, seconds with polling |
-| Approvals, proposal cards | Human-tool round trip through the client | `human.requested` / `human.responded`, like errands |
-| Multi-device, inspector | Extra work | Free: every client follows the same stream; Dana's turns read like runs |
-| Client change | None | POST the message, then follow the session stream |
+| | Graphile Worker | pg-boss (v12) | Own `jobs` table |
+|---|---|---|---|
+| Runs on PGlite | Unknown: expects several connections and `LISTEN` | Unknown: expects a `pg` pool; `pglite-socket` may bridge it | Yes, by construction |
+| Pickup latency | LISTEN/NOTIFY by default: a few ms | Polling by default (2 s, minimum 0.5 s); LISTEN/NOTIFY opt-in with a 30 s polling backstop | In-process wake locally; LISTEN/NOTIFY on Postgres |
+| One decide at a time per stream | Named queue per stream, serial | `groupConcurrency: 1` grouped by stream | A per-stream lock column |
+| Crashed worker | Jobs stay locked for 4 hours unless force-unlocked; heartbeat recovery is in the commercial Worker Pro | Per-queue `heartbeatSeconds` | Leases and heartbeats we write |
+| Per-workspace cap | None built in | `groupConcurrency` grouped by workspace | A count in the claim query |
+| Maturity | Long-stable core | Heartbeats and group concurrency are recent | New code: `SKIP LOCKED` claims, leases, heartbeats, backoff |
 
-Recommendation: the log, once runs work, provided the spike's chat measurement holds (first token through the queue within ~200 ms of a direct call). It needs a queue with push pickup.
-
-**Queue: Graphile Worker or pg-boss.** Decided by the spike.
-
-| | Graphile Worker | pg-boss (v12) |
-|---|---|---|
-| Pickup latency | LISTEN/NOTIFY by default: a few ms | Polling by default (2 s, minimum 0.5 s); LISTEN/NOTIFY opt-in (`useListenNotify`) with a 30 s polling backstop |
-| One decide at a time per run | Named queue per run (`queue_name`), serial | `groupConcurrency: 1` with group = run id |
-| Crashed worker | Its jobs stay locked for 4 hours unless force-unlocked by worker id; heartbeat recovery is in the commercial Worker Pro | Per-queue `heartbeatSeconds`: a job fails over as soon as its heartbeat goes stale |
-| Per-tenant cap (cloud fairness) | None built in | `groupConcurrency` with group = tenant, enforced across nodes |
-| Dedupe, delays, cron | `job_key`, `run_at`, crontab | singleton policies / `singletonKey`, `startAfter`, schedules |
-| Maturity | Long-stable core | Heartbeats and group concurrency are recent |
-
-Leaning pg-boss: heartbeats and group concurrency solve cloud crash recovery and tenant fairness without extra code, as long as its LISTEN path is fast and reliable in the spike. Otherwise Graphile Worker, with our own heartbeat table driving `force_unlock_workers`.
+Leaning: pg-boss if it runs on PGlite with acceptable latency; otherwise our own table, kept small. Hermes Agent's hand-built cron and kanban (a long list of crash and ownership invariants in its `cron/AGENTS.md`) are the warning about how much an own queue grows; most of that list comes from many processes sharing files, which one database with transactions avoids.
 
 **Still open**
-1. **Large outputs:** object storage for tool results and artifacts (S3-compatible; local disk when self-hosted).
-2. **Token streaming transport** under load: NOTIFY payloads are capped at 8 KB and share one channel.
+1. **Token streaming transport** under load in the cloud: NOTIFY payloads are capped at 8 KB and share one channel.
+2. **Idle database traffic** from the queue's polling, and whether Neon can scale to zero under it.
 
 ## 15. Spike
 
-On a branch, against a local Postgres container, with both queues behind one small interface:
-1. `events` table, `append()`, the queue, and `decide` for a two-stage team with no review gate.
-2. `llm.call` and `tool.exec` with the real Spark lane and the real Sprite tools.
-3. `kill -9` at three points: during a model call, during a sandbox command, between jobs. Check that the run finishes, no result is recorded twice, and the loop view reads it correctly. Record how long each queue takes to hand a dead worker's job to another.
-4. Measure, for each queue: the extra latency per hop (appends plus pickup, on Neon and local), one decide at a time per run under parallel lanes, and idle database traffic.
+On a branch, with the queue options behind one small interface:
+1. `events` table, `append()`, the queue, the agent loop, delegation in both modes, and the team loop for a two-stage team with no review gate. Run it on PGlite inside Electron's utility process and on a local Postgres container.
+2. `llm.call` and `tool.exec` with the real Spark lane and the real Sprite tools (or local Docker).
+3. `kill -9` at five points: during a model call, during a sandbox command, between jobs, while a parent waits on a child, during a `deliver`. Check that every run finishes, no result or message is recorded twice, and the loop view reads it correctly. Record how long each queue takes to hand a dead worker's job to another.
+4. Measure, for each queue: the extra latency per hop (appends plus pickup, on PGlite, local Postgres and Neon), one decide at a time per stream under parallel lanes, and idle database traffic.
 5. Chat check: one Dana turn through the queue, time from POST to first token versus today's direct stream.
+6. PGlite checks: `pglite-pgvector` for memory and the registry, `SKIP LOCKED`, write throughput at a real run's event volume, data surviving a crash of the utility process, and the server's native dependencies (`onnxruntime-node` for embeddings) loading in Electron's utility process.
