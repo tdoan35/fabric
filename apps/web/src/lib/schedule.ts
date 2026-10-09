@@ -1,7 +1,6 @@
 // SCH: the calendar's local-time math. Unlike Weave's format.ts (Ty's fixed zone, the mock
 // clock), this uses the viewer's own timezone and the real now — a schedule page is about when
 // things run for you. Also the overlap layout that splits colliding blocks into columns.
-import type { Occurrence } from "@fabric/contracts";
 
 export const localTz = Intl.DateTimeFormat().resolvedOptions().timeZone;
 
