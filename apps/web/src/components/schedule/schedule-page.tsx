@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { useSearchParams } from "react-router";
 import { ChevronLeft, ChevronRight, Plus } from "lucide-react";
 import type { Occurrence, Schedule, ScheduleInput } from "@fabric/contracts";
@@ -37,9 +37,14 @@ export function SchedulePage({ schedules: loadedSchedules, occurrences: loadedOc
   const [editor, setEditor] = useState<{ open: boolean; target: EditorTarget }>({ open: false, target: {} });
   const [busy, setBusy] = useState(false);
 
-  // The loader revalidates on SSE (http mode); its fresh data flows in as new props.
-  useEffect(() => setSchedules(loadedSchedules), [loadedSchedules]);
-  useEffect(() => setOccurrences(loadedOccurrences), [loadedOccurrences]);
+  // The loader revalidates on SSE (http mode); its fresh data flows in as new props and replaces
+  // local state during render.
+  const [loaded, setLoaded] = useState({ schedules: loadedSchedules, occurrences: loadedOccurrences });
+  if (loaded.schedules !== loadedSchedules || loaded.occurrences !== loadedOccurrences) {
+    setLoaded({ schedules: loadedSchedules, occurrences: loadedOccurrences });
+    setSchedules(loadedSchedules);
+    setOccurrences(loadedOccurrences);
+  }
 
   const bounds = weekBounds(params.get("week") ?? loadedWeek);
   const todayKey = dayKey(new Date());
