@@ -1,7 +1,7 @@
 // Registry policy tests (§5.3 TOOLS 2): the wrapper emits tool.call on every call, tool.denied
 // for blocked and approval-only policies with the model-facing error, and lets allowed tools run.
 // A fake writer captures events; no sandbox, no network (network.fetch's blocked paths don't fetch).
-import { describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it, vi } from "vitest";
 import type { RunEvent, RunEventPayloads, RunEventType } from "@fabric/contracts";
 import { profileById } from "@fabric/fixtures/studio";
 import type { RunWriter } from "@fabric/db";
@@ -21,6 +21,12 @@ function fakeWriter() {
 }
 
 const ctx = (writer: RunWriter) => ({ runId: "run-1", step: "Prepare", writer });
+
+// toolsFor constructs the sandbox tool eagerly, which throws without a token —
+// but these tests never execute sandbox tools (header: no sandbox, no network).
+beforeAll(() => {
+  vi.stubEnv("SPRITES_TOKEN", "test-only-unused");
+});
 
 describe("toolsFor policies", () => {
   it("keys the set for providers and maps back to canonical names", () => {
