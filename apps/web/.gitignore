@@ -34,3 +34,6 @@ yarn-error.log*
 
 # electron-builder output
 /release
+
+# Storybook static build output
+storybook-static/
