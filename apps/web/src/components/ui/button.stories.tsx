@@ -88,7 +88,11 @@ export const Sizes: Story = {
     const canvas = within(canvasElement);
 
     // One real <button> per text size, labelled with its own name...
-    const textButtons = SIZES.map((size) => canvas.getByRole("button", { name: size }));
+    const buttons = canvas.getAllByRole("button");
+    expect(buttons).toHaveLength(SIZES.length + ICON_SIZES.length);
+    const textButtons = buttons.filter((button) =>
+      (SIZES as readonly string[]).includes(button.textContent ?? ""),
+    );
     expect(textButtons).toHaveLength(SIZES.length);
     SIZES.forEach((size, index) => {
       const button = textButtons[index];
