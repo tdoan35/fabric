@@ -16,6 +16,17 @@ export function setRegistry(value: Registry) { current = value; notify(); }
 export function setWorkData(nextTasks: Task[], nextRuns: Run[]) { tasks = nextTasks; runs = nextRuns; notify(); }
 export function setProjects(projects: Project[]) { current = { ...current, projects }; notify(); }
 
+/**
+ * Test seam (storybook harness only): restore the module-level store to its empty initial
+ * state, so each story run starts from the same world. Production code never calls this.
+ */
+export function resetRegistryStore() {
+  current = empty;
+  tasks = [];
+  runs = [];
+  notify();
+}
+
 export const registry = () => current;
 export const profileById = (id: string): StudioProfile => [...current.agents, ...current.communityAgents].find((p) => p.agent.id === id)!;
 

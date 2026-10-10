@@ -39,11 +39,13 @@ export const weaveCalendar = () => calendar;
 export const weaveDayMarkers = () => httpMode ? [] : fixtureMarkers;
 export const itemById = (id: string | null | undefined) => inboxSeed.find((i) => i.id === id);
 
-const loadedAt = Date.now();
+let loadedAt = Date.now();
 /** The mock clock keeps ticking from WEAVE_NOW, so decisions get plausible timestamps. */
-const mockNow = () => httpMode ? new Date().toISOString() : new Date(WEAVE_NOW.getTime() + (Date.now() - loadedAt)).toISOString();
+/** When pinned (stories), the mock clock is frozen so repeated runs get identical timestamps. */
+let timePin: string | undefined;
+const mockNow = () => timePin ?? (httpMode ? new Date().toISOString() : new Date(WEAVE_NOW.getTime() + (Date.now() - loadedAt)).toISOString());
 
-let state: WeaveState = {
+const initialWeaveState = (): WeaveState => ({
   status: Object.fromEntries(inboxSeed.map((i) => [i.id, {
     status: i.snoozedUntil ? "snoozed" : "open",
     unread: !!i.unread,
@@ -51,7 +53,8 @@ let state: WeaveState = {
   } satisfies ItemState])),
   entries: pulseSeed,
   presence: presenceSeed,
-};
+});
+let state: WeaveState = initialWeaveState();
 let seq = 0;
 const listeners = new Set<() => void>();
 
@@ -167,3 +170,21 @@ export const weave = {
     set({ ...state, entries: patchEntry(entryId, (e) => (e.kind === "memory" ? { ...e, decision } : e)) });
   },
 };
+
+/**
+ * Test seam (storybook harness only): restore the fixture seed, the state derived from it,
+ * the pulse sequence and the mock clock, so every story run starts from the same world.
+ * Production code never calls this.
+ */
+export function resetWeaveStore() {
+  inboxSeed = fixtureItems;
+  calendar = fixtureCalendar as CalendarEvent[];
+  timePin = undefined;
+  seq = 0;
+  loadedAt = Date.now();
+  state = initialWeaveState();
+  listeners.forEach((l) => l());
+}
+
+/** Test seam: freeze the mock clock (pass undefined to let it tick from load again). */
+export function pinMockNow(iso?: string) { timePin = iso; }
