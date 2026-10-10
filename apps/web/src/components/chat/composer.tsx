@@ -22,8 +22,10 @@ function ApprovalPicker() {
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <Button variant="ghost" size="sm" className="h-8 gap-1.5 px-2 text-xs text-muted-foreground hover:text-foreground" aria-label="Approval mode">
-          <Hand className="size-3.5" /><span className="hidden @lg/composer:inline">{current.name}</span>
+        <Button variant="ghost" size="sm" className="h-8 gap-1.5 px-2 text-xs text-muted-foreground hover:text-foreground">
+          <Hand className="size-3.5" />
+          <span className="sr-only">Approval mode</span>
+          <span className="hidden @lg/composer:inline">{current.name}</span>
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="start" side="top" className="min-w-72">
@@ -45,7 +47,8 @@ function ModelPicker() {
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <Button variant="ghost" size="sm" className="h-8 gap-1 px-2 text-xs hover:text-foreground" aria-label="Model and reasoning effort">
+        <Button variant="ghost" size="sm" className="h-8 gap-1 px-2 text-xs hover:text-foreground">
+          <span className="sr-only">Model and reasoning effort</span>
           <span>{model ?? "Agent default"}</span><span className="hidden text-muted-foreground @md/composer:inline">{EFFORT_LABELS[effort]}</span><ChevronDown className="size-3 text-muted-foreground" />
         </Button>
       </DropdownMenuTrigger>
@@ -109,6 +112,7 @@ export function Composer({ autoFocus, placeholder, showContext }: { autoFocus?: 
         rows={2}
         autoFocus={autoFocus}
         placeholder={placeholder}
+        aria-label={placeholder}
         className="block max-h-56 min-h-20 w-full resize-none bg-transparent px-4 pt-4 pb-1 text-sm outline-none placeholder:text-muted-foreground"
       />
       <div className="flex items-center gap-1 px-2 pb-2">

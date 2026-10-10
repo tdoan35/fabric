@@ -114,7 +114,7 @@ export function ConnectorPicker({ className, labelClassName }: { className?: str
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <Button variant="ghost" size="sm" className={cn(barButton, className)} aria-label="Add connector">
+        <Button variant="ghost" size="sm" className={cn(barButton, className)} aria-label={`Add connector${connected.size || ""}`}>
           <AtSign className="size-3.5" /><span className={labelClassName}>Add connector</span>
           {connected.size > 0 && <span className="rounded-full bg-muted px-1.5 text-[10px] text-foreground">{connected.size}</span>}
         </Button>

@@ -9,7 +9,6 @@ import { Ghost, Maximize2, Monitor, PanelRightClose, PanelRightOpen, Plus } from
 import { cn } from "@/lib/utils";
 import { useTabs } from "@/components/shell/tabs";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
 import { SidebarTrigger } from "@/components/ui/sidebar";
 import { mockAssistant, mockContext } from "@/lib/mock/chat";
@@ -125,20 +124,34 @@ const swap = {
 };
 
 function AgentTabs({ value, onChange, disabled }: { value: Target; onChange: (v: Target) => void; disabled?: boolean }) {
+  // Hand-rolled tablist (same pattern as studio-ui's Segmented): Radix Tabs would emit
+  // aria-controls for content that lives outside the tab strip, which a11y checks flag.
   return (
-    <Tabs value={value} onValueChange={(v) => onChange(v as Target)}>
-      <TabsList className={cn("relative transition-opacity duration-300", disabled && "opacity-50")}>
-        <span aria-hidden className={cn(
-          "pointer-events-none absolute inset-y-[3px] left-[3px] w-[calc(50%-3px)] rounded-md bg-background shadow-sm transition-transform duration-300 ease-out dark:border dark:border-input dark:bg-input/30",
-          value === "team" && "translate-x-full",
-        )} />
-        {(["agent", "team"] as const).map((t) => (
-          <TabsTrigger key={t} value={t} disabled={disabled} className="z-10 px-5 data-active:bg-transparent data-active:shadow-none dark:data-active:border-transparent dark:data-active:bg-transparent">
-            {t === "agent" ? "Agents" : "Teams"}
-          </TabsTrigger>
-        ))}
-      </TabsList>
-    </Tabs>
+    <div
+      role="tablist"
+      className={cn(
+        "relative inline-flex h-8 w-fit auto-cols-fr grid-flow-col items-center justify-center gap-0 rounded-lg bg-muted p-[3px] text-muted-foreground transition-opacity duration-300",
+        disabled && "opacity-50",
+      )}
+    >
+      <span aria-hidden className={cn(
+        "pointer-events-none absolute inset-y-[3px] left-[3px] w-[calc(50%-3px)] rounded-md bg-background shadow-sm transition-transform duration-300 ease-out dark:border dark:border-input dark:bg-input/30",
+        value === "team" && "translate-x-full",
+      )} />
+      {(["agent", "team"] as const).map((t) => (
+        <button
+          key={t}
+          type="button"
+          role="tab"
+          aria-selected={value === t}
+          disabled={disabled}
+          onClick={() => onChange(t)}
+          className="relative z-10 inline-flex h-[calc(100%-1px)] flex-1 items-center justify-center rounded-md px-5 text-sm font-medium whitespace-nowrap text-foreground/60 transition-colors hover:text-foreground aria-selected:text-foreground disabled:pointer-events-none disabled:opacity-50 dark:text-muted-foreground dark:aria-selected:text-foreground"
+        >
+          {t === "agent" ? "Agents" : "Teams"}
+        </button>
+      ))}
+    </div>
   );
 }
 
@@ -146,9 +159,11 @@ function AgentTabs({ value, onChange, disabled }: { value: Target; onChange: (v:
 function AgentChip({ agent, team, incognito, onBackToDana, onProfileToggle }: { agent: ChatAgent; team?: StudioTeam; incognito?: boolean; onBackToDana: () => void; onProfileToggle: () => void }) {
   // The portrait switches to its working loop while a reply is in flight.
   const working = useAuiState((s) => s.thread.isRunning);
+  // The pill's visible text (with the incognito suffix) must be part of the button's name.
+  const pill = `${team?.name ?? agent.name}${incognito ? " · incognito" : ""}`;
   return (
     <div className="flex flex-col items-center">
-      <button type="button" onClick={onProfileToggle} aria-label={`Toggle ${agent.name}'s profile`} className="group flex flex-col items-center rounded-full outline-none">
+      <button type="button" onClick={onProfileToggle} aria-label={`Toggle ${pill}'s profile`} className="group flex flex-col items-center rounded-full outline-none">
         <motion.div layoutId={portraitLayoutId(agent.id)} transition={FLY} className="rounded-full">
           <Portrait agent={agent} working={working} className={cn("size-28 border-[3px] border-foreground/30 transition-[transform,filter] duration-200 group-hover:scale-105 group-hover:animate-[avatar-glow_1.8s_ease-in-out_infinite] group-focus-visible:animate-[avatar-glow_1.8s_ease-in-out_infinite]", incognito && veil)} />
         </motion.div>

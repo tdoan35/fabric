@@ -67,6 +67,8 @@ export function AgentHero({ agents, index, onIndexChange, onProfileToggle, switc
   const agent = agents[index];
   const [dir, setDir] = useState<1 | -1>(1);
   const canSwitch = switchable && agents.length > 1;
+  // The pill's visible text (with the incognito suffix) must be part of the button's name.
+  const pill = `${agent.name}${incognito ? " · incognito" : ""}`;
 
   const jump = (i: number) => { setDir(i > index ? 1 : -1); onIndexChange(i); };
   // Functional update: rapid clicks each step from the latest index instead of a stale one.
@@ -90,7 +92,7 @@ export function AgentHero({ agents, index, onIndexChange, onProfileToggle, switc
           type="button"
           data-portrait
           onClick={onProfileToggle}
-          aria-label={`Toggle ${agent.name}'s profile`}
+          aria-label={`Toggle ${pill}'s profile`}
           className="group relative z-10 rounded-full outline-none"
         >
           <motion.div layoutId={portraitLayoutId(agent.id)} transition={FLY} className="rounded-full">
@@ -141,7 +143,8 @@ export function AgentHero({ agents, index, onIndexChange, onProfileToggle, switc
       </div>
 
       {canSwitch && (
-        <div className="mt-2 flex items-center gap-1 opacity-0 transition-opacity duration-150 group-hover/hero:opacity-100 group-focus-within/hero:opacity-100" aria-label={`Agent ${index + 1} of ${agents.length}`}>
+        <div className="mt-2 flex items-center gap-1 opacity-0 transition-opacity duration-150 group-hover/hero:opacity-100 group-focus-within/hero:opacity-100">
+          <span className="sr-only">{`Agent ${index + 1} of ${agents.length}`}</span>
           {agents.map((a, i) => (
             <span key={a.id} className={cn("h-1 rounded-full transition-all", i === index ? "w-4 bg-foreground/50" : "w-1 bg-foreground/20")} />
           ))}
@@ -172,6 +175,11 @@ export function AgentProfilePanel({ agent, open, tab, onTabChange, session, agen
   }, [open, onClose]);
 
   const SLOT = 376; // card width (360) + 16px right gutter
+  // Explicit tab/tabpanel wiring: the panel's content area is an animated container, not a
+  // Radix TabsContent, so the trigger ↔ panel linkage is wired by hand and a11y-checkable.
+  const panelTabs = (["agent", ...(session ? (["session"] as const) : [])]) as SideTab[];
+  const panelTabId = (t: SideTab) => `agent-panel-tab-${t}`;
+  const panelContentId = (t: SideTab) => `agent-panel-content-${t}`;
   return (
     <AnimatePresence initial={false}>
       {open && (
@@ -190,17 +198,19 @@ export function AgentProfilePanel({ agent, open, tab, onTabChange, session, agen
             transition={{ duration: 0.3, ease: [0.22, 1, 0.36, 1] }}
             className="mr-4 flex min-h-0 w-[360px] shrink-0 flex-col"
           >
-            <Tabs value={tab} onValueChange={(v) => onTabChange(v as SideTab)} className="min-h-0 flex-1">
+            <div className="min-h-0 flex-1">
               <div className="group/card relative flex min-h-0 flex-1 flex-col overflow-hidden rounded-xl border bg-card text-card-foreground shadow-lg">
                 <div className="flex shrink-0 items-center justify-between px-3 pt-3">
-                  <TabsList className="relative grid auto-cols-fr grid-flow-col">
+                  <div role="tablist" className="relative grid auto-cols-fr grid-flow-col">
                     {/* Sliding highlight, same treatment as the Agents / Teams switch. */}
                     <span aria-hidden className="pointer-events-none absolute inset-y-[3px] left-[3px] rounded-md bg-background shadow-sm transition-transform duration-300 ease-out dark:border dark:border-input dark:bg-input/30"
                       style={{ width: `calc((100% - 6px) / ${session ? 2 : 1})`, transform: `translateX(${tab === "session" && session ? 100 : 0}%)` }} />
-                    {(["agent", ...(session ? ["session"] : [])] as SideTab[]).map((t) => (
-                      <TabsTrigger key={t} value={t} className="z-10 px-4 capitalize data-active:bg-transparent data-active:shadow-none dark:data-active:border-transparent dark:data-active:bg-transparent">{t === "agent" ? agentTabLabel : t}</TabsTrigger>
+                    {panelTabs.map((t) => (
+                      <button key={t} type="button" role="tab" id={panelTabId(t)} aria-selected={tab === t} aria-controls={panelContentId(t)}
+                        onClick={() => onTabChange(t)}
+                        className="relative z-10 inline-flex items-center justify-center rounded-md px-4 py-0.5 text-sm font-medium capitalize whitespace-nowrap text-foreground/60 transition-colors hover:text-foreground aria-selected:text-foreground dark:text-muted-foreground dark:aria-selected:text-foreground">{t === "agent" ? agentTabLabel : t}</button>
                     ))}
-                  </TabsList>
+                  </div>
                   <Button type="button" variant="ghost" size="icon" aria-label="Close panel" onClick={onClose} className="size-7 text-muted-foreground opacity-0 transition-opacity duration-150 focus-visible:opacity-100 group-hover/card:opacity-100">
                     <X className="size-4" />
                   </Button>
@@ -210,6 +220,8 @@ export function AgentProfilePanel({ agent, open, tab, onTabChange, session, agen
                   <motion.div
                     key={tab}
                     role="tabpanel"
+                    id={panelContentId(tab)}
+                    aria-labelledby={panelTabId(tab)}
                     custom={tab === "session" ? 1 : -1}
                     variants={{
                       enter: (d: number) => ({ opacity: 0, x: 16 * d }),
@@ -224,7 +236,7 @@ export function AgentProfilePanel({ agent, open, tab, onTabChange, session, agen
                   </motion.div>
                 </AnimatePresence>
               </div>
-            </Tabs>
+            </div>
           </motion.div>
         </motion.aside>
       )}

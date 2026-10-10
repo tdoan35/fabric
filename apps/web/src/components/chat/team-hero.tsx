@@ -67,7 +67,7 @@ export function TeamHero({ teams, index, onIndexChange, onProfileToggle, classNa
         </span>
         <div className="relative">
           {team && <MemberColumn team={team} />}
-          <button type="button" data-portrait onClick={onProfileToggle} aria-label={`Toggle ${team?.name ?? "Dana"}'s profile`} className="group relative z-10 block rounded-full outline-none">
+          <button type="button" data-portrait onClick={onProfileToggle} aria-label={`Toggle ${team?.name ?? "Create a team"}'s profile`} className="group relative z-10 block rounded-full outline-none">
             <motion.div layoutId={portraitLayoutId(agent.id)} transition={FLY} className="rounded-full">
               <Portrait
                 agent={agent}
@@ -115,7 +115,8 @@ export function TeamHero({ teams, index, onIndexChange, onProfileToggle, classNa
 
       </div>
 
-      <div className="mt-2 flex items-center gap-1 opacity-0 transition-opacity duration-150 group-hover/hero:opacity-100 group-focus-within/hero:opacity-100" aria-label={`Team ${index + 1} of ${total}`}>
+      <div className="mt-2 flex items-center gap-1 opacity-0 transition-opacity duration-150 group-hover/hero:opacity-100 group-focus-within/hero:opacity-100">
+        <span className="sr-only">{`Team ${index + 1} of ${total}`}</span>
         {Array.from({ length: total }, (_, i) => (
           <span key={i} className={cn("h-1 rounded-full transition-all", i === index ? "w-4 bg-foreground/50" : "w-1 bg-foreground/20")} />
         ))}
