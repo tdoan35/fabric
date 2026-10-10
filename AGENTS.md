@@ -26,14 +26,14 @@ Runs on a cron; prompt is the trigger. Procedure:
 6. Comment on the Linear issue with the card ID when synced. Only Ty closes Linear issues.
 7. End every run with one line: `SYNC: created=N bounced=N skipped=N` (+ details). You never touch code and never ask questions — a missing decision is a bounce, not a clarification.
 
-### Merge policy — auto-merge (active)
+### Merge policy — auto-merge (default, since 2026-10-10)
 
-- Terminal state after review: the **reviewer driver** (profile `fab-reviewer`, never the read-only reviewer sandbox itself) parses `VERDICT: APPROVE` and runs `gh pr merge --auto --squash <PR>`. GitHub then merges the moment all required checks (CI `verify`) pass. No GitHub-side human approval is required.
-- Auto-merge applies **only** to cards whose Linear source issue carries the `auto-merge` label; the triage agent embeds `auto-merge: yes` in the card body. No label → the driver stops at APPROVED and pings Ty instead.
-- **Hard overrides — never auto-merged, regardless of label:**
+- Terminal state after review: the **reviewer driver** (profile `fab-reviewer`, never the read-only reviewer sandbox itself) parses `VERDICT: APPROVE` and runs `gh pr merge --auto --squash <PR>`. GitHub then merges the moment all required checks (CI `verify`, `lint`) pass. No GitHub-side human approval is required.
+- **Auto-merge is the default for every factory card.** No label gate anymore. Opt OUT by adding the `human-review` Linear label (triage embeds `auto-merge: no` in the card body) — then the driver stops at APPROVED and pings Ty instead.
+- **Hard overrides — never auto-merged, regardless of opt-out label:**
   - diff touches protected paths (`.github/`, `AGENTS.md`, `docs/adr/`)
   - diff > ~1k changed lines (plan §9 size guard)
   - any required check red, or the verdict is not exactly `APPROVE`
   - diff strays outside the file scope declared on the card
 - On triggering auto-merge, the driver comments the PR link on the Linear issue. Merges are squash merges; the driver deletes the branch.
-- Rollout: Ty validates on one no-risk epic before the label is applied anywhere else.
+- Ty's oversight: weekly deep-read of merged PRs (plan §0 v2.2 mitigations) and the hard overrides above stay in force.
