@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| Status | Draft, 2026-10-06; updated 2026-10-08 for sessions, delegation, channels and the local server. Not built |
+| Status | Draft, 2026-10-06; updated 2026-10-08 for sessions, delegation, channels and the local server, and 2026-10-10 for learning (`LEARNING.md` §12). Not built |
 | Scope | How sessions, runs and delegations are stored, resumed and observed: inside the desktop app, on a host you run, and in the cloud, with the same code. The system around it is in `ARCHITECTURE.md` |
 | Decision | Event-sourced logs in Postgres (PGlite inside the desktop app), a Postgres job queue, and stateless workers. No message broker, no workflow engine |
 
@@ -41,7 +41,7 @@ Chat turns have the same weakness: a turn lives in one HTTP response, so a turn 
 
 | Concept | What it is |
 |---|---|
-| **Stream** | One log: `session:<sessionId>` for a conversation, `run:<runId>` for an agent run or a team run. Has a head sequence number and a workspace |
+| **Stream** | One log: `session:<sessionId>` for a conversation, `run:<runId>` for an agent run or a team run, `agent:<agentId>` for an agent's learning log (`LEARNING.md`). Has a head sequence number and a workspace |
 | **Event** | An immutable record appended to a stream: type, actor, payload, `seq`, `v` (payload version), `causation` (the job that produced it), `class` |
 | **Fact** | An event the fold reads: lifecycle, inputs, model replies, tool results, delegation results, verdicts, human responses, memory writes |
 | **Telemetry** | An event only the UI reads: terminal lines, narration copies, progress, budget ticks, delivery receipts. The fold skips them |
@@ -80,12 +80,17 @@ Existing types keep their names and payloads so the web app's read model (`deriv
 | `rework.requested` | fact | to, used, budget | decide |
 | `human.requested` | fact | **waitId, kind: confirm · approve · answer, gated, prompt, deadline** | decide |
 | `human.responded` | fact | **waitId, decision, by, surface** | API |
-| `memory.written` | fact | **scope, itemId, op: add · update · forget, content** | `tool.exec` |
+| `memory.written` | fact | **scope, itemId, op: add · update · forget, contentRef** (the text lives outside the log so it can be erased, `LEARNING.md` §10.4) | `tool.exec` / `learn` |
+| `skill.written` | fact | **skillId, version, op: create · patch, contentRef, scope, origin, source** (on the agent's stream) | `learn` / API |
+| `skill.used` | fact | **skillId, version, stream, outcome, revises?** (on the agent's stream) | `run.finalize` / `run.timer` (session quiet) / `learn` |
+| `skill.state_changed` | fact | **skillId, from, to, reason, strength** (on the agent's stream) | `skills.maintain` |
+| `learning.completed` | fact | **source stream, upToSeq, written, skipped, costUsd** (on the agent's stream) | `learn` |
+| `content.erased` | fact | **contentRef, reason, by** | `skills.maintain` / API |
 | `proposal.created`, `proposal.decided` | fact | **kind, definition, decision, by** | decide / API |
 | `run.cancel_requested` | fact | **by** | API / parent's cancellation |
 | `run.blocked`, `run.stopped`, `run.finished` | fact | unchanged, plus **result, costUsd** on `run.finished` | decide / `run.finalize` |
 | `artifact.created` | fact | name, artifactId | `tool.exec` |
-| `context.snapshot` | telemetry | snapshotId (the snapshot row is written before the model call) | `llm.call` |
+| `context.snapshot` | telemetry | snapshotId (the snapshot row is written before the model call; memory and skill sections are stored by reference) | `llm.call` |
 | `tool.result` (term line) | telemetry | line, kind | `tool.exec`, streamed |
 | `agent.message` | telemetry | text (a copy of `llm.completed.text` for the UI) | decide |
 | `run.progress` | telemetry | **text, milestone** | decide |
@@ -107,6 +112,9 @@ Model token deltas never enter the log: they are pushed live (§8) and the final
 | `run.timer` | `stream:timer:<id>` | A `decide` scheduled with `run_at`: step timeouts, wait deadlines and reminders, stall watchdogs, time budgets | via decide |
 | `run.finalize` | `run:finalize` | Report, Weave item, results message, report email; each part checks its own "done" fact first | `run.finished`, report facts |
 | `schedule.fire` | `schedule:<id>:<slot>` | Scheduled with `run_at = slot`. Applies the schedule's overlap and catch-up rules (§9). Creates the run or posts into the session, and plans the next slot | `run.created` or `message.received` |
+| `learn` | `learn:<stream>:<upToSeq>` | One learning pass over a finished run or a quiet session segment (`LEARNING.md` §6) | `skill.written`, `memory.written`, `skill.used`, `learning.completed` |
+| `skills.maintain` | `maintain:<agentId>:<day>` | Daily, with no model: strength, lifecycle, the context budget, deletion windows (`LEARNING.md` §3, §5) | `skill.state_changed`, `content.erased` |
+| `org.review` | `org-review:<workspaceId>:<week>` | Weekly, or at once on a hard signal: checks the signals, then Dana drafts proposals (`LEARNING.md` §9) | `proposal.created` |
 
 **Timeouts and retries are declared per job type**, not scattered through `decide`:
 
