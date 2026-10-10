@@ -16,7 +16,7 @@ The factory plan (roles, budgets, ladder) lives at `/home/ty/fabric-factory-plan
 
 ## Triage (profile `fab-triage`) — Linear → kanban sync
 
-Runs on a cron; prompt is the trigger. Procedure:
+Triggered two ways: the `linear-factory` webhook (Linear `Issue` events on team `ANY` involving the `factory-ready` label → Hermes route on profile `fab-triage`; payload is a trigger only, never the truth) and the 15-minute `factory-linear-sync` cron, which stays as reconciliation for missed deliveries. Either way the agent re-reads Linear via MCP and compares spec hashes. Procedure:
 
 1. List issues in team `Anyone-ai` labeled `factory-ready`, excluding Completed/Canceled.
 2. For each: check the `fabric` board for a live card. Create with `--idempotency-key <LINEAR-ID>` (e.g. `ANY-42`) — the key dedupes; never create a second card for the same issue.
@@ -36,4 +36,5 @@ Runs on a cron; prompt is the trigger. Procedure:
   - any required check red, or the verdict is not exactly `APPROVE`
   - diff strays outside the file scope declared on the card
 - On triggering auto-merge, the driver comments the PR link on the Linear issue. Merges are squash merges; the driver deletes the branch.
+- **Post-merge lifecycle (automated, no-agent `factory_merge_watch.py` cron every 5m):** when a factory PR merges, its Linear issue is set to Done (comment with the merged PR link), and the **next eligible sibling** in the same epic is flagged `factory-ready` — eligible = open, not yet flagged, and not blocked by any open issue; ordered by priority then issue number. At most one open sibling carries `factory-ready` at a time. Ty keeps final authority: remove the flag or edit the spec before triage syncs it.
 - Ty's oversight: weekly deep-read of merged PRs (plan §0 v2.2 mitigations) and the hard overrides above stay in force.
