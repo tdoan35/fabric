@@ -4,7 +4,7 @@
 |---|---|
 | Status | Draft, 2026-10-08. Not built. Replaces the hackathon architecture (v0.2, in git history) |
 | Spec | `CONCEPT.md`. Its §2 invariants are binding; this document answers its §9 and §11 architecture questions |
-| Companion | `RUNTIME.md`: the event log, jobs and recovery that everything here runs on |
+| Companion | `RUNTIME.md`: the event log, jobs and recovery that everything here runs on. `LEARNING.md`: how agents learn and forget. `LAB.md`: what Fabric measures on its own budget |
 | Decision | Fabric is its own product, in TypeScript. One server codebase runs inside the desktop app, on a host you run, or in Fabric's cloud. Hermes Agent is prior art, not a dependency |
 
 ## 0. Summary
@@ -41,6 +41,9 @@ The server is the same code in all three places. What changes is where it runs, 
 | 2026-10-08 | Chat channels are in v1 |
 | 2026-10-08 | Long-running background work (hours to days, with approvals) is in v1 |
 | 2026-10-08 | No workflow engine. Temporal was reviewed and set aside: the local server runs inside the desktop app, where Temporal can't |
+| 2026-10-10 | Dana handles requests inside her envelope directly and delegates the rest: route by depth, not topic (CONCEPT §4.1) |
+| 2026-10-10 | Agents learn skills under a per-agent context budget, with a lifecycle that fades and deletes unused skills. Skills need no approval; organization changes do (`LEARNING.md`) |
+| 2026-10-10 | Evaluation happens in Fabric's lab on Fabric's budget; a user's tokens are never spent on evaluation unless they ask (`LAB.md`) |
 
 ## 2. Where it runs
 
@@ -180,7 +183,7 @@ Long sessions are compacted with marker events: a summary fact supersedes the ev
 | Team / project | Members, when retrieved | Members, via the team's knowledge tool |
 | Run | That run | That run; dropped at the end unless promoted |
 
-A specialist's `USER.md` is the ceiling of what it knows about you, edited only by explicit promotion (A-9). Memory items live in one table keyed by `(scope_type, scope_id)`, with pgvector and full-text search. Every write is a `memory.written` fact applied to the table in the same transaction, so Weave can list it and you can forget it.
+A specialist's `USER.md` is the ceiling of what it knows about you, edited only by explicit promotion (A-9). Memory items live in one table keyed by `(scope_type, scope_id)`, with pgvector and full-text search. Every write is a `memory.written` fact applied to the table in the same transaction, so Weave can list it and you can forget it. Forgetting and real deletion are in `LEARNING.md` §10: the fact carries a reference, and the content lives outside the append-only log so it can be erased.
 
 ### 8.4 Registry
 
@@ -188,12 +191,12 @@ Cards for agents, teams and templates: a compact description, tags, an embedding
 
 ## 9. Tools, sandboxes and credentials
 
-- **Built-in tools:** `delegate`, `ask_user`, `memory.*`, `artifacts.*`, files, shell, browser, web search, `schedule.*`, `send`. Agents can add MCP servers.
+- **Built-in tools:** `delegate`, `ask_user`, `memory.*`, `skills.*`, `artifacts.*`, files, shell, browser, web search, `schedule.*`, `send`. Agents can add MCP servers.
 - **Every tool declares** its effect class (`read`, `idempotent`, `rerunnable`, `once`; `RUNTIME.md` §6) and its gate (none, by approval mode, always human).
 - **Policy is enforced in `tool.exec`**, against the run's effective access (§4). UI toggles describe; the runtime enforces (CONCEPT §2.7).
 - **Sandboxes:** one persistent sandbox per workspace that sleeps when idle, a working directory per run, a slot leased per tool call, and a network allowlist per agent. Providers: local Docker, the host machine (approval required), cloud microVMs (Sprites today). The browser runs inside the sandbox.
 - **Credentials** (model keys, channel tokens, connector secrets) live in an encrypted vault: the OS keychain locally, envelope encryption with a KMS in the cloud. They are injected into tool calls by the runtime, scoped per agent, and never appear in prompts or the log.
-- **Skills** use the Agent Skills format (`SKILL.md` folders), loaded on demand. Agents can be imported from Hermes or Claude Code as proposals.
+- **Skills** use the Agent Skills format (`SKILL.md` folders), loaded on demand. Agents can be imported from Hermes or Claude Code as proposals. Agents learn and forget skills under a per-agent context budget (`LEARNING.md`); catalog skills load only on models where the lab found they help (`LAB.md`).
 
 ## 10. Surfaces and protocol
 
@@ -218,7 +221,8 @@ packages/runtime    append, queue, workers, timers, storage (Postgres | PGlite)
 packages/agents     agent loop, team loop, brief check, context assembly, registry
 packages/tools      built-ins, MCP client, policy, vault, sandbox providers
 packages/channels   adapters (Telegram, Slack, email), bindings, delivery
-packages/memory     scopes, recall, embeddings
+packages/memory     scopes, recall, embeddings, the skills store and lifecycle
+packages/evals      the eval harness: the lab, and "test this skill" on your own keys
 packages/llm        providers, pricing, bring-your-own-key
 packages/contracts  client↔server protocol
 apps/server         HTTP, SSE, auth; API and workers in one process except in the cloud
@@ -245,6 +249,7 @@ apps/web, apps/mobile
 5. **Tools and isolation:** sandbox providers, policy, the vault, skills, MCP.
 6. **Channels:** Telegram, Slack and email adapters, pairing, delivery preferences.
 7. **Connections and cloud:** remote-host pairing; cloud accounts, tenancy, the worker pool, billing, push.
+8. **Learning and the lab:** the learn job, skills maintenance and organization review (`LEARNING.md`); the eval harness, Dana's benchmark and the first catalog (`LAB.md`). Until the lab ships a policy pack, the runtime uses hand-set defaults.
 
 ## 14. Open questions
 

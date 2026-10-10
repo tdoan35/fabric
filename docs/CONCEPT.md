@@ -6,7 +6,7 @@
 |---|---|
 | Status | Concept brief — ready for elaboration |
 | Date | 2026-09-29 |
-| Updated | 2026-10-01 — added §3 supporting concepts, §8.5 and §13 after reviewing the coded mockup (`apps/web`); gap register in `MOCKUP-GAPS.md` (since retired). 2026-10-02 — §8.5 and §13 A-11 for the Weave page; §3, §8.2, §8.5 and §13 A-12 for the Work page (tasks and loops) |
+| Updated | 2026-10-01 — added §3 supporting concepts, §8.5 and §13 after reviewing the coded mockup (`apps/web`); gap register in `MOCKUP-GAPS.md` (since retired). 2026-10-02 — §8.5 and §13 A-11 for the Weave page; §3, §8.2, §8.5 and §13 A-12 for the Work page (tasks and loops). 2026-10-10 — §4.1 Dana's envelope (direct vs. delegate); Appendix A rows from long-term Hermes use; learning in `LEARNING.md`, evaluation in `LAB.md` |
 | Owner | Ty Thanh Doan |
 | Purpose | Handoff document for agents/teams doing: (1) concept development, (2) technical architecture, (3) UI/UX design |
 
@@ -106,8 +106,38 @@ Design requirements:
 - Delegation handoffs carry a **task brief** (objective, constraints, relevant context, budget, completion criteria) — not the parent transcript (§6).
 - The assistant recommends and helps create missing capabilities; it does not silently instantiate permanent agents with broad access.
 - **Anti-goal:** do not build a heavyweight LLM routing classifier in front of everything before the value path works. Start with the main agent's judgment + registry search; add structure only where observed routing is bad.
-- [OPEN] Disambiguation rules between adjacent dispositions (direct vs. delegate; agent vs. team) — the concept track should produce a decision policy with worked examples.
+- Disambiguation between adjacent dispositions: **direct vs. delegate is resolved in §4.1.** [OPEN] Agent vs. team: §4.1's worked examples cover the common cases (a team when the work needs several capabilities, dependent stages or independent validation); a full policy is still owed.
 - [OPEN] Should lightweight requests skip disposition recording entirely (pure chat), or is everything logged at decreasing detail?
+
+### 4.1 Handling directly: Dana's envelope
+
+*Resolved 2026-10-10.*
+
+Route by depth, not topic. "Anything research goes to the researcher" delegates too much: quick lookups are assistant work, the way a human executive assistant googles something without calling in an analyst. Dana handles a request directly when it fits all four:
+
+| Criterion | Handle directly | Delegate when |
+|---|---|---|
+| Tools | Her assistant toolset: web search, calendar, mail, notes | It needs code execution, the sandbox or specialist tools |
+| Expertise | General knowledge is enough | It needs a specialist's judgment: weighing benchmarks, licences, methodology |
+| Size | A few steps (starting values: ~5 tool calls, ~2 minutes) and a chat-length answer | Many sources, cross-checking, a report or other deliverable, or anything recurring |
+| Stakes | Informational, reversible, or behind an approval gate | A decision depends on the answer |
+
+- **Ambiguous depth: answer, then offer.** When a request doesn't say how deep to go, Dana answers at the cheapest depth that is useful on its own, and offers more as a one-tap action under the answer ("Have Megan research this") rather than a question in the text. She clarifies first only when a wrong guess would waste real work (the *clarify* disposition).
+- **Escalating midway.** Dana can start directly and find the work is bigger than it looked. The runtime enforces the size limit as a budget on direct handling: at the limit she finishes or delegates, what she found goes into the brief, and the change is recorded as a new disposition (`direct → agent:megan`, "sources conflict").
+- **Learning the line.** Taps on the offer, mid-task escalations and corrections ("no, give that to Megan") are routing data. They move the line for you without adding text to Dana's prompt (`LEARNING.md` §4).
+
+Worked examples:
+
+| Request | Disposition |
+|---|---|
+| "What's the newest Llama release?" | Direct, one search |
+| "Tell me about the latest advances in SOTA open-source models" | Direct briefing with sources, plus the "go deeper" action |
+| "Which open model should we use for our product? We decide on Friday" | Delegate → Megan · Researcher, with the decision criteria in the brief: a decision depends on it |
+| "Write me a report on open-source model trends" | Delegate → Megan · Researcher: a deliverable |
+| "Keep me posted on major open-model releases" | Propose a weekly schedule owned by Megan · Researcher: recurring |
+| "Check whether Qwen beats Llama on our eval set" | Delegate → Research Team: it runs code and needs independent validation |
+
+Where it lives: the policy in Dana's core instructions (it applies to every request, so it is always loaded, not a skill); the size limit in the runtime; the values per model, with these examples as test cases, in the lab (`LAB.md` §6); your adjustments in routing data (`LEARNING.md` §4). This keeps to the anti-goal above: Dana's judgment plus a runtime limit, not a classifier in front of every request.
 
 ---
 
@@ -327,7 +357,7 @@ If this concept becomes the "Build Personal Agents Hack" entry (SF, one day, ~6.
 
 ## 11. Open questions summary
 
-**Concept:** routing disambiguation policy (§4) · team operating-model vocabulary (§5) · lifecycle states and retirement/archival semantics (§7) · when a run's specialist learning is promoted to personal memory (§3, §6) · template expressiveness (§3).
+**Concept:** routing disambiguation policy (§4; direct vs. delegate resolved in §4.1) · team operating-model vocabulary (§5) · lifecycle states and retirement/archival semantics (§7) · when a run's specialist learning is promoted to personal memory (§3, §6) · template expressiveness (§3).
 
 **Architecture:** durability model for runs (§9.2.1) · brief compiler design (§9.2.2) · build/compose/hybrid choice (§9.3) · registry representation (§9.2.4) · isolation enforcement (§9.2.5) · cost attribution (§9.2.9).
 
@@ -385,7 +415,7 @@ The coded mockup adds behaviour this brief doesn't cover. Per §0, each item bel
 | A-7 | **Per-session execution target and connectors** ("Runs on": This machine (the default) · Sprite · Remote host) | §7 security, §2.7 | A local default contradicts "isolation is enforced by the runtime" | Default to isolated. Local or remote execution needs explicit approval and must state what it can reach |
 | A-8 | **Incognito sessions** ("not saved to your sessions or used to shape your assistant") | §2.9 | A useful privacy mode, but its audit semantics are undefined | No session history and no writes to any memory scope; dispositions and runs are still audited |
 | A-9 | **Specialist `USER.md`**: a curated user profile per specialist | §6 | Makes "relevant user preferences" concrete, but risks drifting into a copy of personal memory | `USER.md` is the per-agent ceiling, edited only by explicit promotion (§12 Concept-4); the brief picks from it per run |
-| A-10 | **Session context meter**: a 1M window with auto-compaction at 80% | §10 constraint 1 | Mixes conversation length with the assistant's bounded base context | Show both: the base context (bounded, ~2k) and the conversation history (compacted) |
+| A-10 | **Session context meter**: a 1M window with auto-compaction at 80% | §10 constraint 1 | Mixes conversation length with the assistant's bounded base context | Show both: the base context and the conversation history (compacted). The base is bounded, not tiny: a fixed part that changes only through deliberate, versioned edits, plus a learned share the runtime caps (`LEARNING.md` §3). The earlier ~2k figure is lifted (2026-10-10) |
 | A-11 | **Weave** (`/weave`): where the organization reports to you. An inbox of typed asks (approval, question, escalation, proposal, finding, result); a Pulse feed of lead updates (health, what changed), memory writes and granted autonomy; agent presence and your day | §8.1.1, §8.3.5, §2.8, §2.9 | Answers §8.3.5, and makes specialist memory writes visible and forgettable. Risk: drifting into the "agent control room" §8.1.1 rules out | Adopt as a secondary surface; chat stays the landing page. Calm defaults: counts only for asks, amber not red, quiet events hidden. "Always allow" only for non-gated actions (A-3), and gated asks can't be approved from the list |
 | A-12 | **Work: tasks and loops** (`/work`, adopted by the owner on 2026-10-02). A **task** is one objective owned by one team (or agent) in one project; each run of it is a **loop**. The board belongs to the **project**: columns every team shares (Proposed · In progress · In review · Done), so several teams can work one project. A **team** view shows the same tasks in that team's own workflow steps. Below both, previous loops can be replayed. A task's page shows its loop: the workflow with the way back from review, member lanes, the brief and its completion criteria, and the inspector | §3 Task/Run, §8.2 Work, §2.4, §2.5 | Matches how real organizations split durable teams (how work is done) from projects (why). Work that needs two teams is two tasks linked by a handoff, so each has one accountable lead. Agent Studio holds definitions; Work holds instances (§2.4). Weave pushes what needs you; Work shows where everything is. Risk: a second inbox, so asks only appear as flags linking to Weave | Adopted. Ideas stay in chat until Dana proposes them (no Ideas column). A re-run is a new loop on the same task; reviewer bounces stay inside one loop's rework budget |
 
@@ -406,6 +436,11 @@ The coded mockup adds behaviour this brief doesn't cover. Per §0, each item bel
 | Multi-agent runtime failure modes (starvation, WIP pileups, stuck claims, unbounded loops) | §2.8 budgets/blocked states; §5 rework budget; §9.1 Kanban prior art |
 | Handoff information loss and return-path bloat as multi-agent failure modes | §6 failure-mode list; §12 brief-compiler deliverable |
 | "More agents" is not automatically better — handoff errors and total cost can rise | §6 honesty requirement; §12 instrumentation plan |
+| A long-used Hermes main agent's prefill keeps growing until it rots itself; skills have to be pruned by hand | Per-agent context budget; skills fade without use (`LEARNING.md` §3, §5) |
+| Saved skills carry no quality metric, so there is no telling whether one was worth keeping | Uplift per skill and model, measured in the lab (`LAB.md` §3) |
+| Cleanup is inconsistent; skills should solidify with practice and be forgotten without it, as people's are | Strength from use and outcomes, computed deterministically; tiered deletion (`LEARNING.md` §5) |
+| As models improve, some skills become useless and only add context | A verdict per model; catalog skills load only where they help (`LAB.md` §3, `LEARNING.md` §8) |
+| An executive assistant does one layer of simple work themselves, and delegates or hires for the rest | §4.1 envelope; Dana's skills and hiring (`LEARNING.md` §7, §9) |
 | Name brainstorm: "fabric" chosen as codename (the woven whole; assistant connects agents/teams); word heavily used in tech — codename only, deliberate brand pick deferred | Header codename note; naming history |
 
 ## Appendix B — Glossary
