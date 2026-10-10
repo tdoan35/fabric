@@ -86,6 +86,7 @@ Existing types keep their names and payloads so the web app's read model (`deriv
 | `skill.state_changed` | fact | **skillId, from, to, reason, strength** (on the agent's stream) | `skills.maintain` |
 | `learning.completed` | fact | **source stream, upToSeq, written, skipped, costUsd** (on the agent's stream) | `learn` |
 | `content.erased` | fact | **contentRef, reason, by** | `skills.maintain` / API |
+| `feedback.given` | fact | **targetEventId, kind: up · down · edit, diffRef** (on the target's stream) | API |
 | `proposal.created`, `proposal.decided` | fact | **kind, definition, decision, by** | decide / API |
 | `run.cancel_requested` | fact | **by** | API / parent's cancellation |
 | `run.blocked`, `run.stopped`, `run.finished` | fact | unchanged, plus **result, costUsd** on `run.finished` | decide / `run.finalize` |

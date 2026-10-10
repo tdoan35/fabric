@@ -54,17 +54,33 @@ An agent's base context is its `SOUL.md`, `IDENTITY.md`, `USER.md`, tool definit
 
 The **learned share** (the skill index plus the recalled-memory digest) has a cap per agent:
 
-| Agent | Learned share |
+| Agent | Skill index | Memory digest | Learned share |
+|---|---|---|---|
+| Dana | ~15 skills (≈450 tokens) | ≈500 tokens | 1,000 tokens |
+| Team lead | ~25 skills (≈750) | ≈750 | 1,500 |
+| Specialist | ~35 skills (≈1,000) | ≈1,000 | 2,000 |
+
+Where these come from (measured 2026-10-10 against Hermes Agent at commit `66605471` and Prime Agent's source):
+
+| Reference | Tokens |
 |---|---|
-| Dana | 1,000 tokens; her whole base context stays near 2k (CONCEPT A-10) |
-| Team lead | 2,000 tokens |
-| Specialist | 3,000 tokens |
+| One Hermes index line: a name and a description cut to 60 characters | 22–28 per skill |
+| Hermes's default install: 58 bundled skills | ≈1.5k index, plus ≈260 of fixed instructions on using skills |
+| Hermes with every optional skill installed: 212 skills | ≈5k |
+| A Hermes user's library, 275 skills ([issue #2045](https://github.com/NousResearch/hermes-agent/issues/2045)) | ≈6.8k, 46% of the system prompt |
+| Hermes memory caps: `MEMORY.md` 2,200 characters, `USER.md` 1,375 characters | ≈800 + ≈500 |
+| Prime Agent's digest: 3 entries per kind, 140 characters each | ≈500, whatever the store holds |
+| A skill body, loaded on demand: Hermes median / 90th percentile / largest | ≈2.2k / ≈4k / ≈17.7k |
+
+- **One domain fits with room.** Hermes's bundled categories hold 1–14 skills (median 4); its largest optional category, 36. A specialist's index holds a whole domain; growing past it is the split signal (§9), not a reason for more budget.
+- **Dana sits at about a third of a fresh Hermes install** (≈1.5k index + ≈1.3k memory), and unlike Hermes's index, hers never grows.
 
 - **A write never fails for lack of room.** New skills enter as candidates, outside the index (§5.4). Hermes's memory writes fail silently at its cap; that can't happen here.
 - **The index holds active and established skills, strongest first.** When they don't fit, `skills.maintain` moves the weakest to dormant: out of the index, still found by search.
 - **Persistent pressure is a structural signal, not a pruning problem.** When established skills alone exceed the cap, `org.review` considers a split or a consolidation (§9).
 - **Identity files and tools are measured, not capped by learning.** They change only through approved organization changes.
-- **Index lines** are `name — description`, at most 100 characters. Bodies load on demand through `skills.read`, which is a tool call, so every load is in the log.
+- **Index lines** are `name — description`, at most 100 characters, about 30 tokens each. Bodies load on demand through `skills.read`, which is a tool call, so every load is in the log.
+- **Loaded bodies count against the turn, not the base budget.** Dana's and every agent's instructions say to load a skill when it matches the task, never Hermes's "err on the side of loading", which grew one user's context from 25k to 126k tokens ([issue #102811](https://github.com/NousResearch/hermes-agent/issues/102811)).
 - **Prompt caching.** The index changes at most once a day per agent (when `skills.maintain` runs), so the provider's cache stays warm.
 
 ## 4. Three levels of learning
@@ -98,9 +114,11 @@ This is ACT-R's base-level activation, a standard model of human recall: frequen
 
 | Outcome | Weight | Evidence, free from the log |
 |---|---|---|
-| Positive | 1.0 | The run was accepted at review, or you accepted the result, and no correction followed |
-| Neutral | 0.5 | No signal either way |
-| Negative | 0, counted separately (§5.3) | Rework requested, a correction, the run blocked, or the result rejected |
+| Positive | 1.0 | A thumbs up; the run was accepted at review; or you accepted the result and no correction followed |
+| Neutral | 0.5 | No signal either way, or small edits before you used the result |
+| Negative | 0, counted separately (§5.3) | A thumbs down; you rewrote most of the result; rework requested; a correction; the run blocked or the result rejected |
+
+An edit is also evidence for the learn job (§6): the diff between what the agent produced and what you kept is a direct record of what you wanted.
 
 `d` starts at 0.5, ACT-R's usual value.
 
@@ -193,16 +211,17 @@ Enforced by the runtime when writes are applied, not by the prompt:
 - **A skill can't grant anything.** A skill that needs a tool its agent lacks is not written; it becomes an outgrow signal (§7.2) and its evidence goes to `org.review`.
 - **Read-only:** the learning skill and any user-owned skill.
 - **Scanned:** every write, for prompt-injection and secret patterns. On by default; Hermes leaves this off for agent-written skills.
-- **Size cap:** a skill body is at most 2k tokens; longer material goes into the skill's reference files.
+- **Size cap:** a skill body is at most 5k tokens, Anthropic's guidance for Agent Skills; longer material goes into the skill's reference files. 94% of Hermes's bundled and optional skills fit; a 2k cap would reject 59% of them.
 - **Read before patch:** a patch is refused unless the job read that skill.
 
 ### 6.4 The learning skill
 
-How to learn is a skill, so you can read and change it: what counts as a lesson, how narrowly to scope it, when to patch and when to create, what goes in memory and what in a skill. Fabric ships it in the policy pack (`LAB.md` §2); you own your copy. One learning skill serves every agent; Dana's section adds the organization-level signals (§7, §9).
+How to learn is a skill, so you can read and change it: what counts as a lesson, how narrowly to scope it, when to patch and when to create, what goes in memory and what in a skill. Fabric ships it in the policy pack (`LAB.md` §2); you own your copy. One learning skill serves every agent, with no per-agent variants; its section for Dana adds the organization-level signals (§7, §9).
 
 ### 6.5 Cost
 
 The learn job is the only background model spend in the runtime.
+- Learning is on by default.
 - It runs on the agent's model, or a cheaper one you choose.
 - Its cost is attributed to the source run or session, as learning.
 - It draws from a monthly **learning budget**. When the budget is spent, learning pauses and Agent Studio says so; nothing else changes.
@@ -213,7 +232,7 @@ The learn job is the only background model spend in the runtime.
 
 Dana does one layer of work herself and delegates or hires for the rest: an executive assistant, not a super-agent. She handles requests inside her envelope (CONCEPT §4.1): her assistant tools, general knowledge, a few steps, reversible or gated.
 
-- **Starting skills** (proposed): scheduling, email triage and drafting, quick research briefings, summaries, reminders, notes.
+- **Starting skills:** scheduling, email triage and drafting, quick research briefings, summaries, reminders, notes.
 - **Routing is not a skill.** It applies to every request, so it lives in her core instructions.
 - **Same lifecycle,** under the tightest budget (§3).
 
@@ -317,10 +336,11 @@ The event log is append-only, so real deletion needs the content kept outside it
 
 ## 11. What you see
 
+- **Feedback on replies and results:** a thumbs up or down, and edits. Both are signals (§5.2); nothing else asks for feedback.
 - **Agent Studio, per agent:** the context budget and what fills it. For each skill: state, strength trend, uses in 30 days, last outcome, origin run, tokens, and for catalog skills the verdict on the agent's model.
 - **Weave, weekly digest:** a quiet Pulse item, never an ask. Skills promoted, demoted and archived; deletions due next week.
 - **Asks,** only for organization changes: hires, splits, merges, retirements, and end-of-probation recommendations.
-- **Settings:** learning budget and model; keep everything; evaluate my skills automatically (off by default, `LAB.md` §11).
+- **Settings:** learning (on by default), its budget and model; keep everything; evaluate my skills automatically (off by default, `LAB.md` §11).
 - **Test this skill,** in Agent Studio: runs the lab's harness on your keys after showing the estimated cost (`LAB.md` §11).
 
 ## 12. Runtime changes
@@ -330,7 +350,7 @@ Applied to `RUNTIME.md`:
 | Change | Where |
 |---|---|
 | An `agent:<agentId>` stream: the agent's learning log | §2 |
-| `skill.written`, `skill.used`, `skill.state_changed`, `learning.completed`, `content.erased` | §3 |
+| `skill.written`, `skill.used`, `skill.state_changed`, `learning.completed`, `content.erased`, `feedback.given` | §3 |
 | `memory.written` carries `contentRef`, not content; snapshots reference memory and skill sections | §3 |
 | `learn`, `skills.maintain` and `org.review` jobs | §4 |
 
@@ -338,9 +358,8 @@ Code: the strength and lifecycle fold in `packages/core`; the skills store and `
 
 ## 13. Open questions
 
-1. **Learning on by default?** Proposed: on, with a monthly learning budget. It is the one background spend, so it could instead stay off until you turn it on.
-2. **One learning skill, or one per agent.** Proposed: one shared skill, with per-agent overrides you write.
-3. **Dana's starting skills.** The list in §7.1 is a proposal.
-4. **Feedback UI.** The learn job finds corrections in free text; explicit feedback (thumbs, edits) is cheaper and clearer. How much of it can chat carry without getting noisy?
-5. **Sharing back.** Can you submit a personal skill to the catalog, and how is it scrubbed? Later (`LAB.md` §14).
-6. **Teams.** Do team leads learn changes to their operating model (stage order, gates)? Not in this draft: an operating model changes only through proposals.
+1. **Dana's whole base context.** CONCEPT A-10 bounds it at about 2k tokens, but her tool definitions alone may exceed that (one Hermes report measured 13.9k tokens of fixed overhead per call, [issue #4379](https://github.com/NousResearch/hermes-agent/issues/4379)). The learned share above is settled; the whole base needs measuring in the runtime spike.
+2. **Sharing back.** Can you submit a personal skill to the catalog, and how is it scrubbed? Later (`LAB.md` §14).
+3. **Teams.** Do team leads learn changes to their operating model (stage order, gates)? Not in this draft: an operating model changes only through proposals.
+
+Settled 2026-10-10: learning is on by default; one shared learning skill; Dana's starting skills (§7.1); thumbs and edits as explicit feedback (§5.2).
