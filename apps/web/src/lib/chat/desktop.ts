@@ -8,8 +8,9 @@ const idle: SessionDesktop = { url: null, runId: null, screenshotArtifactId: nul
 /** Event-driven desktop state; snapshots restore reloads and reconnects, never overwrite newer events. */
 export function useSessionDesktop(sessionId: string): SessionDesktop {
   const [state, setState] = useState<{ sessionId: string; desktop: SessionDesktop }>({ sessionId, desktop: idle });
+  // A new session starts idle; reset during render so the previous session's desktop never paints.
+  if (state.sessionId !== sessionId) setState({ sessionId, desktop: idle });
   useEffect(() => {
-    setState({ sessionId, desktop: idle });
     if (!httpMode) return;
     let stopped = false;
     let revision = 0;

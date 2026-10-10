@@ -377,11 +377,15 @@ function ThreadBody({ sessionId, agentIndex, onAgentChange, onBackToDana, incogn
   // Last-used tab, so the toggle reopens where you left off. Session is the default once a chat is running.
   const [lastTab, setLastTab] = useState<SideTab>("session");
   const desktop = useSessionDesktop(sessionId);
-  useEffect(() => {
-    if (!desktop.runId) return;
-    setLastTab("session");
-    setSideOpen(true);
-  }, [desktop.runId]);
+  // A new desktop run opens the Session tab.
+  const [seenRunId, setSeenRunId] = useState<string | null>(null);
+  if (desktop.runId !== seenRunId) {
+    setSeenRunId(desktop.runId);
+    if (desktop.runId) {
+      setLastTab("session");
+      setSideOpen(true);
+    }
+  }
   // The Session tab only exists once a chat has started.
   const sideTab: SideTab = lastTab === "session" && !started && !desktop.runId ? "agent" : lastTab;
   // Teams mode talks straight to the team's lead; the create slot talks to Dana.
