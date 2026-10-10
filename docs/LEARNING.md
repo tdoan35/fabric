@@ -75,6 +75,8 @@ Where these come from (measured 2026-10-10 against Hermes Agent at commit `66605
 - **One domain fits with room.** Hermes's bundled categories hold 1–14 skills (median 4); its largest optional category, 36. A specialist's index holds a whole domain; growing past it is the split signal (§9), not a reason for more budget.
 - **Dana sits at about a third of a fresh Hermes install** (≈1.5k index + ≈1.3k memory), and unlike Hermes's index, hers never grows.
 
+**Dana's whole base** is that learned share plus a fixed part: her core instructions (including the routing policy, CONCEPT §4.1), her identity files and her tool definitions. The fixed part is sized by what her job needs, not squeezed to a number: a starting ceiling of 8k tokens, to be replaced by a measurement in the runtime spike. It changes only through deliberate, versioned edits, and her benchmark checks each one (`LAB.md` §6.1). The constraint that matters (CONCEPT §10) is that her context never grows from use, and that is the learned share's cap. The fixed part is the same on every call, so the provider's prompt cache keeps it cheap; what a longer prompt can still cost is quality, which is what the benchmark measures.
+
 - **A write never fails for lack of room.** New skills enter as candidates, outside the index (§5.4). Hermes's memory writes fail silently at its cap; that can't happen here.
 - **The index holds active and established skills, strongest first.** When they don't fit, `skills.maintain` moves the weakest to dormant: out of the index, still found by search.
 - **Persistent pressure is a structural signal, not a pruning problem.** When established skills alone exceed the cap, `org.review` considers a split or a consolidation (§9).
@@ -358,8 +360,7 @@ Code: the strength and lifecycle fold in `packages/core`; the skills store and `
 
 ## 13. Open questions
 
-1. **Dana's whole base context.** CONCEPT A-10 bounds it at about 2k tokens, but her tool definitions alone may exceed that (one Hermes report measured 13.9k tokens of fixed overhead per call, [issue #4379](https://github.com/NousResearch/hermes-agent/issues/4379)). The learned share above is settled; the whole base needs measuring in the runtime spike.
-2. **Sharing back.** Can you submit a personal skill to the catalog, and how is it scrubbed? Later (`LAB.md` §14).
-3. **Teams.** Do team leads learn changes to their operating model (stage order, gates)? Not in this draft: an operating model changes only through proposals.
+1. **Sharing back.** Can you submit a personal skill to the catalog, and how is it scrubbed? Later (`LAB.md` §14).
+2. **Teams.** Do team leads learn changes to their operating model (stage order, gates)? Not in this draft: an operating model changes only through proposals.
 
-Settled 2026-10-10: learning is on by default; one shared learning skill; Dana's starting skills (§7.1); thumbs and edits as explicit feedback (§5.2).
+Settled 2026-10-10: learning is on by default; one shared learning skill; Dana's starting skills (§7.1); thumbs and edits as explicit feedback (§5.2); Dana's base lifted from CONCEPT A-10's ~2k to a fixed part sized by her job plus the capped learned share (§3). For scale, one Hermes report measured 13.9k tokens of fixed overhead per call ([issue #4379](https://github.com/NousResearch/hermes-agent/issues/4379)).
