@@ -86,13 +86,12 @@ export const Sizes: Story = {
   ),
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
-    const buttons = canvas.getAllByRole("button");
-    const labelled = [...SIZES, ...ICON_SIZES];
 
-    // One real <button> per size, labelled with its own name...
-    expect(buttons).toHaveLength(labelled.length);
-    labelled.forEach((size, index) => {
-      const button = buttons[index];
+    // One real <button> per text size, labelled with its own name...
+    const textButtons = SIZES.map((size) => canvas.getByRole("button", { name: size }));
+    expect(textButtons).toHaveLength(SIZES.length);
+    SIZES.forEach((size, index) => {
+      const button = textButtons[index];
       expect(button.tagName).toBe("BUTTON");
       expect(button.dataset.size).toBe(size);
       expect(button.textContent).toBe(size);
@@ -102,8 +101,20 @@ export const Sizes: Story = {
       }
     });
 
-    // Icon-only buttons stay accessible via aria-label.
-    expect(canvas.getAllByRole("button", { name: "Open" })).toHaveLength(ICON_SIZES.length);
+    // Icon-only buttons have no text: they expose an SVG and carry their
+    // metrics too, staying accessible via aria-label.
+    const iconButtons = canvas.getAllByRole("button", { name: "Open" });
+    expect(iconButtons).toHaveLength(ICON_SIZES.length);
+    ICON_SIZES.forEach((size, index) => {
+      const button = iconButtons[index];
+      expect(button.tagName).toBe("BUTTON");
+      expect(button.dataset.size).toBe(size);
+      expect(button.querySelector("svg")).not.toBeNull();
+      // ...and carrying that size's signature metrics.
+      for (const cls of SIZE_CLASSES[size]) {
+        expect(button.classList.contains(cls)).toBe(true);
+      }
+    });
   },
 };
 
