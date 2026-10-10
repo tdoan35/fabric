@@ -107,7 +107,7 @@ function Row({ item, st, selected, focused, onOpen, snoozeOpen, onSnoozeOpenChan
           )}
         </span>
       </button>
-      {st.unread && <span aria-label="Unread" className="pointer-events-none absolute left-0.5 top-4 size-1.5 rounded-full bg-run" />}
+      {st.unread && <span role="img" aria-label="Unread" className="pointer-events-none absolute left-0.5 top-4 size-1.5 rounded-full bg-run" />}
       {live && (
         <div className={cn(
           "absolute right-2 top-1.5 flex items-center opacity-0 transition-opacity group-hover/row:opacity-100 group-has-[:focus-visible]/row:opacity-100",
