@@ -59,7 +59,7 @@ function EscalationBody({ item }: { item: EscalationItem }) {
       <p className="text-sm leading-relaxed">{item.body}</p>
       <div className="flex items-center gap-3 text-xs">
         <span className="text-muted-foreground">Rework budget</span>
-        <span className="flex gap-1" aria-label={`${item.budget.used} of ${item.budget.total} used`}>
+        <span className="flex gap-1" role="img" aria-label={`${item.budget.used} of ${item.budget.total} used`}>
           {Array.from({ length: item.budget.total }, (_, i) => (
             <span key={i} className={cn("h-1.5 w-8 rounded-full", i < item.budget.used ? "bg-warn" : "bg-foreground/10")} />
           ))}
