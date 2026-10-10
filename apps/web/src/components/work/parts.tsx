@@ -47,7 +47,7 @@ const STAGE_WORD: Record<StageState, string> = {
 /** The team's workflow as a row of dots; the review step is a diamond. */
 export function StepDots({ stages, className }: { stages: { label: string; state: StageState; gate?: boolean }[]; className?: string }) {
   return (
-    <span className={cn("flex items-center gap-1", className)} aria-label={stages.map((s) => `${s.label}: ${STAGE_WORD[s.state]}`).join(", ")}>
+    <span role="img" className={cn("flex items-center gap-1", className)} aria-label={stages.map((s) => `${s.label}: ${STAGE_WORD[s.state]}`).join(", ")}>
       {stages.map((s) => (
         <Tooltip key={s.label}>
           <TooltipTrigger asChild>
@@ -85,12 +85,12 @@ export function AskFlag({ asks, proposal, className }: { asks: InboxItem[]; prop
 }
 
 /** A ratio against a limit. The track is a lighter step of the fill's own hue. */
-export function Meter({ value, max, tone = "run", className }: { value: number; max: number; tone?: "run" | "ok" | "warn"; className?: string }) {
+export function Meter({ value, max, tone = "run", label, className }: { value: number; max: number; tone?: "run" | "ok" | "warn"; label?: string; className?: string }) {
   const pct = Math.min(100, (value / max) * 100);
   const track = { run: "bg-run-soft", ok: "bg-ok-soft", warn: "bg-warn-soft" }[tone];
   const fill = { run: "bg-run", ok: "bg-ok", warn: "bg-warn" }[tone];
   return (
-    <span className={cn("block h-1.5 overflow-hidden rounded-full", track, className)} role="meter" aria-valuenow={value} aria-valuemin={0} aria-valuemax={max}>
+    <span className={cn("block h-1.5 overflow-hidden rounded-full", track, className)} role="meter" aria-valuenow={value} aria-valuemin={0} aria-valuemax={max} aria-label={label}>
       <span className={cn("block h-full rounded-full transition-[width] duration-300", fill)} style={{ width: `${pct}%` }} />
     </span>
   );
@@ -99,7 +99,7 @@ export function Meter({ value, max, tone = "run", className }: { value: number; 
 /** Rework as pips: used ones amber. */
 export function ReworkPips({ used, budget }: { used: number; budget: number }) {
   return (
-    <span className="flex gap-0.5" aria-label={`Rework ${used} of ${budget} used`}>
+    <span role="img" className="flex gap-0.5" aria-label={`Rework ${used} of ${budget} used`}>
       {Array.from({ length: budget }, (_, i) => <span key={i} className={cn("h-1.5 w-3 rounded-full", i < used ? "bg-warn" : "bg-foreground/12")} />)}
     </span>
   );
