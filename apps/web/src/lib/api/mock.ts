@@ -25,6 +25,10 @@ const bundledRuns = runs.map((r) => r.id === recordingId ? {
   recorded: r.recorded, segments: r.segments, brief: bundle.run.brief, reportId: recordingReport.id,
 } : r);
 
+// Test seam: createProject pushes into the shared fixture-backed `projects` array; the
+// storybook harness restores this snapshot so stories never accumulate mock state.
+const projectSeed = [...projects];
+
 // The routines' threads are part of the seeded world (SCH), so the sidebar matches the server.
 const registry: Registry = { agents: myProfiles, communityAgents: communityProfiles, teams: studioTeams, communityTeams, organizations, projects, sessions: [...sessions, ...mockScheduleSessions], personaPool: [] };
 const weaveSnapshot: WeaveSnapshot = { items: inboxSeed, pulse: pulseSeed, presence: presenceSeed, calendar: calendarEvents };
@@ -72,3 +76,12 @@ export const mockApi = {
   /** No-op offline: mock memory decisions stay client-side (the mock pulse rows have no memoryId). */
   decideMemory: (): Promise<{ ok: true }> => delay({ ok: true }),
 };
+
+/**
+ * Test seam (storybook harness only): restore mock state that call flows mutate. In-place,
+ * so every holder of the shared `projects` array sees the reset.
+ */
+export function resetMockData() {
+  projects.length = 0;
+  projects.push(...projectSeed);
+}
