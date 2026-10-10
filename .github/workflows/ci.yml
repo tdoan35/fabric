@@ -39,6 +39,15 @@ jobs:
       - name: Build
         run: npm run build
 
+      - name: Build Storybook
+        run: npm run build-storybook -w web
+
+      - name: Install Chromium for browser tests
+        run: npx playwright install --with-deps chromium
+
+      - name: Browser story tests (interaction + a11y, vitest project "storybook")
+        run: npm run test-storybook -w web
+
   lint:
     runs-on: ubuntu-latest
     timeout-minutes: 10
