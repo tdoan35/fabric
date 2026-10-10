@@ -172,13 +172,17 @@ export const StreamingReply: Story = {
     // The run starts: Dana's portrait switches to its working loop.
     await waitFor(() => expect(canvas.getByRole("img", { name: "Dana, working" })).toBeInTheDocument());
 
-    // The reply streams: partial text visible while the run is still going.
+    // The reply streams: partial text visible while the run is still going. Wait on a
+    // prefix, not the whole sentence — the mock ends the run ~25 ms after the last word
+    // yields, so gating assertions must land while words are still in flight.
     await waitFor(
-      () => expect(canvasElement.textContent).toContain("An n-gram is a run of n consecutive tokens."),
+      () => expect(canvasElement.textContent).toContain("An n-gram is a run"),
       { timeout: 5000, interval: 20 },
     );
 
-    // A follow-up typed mid-run shows the composer's gated send…
+    // A follow-up typed mid-run shows the composer's gated send: the stream still has
+    // words to deliver, so the run is definitively still going here (asserting after
+    // the full sentence races the run's end and flakes under load).
     await user.type(input, " And the held-out split?");
     expect(canvas.getByRole("button", { name: "Send" })).toBeDisabled();
 
@@ -186,6 +190,10 @@ export const StreamingReply: Story = {
     await waitFor(
       () => expect(canvas.getByRole("button", { name: "Send" })).toBeEnabled(),
       { timeout: 5000 },
+    );
+    await waitFor(
+      () => expect(canvasElement.textContent).toContain("An n-gram is a run of n consecutive tokens."),
+      { timeout: 5000, interval: 20 },
     );
     await waitFor(
       () => expect(canvasElement.textContent).toContain("lookup-table language model."),
