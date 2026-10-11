@@ -88,6 +88,8 @@ export function ScheduleEditor({ target, open, onOpenChange, onSave, onDelete }:
         durationMin: Number(duration) || 30,
       });
       onOpenChange(false);
+    } catch {
+      // A failed save keeps the editor open for retry; `finally` releases the button.
     } finally {
       setSaving(false);
     }
