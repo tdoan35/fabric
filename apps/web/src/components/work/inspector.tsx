@@ -27,7 +27,7 @@ function Terminal({ lines }: { lines: MemberView["lines"] }) {
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => { ref.current?.scrollTo({ top: ref.current.scrollHeight }); }, [lines.length]);
   return (
-    <div ref={ref} className="max-h-64 overflow-y-auto rounded-lg bg-[#0a0a0a] p-3 font-mono text-[11px] leading-5 text-neutral-300">
+    <div ref={ref} tabIndex={0} className="max-h-64 overflow-y-auto rounded-lg bg-[#0a0a0a] p-3 font-mono text-[11px] leading-5 text-neutral-300 focus-visible:outline-none">
       {lines.map((l, i) => <div key={i} className={l.text.startsWith("$") ? "text-neutral-100" : undefined}>{l.text}</div>)}
       <span className="animate-pulse">▍</span>
     </div>
@@ -145,7 +145,7 @@ export function Inspector({ member, run, view, t, snapshots, onClose }: {
                           <span className={cn("font-mono tabular-nums", s.tokens === 0 && "text-muted-foreground")}>{s.tokens.toLocaleString()}</span>
                         </CollapsibleTrigger>
                         <CollapsibleContent className="data-[state=closed]:animate-[collapsible-up_0.2s_ease-out] data-[state=open]:animate-[collapsible-down_0.2s_ease-out]">
-                          <pre className="mb-2 max-h-56 overflow-auto whitespace-pre-wrap rounded-lg bg-foreground/5 p-2.5 font-mono text-[11px] leading-relaxed text-foreground/85">
+                          <pre tabIndex={0} className="mb-2 max-h-56 overflow-auto whitespace-pre-wrap rounded-lg bg-foreground/5 p-2.5 font-mono text-[11px] leading-relaxed text-foreground/85 focus-visible:outline-none">
                             {sectionText(s, { agentId: member.agentId, run, snap, artifacts: view.artifacts })}
                           </pre>
                         </CollapsibleContent>
