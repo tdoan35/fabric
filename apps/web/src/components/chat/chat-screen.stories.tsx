@@ -20,7 +20,9 @@ import { dana } from "@fabric/fixtures/assistant";
 import { suggestionPool } from "@fabric/fixtures/suggestions";
 import { WithHarness, storyRouter } from "../../../.storybook/harness";
 import { networkAttempts } from "../../../.storybook/guard";
+import type { ChatModelRunResult } from "@assistant-ui/react";
 import { ChatScreen, EXISTING_THREAD, failNextAssistantRun } from "./chat-fixtures";
+import { mockAssistant } from "@/lib/mock/chat";
 
 const meta = {
   title: "Chat/Thread",
@@ -167,31 +169,49 @@ export const StreamingReply: Story = {
     const input = canvas.getByRole("textbox");
 
     await user.type(input, "What's an n-gram, in one line?");
-    await user.click(canvas.getByRole("button", { name: "Send" }));
 
-    // The run starts: Dana's portrait switches to its working loop.
-    await waitFor(() => expect(canvas.getByRole("img", { name: "Dana, working" })).toBeInTheDocument());
+    // The scripted stream runs ~700 ms end to end, and the mid-run send gate is only
+    // observable while the run is in flight — waiting for the full reply first (as this
+    // story used to) raced the run's completion on slower runners (CI red on 7faeda6).
+    // Hold the mock run open for a beat after its stream ends so the gated-send window
+    // below is deterministic; the trailing hold elapses before the re-enable asserts.
+    // Restored in finally so no later story inherits the slow adapter.
+    const original = mockAssistant.run;
+    type RunConfig = Parameters<typeof mockAssistant.run>[0];
+    mockAssistant.run = (async function* (config: RunConfig) {
+      yield* original(config) as AsyncGenerator<ChatModelRunResult, void, unknown>;
+      await new Promise((r) => setTimeout(r, 1500));
+    }) as unknown as typeof mockAssistant.run;
 
-    // The reply streams: partial text visible while the run is still going.
-    await waitFor(
-      () => expect(canvasElement.textContent).toContain("An n-gram is a run of n consecutive tokens."),
-      { timeout: 5000, interval: 20 },
-    );
+    try {
+      await user.click(canvas.getByRole("button", { name: "Send" }));
 
-    // A follow-up typed mid-run shows the composer's gated send…
-    await user.type(input, " And the held-out split?");
-    expect(canvas.getByRole("button", { name: "Send" })).toBeDisabled();
+      // The run starts: Dana's portrait switches to its working loop.
+      await waitFor(() => expect(canvas.getByRole("img", { name: "Dana, working" })).toBeInTheDocument());
 
-    // …which re-enables when the run completes, and the whole reply is on screen.
-    await waitFor(
-      () => expect(canvas.getByRole("button", { name: "Send" })).toBeEnabled(),
-      { timeout: 5000 },
-    );
-    await waitFor(
-      () => expect(canvasElement.textContent).toContain("lookup-table language model."),
-      { timeout: 5000 },
-    );
-    await waitFor(() => expect(canvas.getByRole("img", { name: "Dana" })).toBeInTheDocument());
+      // The reply streams: partial text visible while the run is still going.
+      await waitFor(
+        () => expect(canvasElement.textContent).toContain("An n-gram is a run of n consecutive tokens."),
+        { timeout: 5000, interval: 20 },
+      );
+
+      // A follow-up typed mid-run shows the composer's gated send…
+      await user.type(input, " And the held-out split?");
+      expect(canvas.getByRole("button", { name: "Send" })).toBeDisabled();
+
+      // …which re-enables when the run completes, and the whole reply is on screen.
+      await waitFor(
+        () => expect(canvas.getByRole("button", { name: "Send" })).toBeEnabled(),
+        { timeout: 5000 },
+      );
+      await waitFor(
+        () => expect(canvasElement.textContent).toContain("lookup-table language model."),
+        { timeout: 5000 },
+      );
+      await waitFor(() => expect(canvas.getByRole("img", { name: "Dana" })).toBeInTheDocument());
+    } finally {
+      mockAssistant.run = original;
+    }
   },
 };
 

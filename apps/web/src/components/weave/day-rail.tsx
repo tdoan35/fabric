@@ -199,7 +199,7 @@ function Timebox({ day, onPickDay }: { day: string; onPickDay: (day: string) => 
           );
         })}
         {day === TODAY && now >= START && now <= END && (
-          <div className="pointer-events-none absolute left-9 right-0 flex items-center" style={{ top: (now - START) * PX }} aria-label={`Now, ${fmtTime(weaveNow().toISOString())}`}>
+          <div role="img" className="pointer-events-none absolute left-9 right-0 flex items-center" style={{ top: (now - START) * PX }} aria-label={`Now, ${fmtTime(weaveNow().toISOString())}`}>
             <span className="size-2 -translate-x-1 rounded-full bg-warn" />
             <span className="h-px flex-1 bg-warn" />
           </div>
