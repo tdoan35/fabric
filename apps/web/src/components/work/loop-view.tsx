@@ -213,7 +213,8 @@ function LoopScreen({ task, project, loops, run: initialRun, events: initialEven
         {/* Side by side only when the lanes still get room; narrower, the Brief follows the loop. */}
         <div className="grid gap-5 p-5 xl:grid-cols-[minmax(0,1fr)_340px] xl:items-start">
           <div className="min-w-0 space-y-4">
-            <header>
+            {/* A run header, not a banner: the page header above is the banner (a11y). */}
+            <div>
               <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
                 <Face id={lead} size="size-5" />
                 {run.teamId === "dana"
@@ -228,7 +229,7 @@ function LoopScreen({ task, project, loops, run: initialRun, events: initialEven
                 {start === "sim" && clock.source === "live" && <span>Live start, simulated from the recorded loop</span>}
                 {!isLatest && <Link to={`/work/${task.id}`} className="underline decoration-foreground/25 underline-offset-2 hover:text-foreground">Go to the latest loop</Link>}
               </div>
-            </header>
+            </div>
 
             {/* The live start replays the loop's beginning, so today's asks about it would be out of place. */}
             {isLatest && start !== "sim" && <WaitingOnYou summary={summary} />}
@@ -269,7 +270,7 @@ function LoopScreen({ task, project, loops, run: initialRun, events: initialEven
 
           <aside className={cn(card, "overflow-hidden xl:sticky xl:top-0 xl:flex xl:max-h-[calc(100svh-var(--titlebar-height)-9rem)] xl:flex-col")}>
             <AnimatePresence mode="wait" initial={false}>
-              <motion.div key={member?.agentId ?? "brief"} className="min-h-0 flex-1 overflow-y-auto" initial={{ opacity: 0, x: 8 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: -8 }} transition={{ duration: 0.16 }}>
+              <motion.div key={member?.agentId ?? "brief"} className="min-h-0 flex-1 overflow-y-auto focus-visible:outline-none" tabIndex={0} initial={{ opacity: 0, x: 8 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: -8 }} transition={{ duration: 0.16 }}>
                 {member
                   ? <Inspector member={member} run={shown} view={view} t={clock.t} snapshots={snapshots} onClose={() => setSelected(undefined)} />
                   : <BriefPanel run={run} criteria={view.criteria} teamName={team.name} />}
@@ -325,7 +326,7 @@ function Stats({ run, view, t, summary }: { run: Run; view: RunView; t: number; 
       <div className={tile}>
         <div className="text-xs text-muted-foreground">{ongoing && run.etaS ? `Time · ETA ${when(addSeconds(run.startedAt, run.etaS))}` : "Time"}</div>
         <div className="text-base font-semibold tabular-nums">{fmtSpan(t)} <span className="text-xs font-normal text-muted-foreground">of {fmtSpan(run.budget.timeS)}</span></div>
-        <Meter value={t} max={run.budget.timeS} tone={t / run.budget.timeS > 0.8 ? "warn" : "run"} />
+        <Meter value={t} max={run.budget.timeS} tone={t / run.budget.timeS > 0.8 ? "warn" : "run"} label={`Time ${fmtSpan(t)} of ${fmtSpan(run.budget.timeS)}`} />
       </div>
       <div className={tile}>
         <div className="text-xs text-muted-foreground">Dana's context</div>
