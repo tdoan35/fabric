@@ -25,10 +25,12 @@ import type { EditorTarget } from "./schedule-editor";
  * planned. The right rail holds the month, an agent filter and the routine list. Data is the
  * loader's; every action refetches both lists (mock mode has no SSE to do it for us).
  */
-export function SchedulePage({ schedules: loadedSchedules, occurrences: loadedOccurrences, week: loadedWeek }: {
+export function SchedulePage({ schedules: loadedSchedules, occurrences: loadedOccurrences, week: loadedWeek, today: todayOverride }: {
   schedules: Schedule[];
   occurrences: Occurrence[];
   week: string;
+  /** Story seam: pin "today" (a YYYY-MM-DD key) so stories render the same chrome every run. */
+  today?: string;
 }) {
   const [params, setParams] = useSearchParams();
   const [schedules, setSchedules] = useState(loadedSchedules);
@@ -47,7 +49,7 @@ export function SchedulePage({ schedules: loadedSchedules, occurrences: loadedOc
   }
 
   const bounds = weekBounds(params.get("week") ?? loadedWeek);
-  const todayKey = dayKey(new Date());
+  const todayKey = todayOverride ?? dayKey(new Date());
   const refresh = useCallback(async () => {
     const [nextSchedules, nextOccurrences] = await Promise.all([
       api.listSchedules(),
@@ -68,8 +70,10 @@ export function SchedulePage({ schedules: loadedSchedules, occurrences: loadedOc
     setWeek(next);
   };
 
-  // The mini calendar's selection: today when it's in view, else the week's first day.
-  const selectedDay = bounds.from <= new Date() && new Date() < bounds.to ? todayKey : dayKey(bounds.from);
+  // The mini calendar's selection: today when it's in view, else the week's first day. Key
+  // comparison (not instant) so a pinned `today` behaves exactly like the real clock's.
+  const todayInRange = bounds.key <= todayKey && todayKey < dayKey(bounds.to);
+  const selectedDay = todayInRange ? todayKey : dayKey(bounds.from);
   const pickDay = (key: string) => setWeek(weekStart(fromKey(key)));
 
   // Days with routines get dots: upcoming or fired, before or after the current week.
