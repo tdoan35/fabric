@@ -156,7 +156,7 @@ function ProjectIndex({ projects, summaries, scope, onScope }: { projects: Proje
   const closeSearch = () => { setQuery(""); setSearching(false); };
   return (
     <>
-      <header className={cn(panelHeader, "h-12 gap-2")}>
+      <div className={cn(panelHeader, "h-12 gap-2")}>
         <Segmented value={scope} options={SCOPES} onChange={onScope} />
         <div className="ml-auto flex items-center gap-1">
           {searching
@@ -189,7 +189,7 @@ function ProjectIndex({ projects, summaries, scope, onScope }: { projects: Proje
           </DropdownMenu>
           <Button size="sm" variant="outline" className={cn(headerButton, "ml-1 h-7")} onClick={() => setCreating(true)}><Plus />New project</Button>
         </div>
-      </header>
+      </div>
       <div className={cn(panelBody, "px-5 pb-8 pt-5")}>
         {rows.length === 0
           ? (
@@ -319,7 +319,7 @@ function ProjectBoard({ project, summaries, tab, onTab }: { project: Project; su
   const count = (c: Column) => summaries.filter((s) => s.column === c).length;
   return (
     <>
-      <header className={cn(panelHeader, "min-w-0 items-start gap-4 py-4")}>
+      <div className={cn(panelHeader, "min-w-0 items-start gap-4 py-4")}>
         <FolderOpen className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
         <div className="min-w-0 flex-1">
           <h2 className="text-sm font-semibold">{project.name}</h2>
@@ -335,7 +335,7 @@ function ProjectBoard({ project, summaries, tab, onTab }: { project: Project; su
           )}
         </div>
         <Segmented value={tab} options={PROJECT_TABS} onChange={onTab} />
-      </header>
+      </div>
       <div className={panelBody}>
         {tab === "history"
           ? <div className="px-5 pb-8 pt-5"><PreviousLoops loops={loops} projects={[project]} lens="project" /></div>
@@ -397,13 +397,13 @@ function TeamsLens({ team, projects, summaries, onTeam }: { team: StudioTeam; pr
   const loops = mine.reduce((n, s) => n + s.loops.length, 0);
   return (
     <>
-      <header className={cn(panelHeader, "h-12 gap-4")}>
+      <div className={cn(panelHeader, "h-12 gap-4")}>
         <Segmented value={team.id} options={YOUR_TEAMS} onChange={onTeam} />
         <p className="ml-auto min-w-0 truncate text-xs text-muted-foreground">
           Led by {agentOf(leadOf(team)).name} · rework budget {team.reworkBudget} · {mine.length} {mine.length === 1 ? "task" : "tasks"}, {loops} {loops === 1 ? "loop" : "loops"} ·{" "}
           <Link to="/agents?view=teams" className="underline decoration-foreground/25 underline-offset-2 hover:text-foreground hover:decoration-foreground">How this team works</Link>
         </p>
-      </header>
+      </div>
       <div className={panelBody}>
         <div className="pb-8" style={{ minWidth }}>
           <TeamMembers team={team} summaries={mine} />
