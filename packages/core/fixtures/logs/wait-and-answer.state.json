@@ -7,7 +7,10 @@
   "openToolCalls": [],
   "waits": [],
   "costUsd": 0.03,
+  "turnCostUsd": 0.02,
   "reservedUsd": 0,
   "compactedUpTo": 0,
-  "cancelRequested": false
+  "cancelRequested": false,
+  "lastFact": {"type":"llm.completed","payload":{"turn":2,"callNo":1,"text":"Booked. Confirmation is in your calendar.","toolCalls":[],"usage":{"inputTokens":150,"outputTokens":40,"costUsd":0.02},"finishReason":"stop","model":"ngram-135m"}},
+  "callAttempt": 0
 }

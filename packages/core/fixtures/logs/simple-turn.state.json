@@ -12,7 +12,10 @@
   "openToolCalls": [],
   "waits": [],
   "costUsd": 0.01,
+  "turnCostUsd": 0.01,
   "reservedUsd": 0,
   "compactedUpTo": 0,
-  "cancelRequested": false
+  "cancelRequested": false,
+  "lastFact": {"type":"message.received","payload":{"text":"Thanks - run it again","attachments":[],"surface":"app","sender":"ty","platformMessageId":"pm-2"}},
+  "callAttempt": 0
 }
