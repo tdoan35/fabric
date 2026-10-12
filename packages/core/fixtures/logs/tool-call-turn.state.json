@@ -1,6 +1,9 @@
 {
   "status": "running",
-  "def": { "name": "sana", "engine": 2 },
+  "def": {
+    "name": "sana",
+    "engine": 2
+  },
   "turn": 1,
   "pendingInputs": [],
   "calls": 2,
@@ -9,8 +12,24 @@
   "costUsd": 0.03,
   "turnCostUsd": 0.03,
   "reservedUsd": 0,
+  "delegations": [],
   "compactedUpTo": 0,
   "cancelRequested": false,
-  "lastFact": {"type":"llm.completed","payload":{"turn":1,"callNo":2,"text":"Checks finished: one failure.","toolCalls":[],"usage":{"inputTokens":300,"outputTokens":60,"costUsd":0.02},"finishReason":"stop","model":"ngram-135m"}},
+  "lastFact": {
+    "type": "llm.completed",
+    "payload": {
+      "turn": 1,
+      "callNo": 2,
+      "text": "Checks finished: one failure.",
+      "toolCalls": [],
+      "usage": {
+        "inputTokens": 300,
+        "outputTokens": 60,
+        "costUsd": 0.02
+      },
+      "finishReason": "stop",
+      "model": "ngram-135m"
+    }
+  },
   "callAttempt": 0
 }

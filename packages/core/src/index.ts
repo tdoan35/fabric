@@ -11,6 +11,7 @@ export type { StreamKind, ParsedStreamId } from "./streams";
 export { fold, FoldError } from "./fold/fold";
 export type {
   AgentState,
+  AgentDelegation,
   FoldInit,
   LastFact,
   PendingInput,
@@ -18,5 +19,12 @@ export type {
   Wait,
   Definition,
 } from "./fold/fold";
-export { decideAgent } from "./decide/decide";
-export type { DecideDef, DecideEvent, DecideJob, Decision } from "./decide/decide";
+export { decideAgent, childRunId, resolveDelegation } from "./decide/decide";
+export type {
+  DecideDef,
+  DecideEvent,
+  DecideJob,
+  Decision,
+  DelegableAgent,
+  ChildOutcome,
+} from "./decide/decide";

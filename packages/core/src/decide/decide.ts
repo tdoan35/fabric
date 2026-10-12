@@ -31,17 +31,33 @@ export type DecideDef = {
   parent?: { runId?: string; sessionId?: string; callId?: string } | null;
   /** Effect class per allowed tool (section 6), recorded on the `tool.call`. */
   toolEffects?: Readonly<Record<string, "read" | "idempotent" | "rerunnable" | "once">>;
+  /** The agents this run may `delegate` to, keyed by agent id (section 5.2). */
+  agents?: Readonly<Record<string, DelegableAgent>>;
 };
 
 /** An event decide appends. The worker supplies the rest of the envelope (seq, ts, causation, ...). */
-export type DecideEvent = { id?: string; type: string; payload: Record<string, unknown> };
+export type DecideEvent = {
+  id?: string;
+  type: string;
+  payload: Record<string, unknown>;
+  /** The stream the event lands on; the deciding stream's own events omit it (delegation, R4). */
+  streamId?: string;
+};
 
 /** A queued job: `type`, the idempotency `key` (section 4), the stream, and `runAt` for timers. */
 export type DecideJob = {
-  type: "llm.call" | "tool.exec" | "deliver" | "run.timer" | "delegate.resolve";
+  type: "llm.call" | "tool.exec" | "decide" | "deliver" | "run.timer" | "delegate.resolve";
   key: string;
   streamId: string;
   runAt?: number;
+};
+
+/** An agent the run may delegate to (section 5.2): the snapshot decide copies into `run.created`. */
+export type DelegableAgent = {
+  definition: Record<string, unknown>;
+  engineVersion: string;
+  /** The callee's own tools; the delegation's grants are these ∩ the parent's (ARCHITECTURE 6.5). */
+  tools: readonly string[];
 };
 
 /** The decision: events to append, jobs to queue — each possibly empty. */
@@ -58,6 +74,94 @@ function waitIdFor(turn: number, callId: string): string {
 /** The id of the agent.message copy of a turn's reply; the deliver keys hang off it. */
 function messageId(streamId: string, turn: number): string {
   return `agent-message:${streamId}:${turn}`;
+}
+
+/** FNV-1a 32 bit as 8 hex chars: the deterministic seed of a delegated run's id. */
+function fnv1a32(input: string): string {
+  let hash = 0x811c9dc5;
+  for (let index = 0; index < input.length; index += 1) {
+    hash ^= input.charCodeAt(index);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return (hash >>> 0).toString(16).padStart(8, "0");
+}
+
+/**
+ * The delegated run's id, derived from the parent's stream and the tool call (RUNTIME section 5.2):
+ * a retried decide recomputes it, so the child cannot be created twice.
+ */
+export function childRunId(parentStreamId: string, callId: string): string {
+  return `d-${fnv1a32(`${parentStreamId}/${callId}`)}`;
+}
+
+/** The run.created parent reference: the parent stream's kind decides runId vs sessionId (section 3). */
+function parentRefOf(def: DecideDef, callId: string): { runId?: string; sessionId?: string; callId: string } {
+  const parsed = parseStreamId(def.streamId);
+  return parsed.kind === "session" ? { sessionId: parsed.id, callId } : { runId: parsed.id, callId };
+}
+
+/**
+ * Rule 2's `delegate` route (RUNTIME section 5.2). One decision: the parent's `tool.call` (effect
+ * `idempotent`, section 6), the child's `run.created` on its own stream, and the child's decide job.
+ * Await keeps the parent's call open; background completes it with the child's run id at once.
+ */
+function delegateCall(
+  state: AgentState,
+  def: DecideDef,
+  callId: string,
+  args: Record<string, unknown>,
+  events: DecideEvent[],
+  jobs: DecideJob[]
+): void {
+  const agentId = typeof args.agentId === "string" ? args.agentId : "";
+  const callee = def.agents?.[agentId];
+  if (!callee) {
+    events.push({ type: "tool.completed", payload: { callId, ok: false, error: `unknown agent: ${agentId}` } });
+    return;
+  }
+  const budgetUsd = args.budgetUsd;
+  const cap = def.budget?.costUsd;
+  if (
+    typeof cap === "number" &&
+    typeof budgetUsd === "number" &&
+    budgetUsd > cap - state.costUsd - state.reservedUsd
+  ) {
+    // Over the parent's remaining budget (section 7): answered, no child, nothing reserved.
+    events.push({ type: "tool.completed", payload: { callId, ok: false, error: "insufficient budget" } });
+    return;
+  }
+  const childStream = `run:${childRunId(def.streamId, callId)}`;
+  events.push({
+    type: "tool.call",
+    payload: {
+      tool: "delegate",
+      summary: "",
+      callId,
+      args,
+      effect: "idempotent", // section 6: the child's id comes from the call, so a retry cannot fork it
+    },
+  });
+  events.push({
+    streamId: childStream,
+    type: "run.created",
+    payload: {
+      definition: callee.definition,
+      engineVersion: callee.engineVersion,
+      brief: typeof args.brief === "string" ? args.brief : "",
+      // Delegation only narrows access (ARCHITECTURE section 6.5): the parent's grants ∩ the callee's tools.
+      grants: def.tools.filter((tool) => callee.tools.includes(tool)),
+      budgets: { costUsd: budgetUsd },
+      parent: parentRefOf(def, callId),
+    },
+  });
+  jobs.push({ type: "decide", key: `decide:${childStream}`, streamId: childStream });
+  if (args.mode === "background") {
+    // The parent's call completes at once; the run id ties the reservation to the child (section 5.2).
+    events.push({
+      type: "tool.completed",
+      payload: { callId, ok: true, result: { runId: childRunId(def.streamId, callId) } },
+    });
+  }
 }
 
 /** Rule 3/5/6's `llm.requested` plus its `llm.call` job, keyed per section 4. */
@@ -129,6 +233,18 @@ export function decideAgent(state: AgentState, def: DecideDef, now: number): Dec
   // -- Rule 1: cancellation, then budget, then the session's per-turn cap -----------------------
 
   if (state.cancelRequested) {
+    // Cancellation reaches the subtree (RUNTIME section 5.1 rule 1, section 7): every open child
+    // run is asked to cancel — the still-open calls' children, and the acked background ones.
+    const children = new Set<string>();
+    for (const [callId, call] of state.openToolCalls) {
+      if (call.tool === "delegate") children.add(`run:${childRunId(stream, callId)}`);
+    }
+    for (const delegation of state.delegations) {
+      if (delegation.childRunId !== null) children.add(`run:${delegation.childRunId}`);
+    }
+    for (const child of children) {
+      events.push({ streamId: child, type: "run.cancel_requested", payload: { by: "parent" } });
+    }
     for (const callId of state.openToolCalls.keys()) {
       events.push({ type: "tool.completed", payload: { callId, ok: false, error: "cancelled" } });
     }
@@ -178,6 +294,10 @@ export function decideAgent(state: AgentState, def: DecideDef, now: number): Dec
             streamId: def.streamId,
             runAt: deadline,
           });
+          continue;
+        }
+        if (name === "delegate") {
+          delegateCall(state, def, callId, args, events, jobs);
           continue;
         }
         // `delegate` routes through section 5.2 in R4; until then it is an ordinary call.
@@ -254,4 +374,62 @@ export function decideAgent(state: AgentState, def: DecideDef, now: number): Dec
 /** The run id behind a run stream (`run:<id>`), for keys that name the run itself. */
 export function runIdOf(streamId: string): string {
   return parseStreamId(streamId).id;
+}
+
+/** The ended child's resolve input: its id, the parent's call, and its folded state. */
+export type ChildOutcome = {
+  /** The delegated run's id (a `childRunId`, not the `run:` stream). */
+  childRunId: string;
+  /** The parent's `tool.call` id; the await completion is recorded against it. */
+  callId: string;
+  /** The child's folded state: the terminal status, the spend and the last fact. */
+  state: AgentState;
+};
+
+/** The human-readable why of a child that did not finish, from its terminal fact. */
+function failureOf(state: AgentState): string {
+  const payload = (state.lastFact?.payload ?? {}) as Record<string, unknown>;
+  if (state.status === "stopped") return typeof payload.text === "string" ? payload.text : "";
+  return typeof payload.reason === "string" ? payload.reason : "";
+}
+
+/**
+ * delegate.resolve's decision (RUNTIME section 5.2, section 7): the parent learns the child's
+ * outcome — `tool.completed` on await, `delegation.result` on background — and the fold releases
+ * the reservation and takes `costUsd` from either. The parent's next decide is the append's doing
+ * (section 2), so no jobs leave here; a background result on an idle session is a pending input.
+ */
+export function resolveDelegation(child: ChildOutcome, mode: "await" | "background"): Decision {
+  const { state } = child;
+  const payload = (state.lastFact?.payload ?? {}) as Record<string, unknown>;
+  const output = state.status === "finished" ? payload.result ?? null : undefined;
+  if (mode === "await") {
+    return {
+      events: [
+        output === undefined
+          ? { type: "tool.completed", payload: { callId: child.callId, ok: false, error: failureOf(state) } }
+          : {
+              // The await completion carries the child's terminal record: its result and its spend.
+              type: "tool.completed",
+              payload: { callId: child.callId, ok: true, result: { result: output, costUsd: state.costUsd } },
+            },
+      ],
+      jobs: [],
+    };
+  }
+  return {
+    events: [
+      {
+        type: "delegation.result",
+        payload: {
+          childRunId: child.childRunId,
+          outcome: output === undefined ? state.status : "done",
+          summary: output === undefined ? failureOf(state) : "",
+          ...(output === undefined ? {} : { output }),
+          costUsd: state.costUsd,
+        },
+      },
+    ],
+    jobs: [],
+  };
 }

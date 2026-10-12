@@ -1,21 +1,38 @@
 {
   "status": "stopped",
-  "def": { "name": "elliot" },
+  "def": {
+    "name": "elliot"
+  },
   "turn": 1,
   "pendingInputs": [],
   "calls": 1,
   "openToolCalls": [
     [
       "c1",
-      { "tool": "shell", "summary": "run the deploy", "callId": "c1", "args": { "cmd": "deploy" }, "effect": "rerunnable" }
+      {
+        "tool": "shell",
+        "summary": "run the deploy",
+        "callId": "c1",
+        "args": {
+          "cmd": "deploy"
+        },
+        "effect": "rerunnable"
+      }
     ]
   ],
   "waits": [],
   "costUsd": 0.05,
   "turnCostUsd": 0.05,
   "reservedUsd": 0,
+  "delegations": [],
   "compactedUpTo": 0,
   "cancelRequested": true,
-  "lastFact": {"type":"run.stopped","payload":{"by":"ty","text":"Cancelled by the operator."}},
+  "lastFact": {
+    "type": "run.stopped",
+    "payload": {
+      "by": "ty",
+      "text": "Cancelled by the operator."
+    }
+  },
   "callAttempt": 0
 }
