@@ -9,6 +9,11 @@ export class PostgresAdapter implements Adapter {
 
   constructor(url: string) {
     this.pool = new Pool({ connectionString: url });
+    // pg pools emit 'error' when an idle client's connection dies (pool end, server
+    // restart, admin termination). With no listener that is an uncaught exception; a
+    // lost idle connection is recoverable, so record it and let the next query
+    // pay for a fresh client.
+    this.pool.on("error", () => undefined);
   }
 
   async exec(sql: string): Promise<void> {

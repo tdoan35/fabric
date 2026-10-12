@@ -102,6 +102,10 @@ async function openStoreFor(
   // Fresh database per test, via the admin database of the same server. Trust auth is
   // part of the R0/R5 contract: no password ever enters the repo or the environment.
   const admin = new Pool({ connectionString: adminUrl(spec.url) });
+  // Same contract as the store pool: a pool with no 'error' listener turns any late
+  // idle-client death (pool end racing the server, drop of the test database) into an
+  // uncaught exception after the suite has already gone green.
+  admin.on("error", () => undefined);
   const database = `runtime_test_${randomUUID().replace(/-/g, "").slice(0, 8)}`;
   try {
     await admin.query(`create database "${database}"`);
