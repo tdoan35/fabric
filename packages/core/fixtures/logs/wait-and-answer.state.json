@@ -1,0 +1,13 @@
+{
+  "status": "idle",
+  "def": { "name": "dana" },
+  "turn": 2,
+  "pendingInputs": [],
+  "calls": 1,
+  "openToolCalls": [],
+  "waits": [],
+  "costUsd": 0.03,
+  "reservedUsd": 0,
+  "compactedUpTo": 0,
+  "cancelRequested": false
+}
