@@ -106,7 +106,7 @@ describeDrivers("runtime store (ANY-31 R5)", (h) => {
     const store = await h.openStore();
     const batch = { streamId: "run:a", events: [telemetry({ causation: "job:1" })] };
     await store.transaction((tx) => append(tx, "ws-one", [batch]));
-    const result = await store.transaction((tx) => append(tx, "ws-one, ", [batch]));
+    const result = await store.transaction((tx) => append(tx, "ws-one", [batch]));
     expect(result).toEqual([{ duplicate: false }]);
     const events = await store.readStream("run:a", { workspaceId: "ws-one" });
     expect(events).toHaveLength(2);

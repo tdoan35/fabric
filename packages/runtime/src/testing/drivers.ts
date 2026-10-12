@@ -6,6 +6,7 @@ import { randomUUID } from "node:crypto";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { describe, afterEach } from "vitest";
 import { Pool } from "pg";
 import { openStore, type RuntimeStore } from "../index";
 
