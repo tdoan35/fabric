@@ -9,4 +9,14 @@ export type { Upcaster, EventTypeRegistration } from "./events/registry";
 export { streamId, parseStreamId, STREAM_PREFIXES } from "./streams";
 export type { StreamKind, ParsedStreamId } from "./streams";
 export { fold, FoldError } from "./fold/fold";
-export type { AgentState, FoldInit, PendingInput, ToolCall, Wait, Definition } from "./fold/fold";
+export type {
+  AgentState,
+  FoldInit,
+  LastFact,
+  PendingInput,
+  ToolCall,
+  Wait,
+  Definition,
+} from "./fold/fold";
+export { decideAgent } from "./decide/decide";
+export type { DecideDef, DecideEvent, DecideJob, Decision } from "./decide/decide";
