@@ -8,3 +8,5 @@ export { registerEventType, latestVersion } from "./events/registry";
 export type { Upcaster, EventTypeRegistration } from "./events/registry";
 export { streamId, parseStreamId, STREAM_PREFIXES } from "./streams";
 export type { StreamKind, ParsedStreamId } from "./streams";
+export { fold, FoldError } from "./fold/fold";
+export type { AgentState, FoldInit, PendingInput, ToolCall, Wait, Definition } from "./fold/fold";

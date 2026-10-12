@@ -4,6 +4,7 @@
 // NOTE: deliberately no describe wrapper, as in fold.test.ts's sibling — Stryker's
 // per-test filter joins suite names with a separator Vitest 5 no longer uses
 // (stryker-js#6210); flat `it` names keep the filter working.
+/// <reference types="node" />
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
@@ -206,13 +207,14 @@ it("R2.1: run.created + run.started -> status running, the definition snapshot, 
     const facts = [
       evt(1, "message.received", { text: "go", attachments: [], surface: "app", sender: "ty", platformMessageId: "p" }),
       evt(2, "llm.requested", { turn: 1, callNo: 1, model: "m", params: {}, snapshotId: null }),
-      evt(4, "llm.completed", LLM_COMPLETED({ toolCalls: [{ id: "c1", name: "sprite_exec" }] })),
-      evt(5, "tool.call", { tool: "sprite_exec", summary: "s", callId: "c1", args: {}, effect: "read" }),
-      evt(7, "tool.completed", { callId: "c1", ok: true }),
+      evt(3, "llm.completed", LLM_COMPLETED({ toolCalls: [{ id: "c1", name: "sprite_exec" }] })),
+      evt(4, "tool.call", { tool: "sprite_exec", summary: "s", callId: "c1", args: {}, effect: "read" }),
+      evt(5, "tool.completed", { callId: "c1", ok: true }),
     ];
+    // Telemetry rides in the same log (the UI's copy of the same stream).
     const telemetry = [
-      evt(3, "context.snapshot", { snapshotId: "snap-1" }),
-      evt(6, "tool.result", { line: "$ ls", kind: "term" }),
+      evt(6, "context.snapshot", { snapshotId: "snap-1" }),
+      evt(7, "tool.result", { line: "$ ls", kind: "term" }),
       evt(8, "agent.message", { text: "halfway" }),
       evt(9, "budget.update", { costUsd: 0.01 }),
     ];
