@@ -1,5 +1,6 @@
 // DANA: the scheduled turn (SCH). One generateText call with read-only tools — a routine never
-// starts a team or proposes anything behind the user's back. The reply is posted into the
+// starts a team or proposes anything behind the user's back. That is the hackathon rule:
+// ARCHITECTURE §6.5 replaces it (scheduled runs act as their owner and may delegate). The reply is posted into the
 // routine's own thread as a header part (the routine and date) plus text, and the thread is
 // touched unread, exactly like postResultsMessage.
 import { generateText, stepCountIs, tool } from "ai";

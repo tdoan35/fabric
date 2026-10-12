@@ -120,7 +120,7 @@ delegate({
 
 Delegating to a team starts a **team run**. Its `decide` follows the team's operating model: stages in order, a stage's agents in parallel, then the gate. Each lane is a delegation to a member. At the review gate the reviewer's delegation returns a structured verdict: accept finalizes the run; request changes starts a rework pass, or blocks the run when the rework budget is spent.
 
-The orchestration is deterministic data, not an LLM improvising, so it is inspectable and replayable (PRODUCT §5). A team's lead is still an agent: it writes the plan and the synthesis as delegations within the stages. This is `RUNTIME.md` §5.3's team loop, with lanes as delegations instead of raw model calls.
+The orchestration is deterministic data, not an LLM improvising, so it is inspectable and replayable: the Work page replays earlier loops (PRODUCT §8.2), and recorded logs are replay-tested in CI (`RUNTIME.md` §10). A team's lead is still an agent: it writes the plan and the synthesis as delegations within the stages. This is `RUNTIME.md` §5.3's team loop, with lanes as delegations instead of raw model calls.
 
 ## 6. Long-running work
 

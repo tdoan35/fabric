@@ -67,7 +67,7 @@ export interface ChatRequestBody {
   /** The composer's picks for this turn; absent means Dana's registry model, thinking off. */
   model?: string;
   effort?: ThinkingLevel;
-  /** Incognito threads get no personal-memory recall (PRODUCT §2.9); additive, contract-checked. */
+  /** Incognito threads get no personal-memory recall (PRODUCT §10.7); additive, contract-checked. */
   incognito?: boolean;
 }
 
