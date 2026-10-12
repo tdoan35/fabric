@@ -19,6 +19,23 @@ jobs:
   verify:
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    # Postgres for the runtime's second driver (ANY-26). pgvector at Neon's major
+    # version: a plain image would pass here and fail on vector columns in production.
+    services:
+      postgres:
+        image: pgvector/pgvector:pg17
+        env:
+          # Throwaway container reachable only from this job: trust auth, so no
+          # password exists anywhere in the repo.
+          POSTGRES_HOST_AUTH_METHOD: trust
+          POSTGRES_DB: runtime_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
     steps:
       - uses: actions/checkout@v4
 
@@ -33,8 +50,15 @@ jobs:
       - name: Typecheck
         run: npm run typecheck
 
+      - name: Check Postgres has pgvector
+        run: psql "postgres://postgres@localhost:5432/runtime_test" -tAc "create extension if not exists vector; select extversion from pg_extension where extname = 'vector'"
+
       - name: Unit tests
         run: npm test
+        env:
+          # Runtime tests only (packages/runtime). Never DATABASE_URL, so nothing else
+          # picks it up. With CI set, a missing URL fails the runtime suite (ANY-31).
+          RUNTIME_TEST_DATABASE_URL: postgres://postgres@localhost:5432/runtime_test
 
       - name: Build
         run: npm run build
