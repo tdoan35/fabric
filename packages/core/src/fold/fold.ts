@@ -22,6 +22,16 @@ export type Wait = (typeof EVENT_PAYLOAD_SCHEMAS)["human.requested"]["_output"];
 /** An input a turn has not consumed yet: `message.received`, `delegation.result` or `human.responded`. */
 export type PendingInput = { readonly type: string; readonly payload: unknown };
 
+/** A delegation this run has made that has not resolved: the reservation it holds, and its child. */
+export type AgentDelegation = {
+  /** The parent's `tool.call` id. */
+  callId: string;
+  /** The child run's id once the background ack named it; null while the parent's call is open. */
+  childRunId: string | null;
+  /** The budget reserved from this run for the child (RUNTIME section 7). */
+  reservedUsd: number;
+};
+
 /** Exactly the AgentState of RUNTIME section 5.1. */
 export type AgentState = {
   status: "idle" | "running" | "waiting" | "blocked" | "finished" | "stopped";
@@ -35,6 +45,8 @@ export type AgentState = {
   /** Cost of the `llm.completed`s of the current turn; reset when a turn starts (section 5.1 rule 1). */
   turnCostUsd: number;
   reservedUsd: number;
+  /** The run's open delegations: the reservation each child holds (section 5.2, section 7). */
+  delegations: AgentDelegation[];
   compactedUpTo: number;
   cancelRequested: boolean;
   /** The last fact, typed and upcasted — the agent loop's rules read their trigger and payload from it. */
@@ -73,6 +85,11 @@ function seqOf(event: unknown): number {
   return seq;
 }
 
+/** The `result` of a completion, when it is a record — the delegation carrier's keys live there. */
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value !== null && typeof value === "object" ? (value as Record<string, unknown>) : null;
+}
+
 /** A copy of the log in seq order; gaps and duplicates raise, naming the seq. */
 function inSeqOrder(events: readonly unknown[]): unknown[] {
   const ordered = [...events].sort((a, b) => seqOf(a) - seqOf(b));
@@ -95,6 +112,7 @@ export function fold(events: readonly unknown[], init: FoldInit = {}): AgentStat
   let costUsd = init.costUsd ?? 0;
   let turnCostUsd = init.turnCostUsd ?? 0;
   let reservedUsd = init.reservedUsd ?? 0;
+  let delegations: AgentDelegation[] = (init.delegations ?? []).map((delegation) => ({ ...delegation }));
   let compactedUpTo = init.compactedUpTo ?? 0;
   let cancelRequested = init.cancelRequested ?? false;
   let lastFact: LastFact | null = init.lastFact ?? null;
@@ -126,11 +144,22 @@ export function fold(events: readonly unknown[], init: FoldInit = {}): AgentStat
         started = true;
         break;
       case "message.received":
-      case "delegation.result":
       case "human.responded":
         pendingInputs = [...pendingInputs, { type: event.type, payload: event.payload }];
         if (event.type === "human.responded") waits.delete(event.payload.waitId);
         break;
+      case "delegation.result": {
+        // A pending input for the parent's loop (section 5.1); the child's spend lands here and
+        // the reservation its background ack held is released (section 7).
+        pendingInputs = [...pendingInputs, { type: event.type, payload: event.payload }];
+        costUsd += event.payload.costUsd;
+        const index = delegations.findIndex((record) => record.childRunId === event.payload.childRunId);
+        if (index !== -1) {
+          reservedUsd -= delegations[index].reservedUsd;
+          delegations = delegations.filter((_, at) => at !== index);
+        }
+        break;
+      }
       case "llm.requested": {
         // A retry re-asks the call that just failed: same callNo, same turn, attempt kept
         // (section 5.1 rule 5). Anything else is a fresh call -- and call 1 starts a turn.
@@ -160,14 +189,44 @@ export function fold(events: readonly unknown[], init: FoldInit = {}): AgentStat
       case "context.compacted":
         compactedUpTo = Math.max(compactedUpTo, event.payload.upToSeq);
         break;
-      case "tool.call":
+      case "tool.call": {
         // Legacy rows may lack callId; the event id keys them so they stay visible.
         openToolCalls.set(event.payload.callId ?? event.id, event.payload);
+        if (event.payload.tool === "delegate") {
+          // A delegation reserves its budget from this run (section 7); the ledger carries it until
+          // the resolve, and lets cancellation reach the child (section 5.1 rule 1).
+          const requested = (event.payload.args ?? {}) as Record<string, unknown>;
+          const reserved = typeof requested.budgetUsd === "number" ? requested.budgetUsd : 0;
+          reservedUsd += reserved;
+          delegations = [
+            ...delegations,
+            { callId: event.payload.callId ?? event.id, childRunId: null, reservedUsd: reserved },
+          ];
+        }
         break;
+      }
       case "tool.completed":
-      case "tool.interrupted":
+      case "tool.interrupted": {
         openToolCalls.delete(event.payload.callId);
+        const index = delegations.findIndex((record) => record.callId === event.payload.callId);
+        if (index !== -1) {
+          const record = delegations[index];
+          const result = asRecord((event.payload as { result?: unknown }).result);
+          const named = typeof result?.runId === "string" ? result.runId : null;
+          if (named === null) {
+            // Await resolve, or a failed call: the reservation returns and the child's spend lands
+            // (the await completion carries it as result.costUsd, section 5.2).
+            reservedUsd -= record.reservedUsd;
+            delegations = delegations.filter((_, at) => at !== index);
+            const spent = result && typeof result.costUsd === "number" ? result.costUsd : null;
+            if (spent !== null) costUsd += spent;
+          } else {
+            // The background ack: the child is running on, the reservation stays until its result.
+            delegations[index] = { ...record, childRunId: named };
+          }
+        }
         break;
+      }
       case "human.requested":
         waits.set(event.payload.waitId, event.payload);
         break;
@@ -202,6 +261,7 @@ export function fold(events: readonly unknown[], init: FoldInit = {}): AgentStat
     costUsd,
     turnCostUsd,
     reservedUsd,
+    delegations,
     compactedUpTo,
     cancelRequested,
     lastFact,
