@@ -307,7 +307,7 @@ export function AssistantThread({ sessionId, initialMessages, agentIndex, onAgen
     attachments: new CompositeAttachmentAdapter([new SimpleImageAttachmentAdapter(), new SimpleTextAttachmentAdapter()]),
     dictation: WebSpeechDictationAdapter.isSupported() ? new WebSpeechDictationAdapter() : undefined,
   }), []);
-  // Incognito threads tell the server, which skips personal-memory recall (CONCEPT §2.9).
+  // Incognito threads tell the server, which skips personal-memory recall (PRODUCT §2.9).
   const chatModel = useMemo(() => (httpMode ? httpAssistant(sessionId, { incognito }) : mockAssistant), [sessionId, incognito]);
   const runtime = useLocalRuntime(chatModel, { adapters, initialMessages, unstable_humanToolNames: ["propose_team", "propose_specialist", "confirm_browser"] });
   return (

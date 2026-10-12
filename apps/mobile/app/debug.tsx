@@ -11,7 +11,7 @@ import { useStreamStatus } from "@/lib/app-stream";
 import { usePoll } from "@/lib/use-poll";
 
 /**
- * Hidden network + contracts check (MOBILE-PLAN §6 step 3). Reached from the ⌘ button in either
+ * Hidden network + contracts check. Reached from the ⌘ button in either
  * tab header. Shows the API base, the GET /api/runs count through the validated client, a raw
  * RunSchema.parse of the same response — proof that @fabric/contracts executes in RN — and the
  * M1 /api/stream connection state (live / reconnecting, with the last AppEvent).
@@ -95,7 +95,7 @@ export default function DebugScreen() {
         <Text style={styles.hint}>
           EXPO_PUBLIC_API_URL is read from apps/mobile/.env (copy .env.example). Metro inlines it when the
           dev server starts — restart `npm start` after changing it. Prefer the laptop hotspot or the
-          tailnet IP (MOBILE-PLAN §4); `expo start --tunnel` tunnels Metro only, never the API.
+          tailnet IP; `expo start --tunnel` tunnels Metro only, never the API.
         </Text>
       </ScrollView>
     </Screen>

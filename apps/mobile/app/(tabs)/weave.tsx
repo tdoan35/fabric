@@ -12,7 +12,7 @@ import { usePeople } from "@/components/weave/people";
 import { useWeaveLocal } from "@/components/weave/store";
 
 /**
- * Weave list (MOBILE-PLAN §2 M0): items grouped by kind, each row with the unread dot, the
+ * Weave list: items grouped by kind, each row with the unread dot, the
  * agent, the title, the blocking cost-of-delay line and the time. 3 s focus poll plus
  * pull-to-refresh; M1 refetches on `weave.changed` from /api/stream the moment it lands.
  * Tap opens the detail. Web counterpart: components/weave/inbox.tsx.

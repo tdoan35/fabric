@@ -35,7 +35,7 @@ export function Face({ id, size = "size-8", kind, className }: { id: string; siz
   );
 }
 
-/** "Jonah · Coder": the display rule everywhere (CONCEPT §13 A-1). */
+/** "Jonah · Coder": the display rule everywhere (PRODUCT §3). */
 export function NameRole({ id, className }: { id: string; className?: string }) {
   if (id === "you") return <span className={cn("font-medium", className)}>You</span>;
   const a = agentOf(id);

@@ -22,7 +22,7 @@ function Section({ title, right, children }: { title: string; right?: ReactNode;
 }
 
 /**
- * What crossed the delegation boundary into this loop, and what stayed with Dana (CONCEPT §2.6),
+ * What crossed the delegation boundary into this loop, and what stayed with Dana (PRODUCT §2.6),
  * with the loop's completion criteria checked off as evidence arrives.
  */
 export function BriefPanel({ run, criteria, teamName }: { run: Run; criteria: CriterionView[]; teamName: string }) {

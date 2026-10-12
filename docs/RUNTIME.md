@@ -237,7 +237,7 @@ Every append notifies its streams. API servers read the new events and push them
 
 ## 9. Schedules
 
-Each enabled schedule always has its next `schedule.fire` job queued with `run_at = slot`. There is no 30-second tick.
+Each enabled schedule always has its next `schedule.fire` job queued with `run_at = slot`. There is no 30-second tick. What a schedule is, and what its runs may do, is in `ARCHITECTURE.md` §6.5.
 
 - **Overlap.** Each schedule says what happens when its previous run is still going: `skip` (default), `queue_one`, or `allow`.
 - **Catch-up.** A fire more than 10 minutes late is marked missed. After a local server wakes from sleep, only the most recent missed slot fires, and only if it is inside the catch-up window; the others are marked missed. Nothing is dropped silently.

@@ -33,7 +33,7 @@ A skill's value depends on the model running it. A skill that helps a small mode
 |---|---|---|
 | Skill catalog | Curated skills, each with a verdict per measured model (§3) | Load catalog skills only where they help (`LEARNING.md` §8) |
 | Agent and team catalog | Curated specialists and teams, with benchmark results per model (§9) | Propose catalog hires first (`LEARNING.md` §9) |
-| Dana's defaults | Her starting skills and envelope values, per model (§6) | Set Dana up for the model you run |
+| Dana's defaults | Her starting skills, per model (§6) | Set Dana up for the model you run |
 | The learning skill | Default instructions for the learn job | Seed every agent's learning (`LEARNING.md` §6.4) |
 | Policy values | Thresholds and parameters (§7) | Promote, demote, fade, delete, detect outgrowing, run probation |
 | Model chart | The verdicts as a model × skill table | Recommend in Agent Studio's model picker ("on this model, 4 of Megan's skills help and 1 isn't needed"); a public page |
@@ -103,10 +103,10 @@ Every curated agent has a core benchmark: its job description, as test cases. It
 | Report | A specialist returns 3,000 words | A five-line summary with a link, not a wall of text |
 | Stay in her lane | "Refactor this 2,000-line module" | Delegates instead of doing it herself |
 
-- **Where her line is.** Dana handles a request directly when it needs only her assistant tools and general knowledge, takes a few steps, and is reversible or gated (CONCEPT §4.1). The worked examples in CONCEPT §4.1 are routing cases in this benchmark.
+- **Where her line is.** Dana handles a request directly when it needs only her assistant tools and general knowledge, takes a few steps, and is reversible or gated (PRODUCT §4.1). The worked examples in PRODUCT §4.1 are routing cases in this benchmark.
 - **Measures:** disposition accuracy, brief success, task success, unnecessary asks, missed gated asks (must be zero), and cost.
 - **Used for:**
-  - Dana's defaults per model: which starting skills she carries, and her envelope values. A stronger model can take on more herself.
+  - Dana's defaults per model: which starting skills she carries. A stronger model can take on more herself.
   - Measuring context rot: adding a domain's skills to Dana must not make her worse on this benchmark (§8).
 
 ## 7. Calibrating the runtime
@@ -115,7 +115,7 @@ The runtime decides with signals it already has; the lab works out what those si
 
 1. The lab runs agents with skills it already knows help, don't matter or hurt (§3), opposite simulated users. Each simulated user has a hidden goal and reacts the way people do: accepts, corrects, re-asks, taps "go deeper".
 2. It records the signals the runtime would see and fits the rules that best separate good skills from bad ones: the promotion count, the demotion rule, the outcome weights, the decay rate.
-3. It ships those values in the policy pack, with the envelope values per model, the budgets and the probation length.
+3. It ships those values in the policy pack, with the budgets and the probation length.
 
 This rests on a hypothesis: the signals a runtime sees for free predict uplift well enough to act on. The lab tests it. If they don't, the pack ships conservative values: slower promotion and quicker demotion. Simulated users only approximate people, so the runtime's local evidence still overrides the lab's starting assumptions (`LEARNING.md` §8.1).
 
@@ -133,7 +133,7 @@ The results set:
 
 - **Built and benchmarked** by Fabric across covered models.
 - **Catalog card:** role, tools and why each one, skills, memory policy, benchmark results per model, recommended models, and typical cost per task.
-- **The work sample, done once.** The lab's benchmark replaces a per-user trial. Installing a curated agent or team is still a proposal you approve (CONCEPT A-5).
+- **The work sample, done once.** The lab's benchmark replaces a per-user trial. Installing a curated agent or team is still a proposal you approve (PRODUCT §7).
 
 ## 10. Delivering the pack
 

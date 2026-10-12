@@ -1,7 +1,7 @@
-// Chat part rendering (MOBILE-PLAN §2 M1). Mirrors the web's components/chat/cards.tsx mapping,
+// Chat part rendering. Mirrors the web's components/chat/cards.tsx mapping,
 // read-only: text parts as text, `record_disposition` as the chip, `propose_team` /
 // `propose_specialist` / `handoff_to_team` as cards that say "Approve on desktop" — deciding from
-// the phone is M2 (the human-tool {decision} flow needs a thread runtime, MOBILE-PLAN §2 M1).
+// the phone is M2 (the human-tool {decision} flow needs a thread runtime).
 // Args arrive as `unknown` (ChatPartSchema only guarantees the envelope), so every field is read
 // defensively and the card renders whatever is present — the web trusts its casts, RN can't crash.
 import { Pressable, StyleSheet, Text, View } from "react-native";

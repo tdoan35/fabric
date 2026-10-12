@@ -13,7 +13,7 @@ export const unstable_settings = {
   initialRouteName: "(tabs)",
 };
 
-/** Dark-first (MOBILE-PLAN §3): the web's .dark tokens driving React Navigation's chrome. */
+/** Dark-first: the web's .dark tokens driving React Navigation's chrome. */
 const navTheme: Theme = {
   ...DarkTheme,
   colors: {

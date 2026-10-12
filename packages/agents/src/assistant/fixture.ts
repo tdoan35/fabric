@@ -232,7 +232,7 @@ export async function* fixtureTurn(ctx: FixtureDeps): AsyncGenerator<ChatStreamL
 
 /**
  * The deterministic brief for fixture-mode handoffs: same shape as compileBrief's output, no model
- * call, so scripted Dana works with the lane down. Never contains transcript text (CONCEPT §2.6).
+ * call, so scripted Dana works with the lane down. Never contains transcript text (PRODUCT §2.6).
  */
 export function fixtureBrief(input: BriefInput): Brief {
   const demo = /n-gram|engram/i.test(input.request);

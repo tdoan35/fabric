@@ -1,4 +1,4 @@
-// Schedule contracts (SCHEDULE-PLAN §"Data model"): a routine, its fires, and the occurrence read
+// Schedule contracts: a routine, its fires, and the occurrence read
 // model the calendar draws. Integrator change, additive under contracts-v1; helpers stay pure —
 // cron expansion (croner) lives with the server and the web mock, not here.
 import { z } from "zod";

@@ -21,7 +21,7 @@ const FILTERS = [{ value: "highlights", label: "Highlights" }, { value: "everyth
 /**
  * Weave: where your organization reports to you.
  * Inbox (what needs me?) · Pulse or the open item (what changed?) · presence and your day (who's working, what's my day?).
- * Calm by default (CONCEPT §8.1): no live logs, no red badges, and quiet events stay under Everything.
+ * Calm by default (PRODUCT §8.1): no live logs, no red badges, and quiet events stay under Everything.
  */
 export function WeaveScreen() {
   const state = useWeave();

@@ -1,4 +1,4 @@
-// GET /api/stream (MOBILE-PLAN §2 M1): SSE of AppEvents, invalidation only (§4.4). RN has no
+// GET /api/stream: SSE of AppEvents, invalidation only (§4.4). RN has no
 // EventSource, so the frames are read from a streaming fetch body — `expo/fetch` in the app
 // (wired in lib/app-stream.ts), because RN's global fetch doesn't expose response bodies as
 // streams. This module is PURE — no react/react-native/expo imports — so scripts/chat-smoke.mts

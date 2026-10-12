@@ -162,7 +162,7 @@ export const ChatRequestSchema = z.object({
   model: z.string().optional(),
   /** The composer's reasoning effort. Absent: off (Dana's latency default). */
   effort: z.enum(["off", "low", "medium", "high", "xhigh"]).optional(),
-  /** Incognito threads skip personal-memory recall entirely (CONCEPT §2.9). Additive. */
+  /** Incognito threads skip personal-memory recall entirely (PRODUCT §2.9). Additive. */
   incognito: z.boolean().optional(),
 });
 export type ChatRequest = z.infer<typeof ChatRequestSchema>;

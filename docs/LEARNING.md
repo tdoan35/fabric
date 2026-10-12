@@ -4,7 +4,7 @@
 |---|---|
 | Status | Draft, 2026-10-10. Not built |
 | Scope | How agents learn and forget on a user's server: skills, memory, Dana's routing, and hiring. What Fabric measures on its own budget is in `LAB.md` |
-| Builds on | `CONCEPT.md` §2 invariants and §4.1 (Dana's envelope); `ARCHITECTURE.md` §3–§9; `RUNTIME.md` (events, jobs) |
+| Builds on | `PRODUCT.md` §2 invariants and §4.1 (what Dana handles directly); `ARCHITECTURE.md` §3–§9; `RUNTIME.md` (events, jobs) |
 | Decision | Agents learn skills under an enforced context budget, with a lifecycle that strengthens what is used and works and forgets what isn't. Skills need no approval; changes to the organization do. The runtime never spends a user's tokens on evaluation unless they ask |
 
 ## 0. Summary
@@ -44,13 +44,13 @@ Hermes Agent and Prime Agent both learn by writing files that are loaded back in
 1. **The lab spends tokens; the runtime reads evidence.** Evaluation happens in Fabric's lab. The runtime decides with signals the log already holds. The one background model spend in the runtime is learning itself (§6.5), bounded by a budget and attributed like any other cost.
 2. **Every agent has a context budget,** enforced by the runtime. Learning changes what fills the budget, never its size.
 3. **Learning is scoped.** A lesson starts as narrow as the evidence behind it and widens only on further evidence.
-4. **Skills need no approval; the organization does.** Hiring, splitting, merging or retiring agents and teams, adding tools, and promoting into personal memory always ask you (CONCEPT §2.2, §2.9). Everything else is visible in Agent Studio and the weekly digest, and reversible.
+4. **Skills need no approval; the organization does.** Hiring, splitting, merging or retiring agents and teams, adding tools, and promoting into personal memory always ask you (PRODUCT §2.2, §2.9). Everything else is visible in Agent Studio and the weekly digest, and reversible.
 5. **The learner can't change how it learns.** The learning skill is yours to edit; the learn job reads it and never writes it.
 6. **Forgetting is deterministic.** Strength, fading and deletion are computed from facts by a job with no model in it, so the same history always gives the same result.
 
 ## 3. The context budget
 
-An agent's base context is its `SOUL.md`, `IDENTITY.md`, `USER.md`, tool definitions, skill index and recalled memory. It is measured at every context assembly and shown in Agent Studio (CONCEPT A-10).
+An agent's base context is its `SOUL.md`, `IDENTITY.md`, `USER.md`, tool definitions, skill index and recalled memory. It is measured at every context assembly and shown in Agent Studio (PRODUCT §6).
 
 The **learned share** (the skill index plus the recalled-memory digest) has a cap per agent:
 
@@ -75,7 +75,7 @@ Where these come from (measured 2026-10-10 against Hermes Agent at commit `66605
 - **One domain fits with room.** Hermes's bundled categories hold 1–14 skills (median 4); its largest optional category, 36. A specialist's index holds a whole domain; growing past it is the split signal (§9), not a reason for more budget.
 - **Dana sits at about a third of a fresh Hermes install** (≈1.5k index + ≈1.3k memory), and unlike Hermes's index, hers never grows.
 
-**Dana's whole base** is that learned share plus a fixed part: her core instructions (including the routing policy, CONCEPT §4.1), her identity files and her tool definitions. The fixed part is sized by what her job needs, not squeezed to a number: a starting ceiling of 8k tokens, to be replaced by a measurement in the runtime spike. It changes only through deliberate, versioned edits, and her benchmark checks each one (`LAB.md` §6.1). The constraint that matters (CONCEPT §10) is that her context never grows from use, and that is the learned share's cap. The fixed part is the same on every call, so the provider's prompt cache keeps it cheap; what a longer prompt can still cost is quality, which is what the benchmark measures.
+**Dana's whole base** is that learned share plus a fixed part: her core instructions (including the routing policy, PRODUCT §4.1), her identity files and her tool definitions. The fixed part is sized by what her job needs, not squeezed to a number: a starting ceiling of 8k tokens, to be replaced by a measurement in the runtime spike. It changes only through deliberate, versioned edits, and her benchmark checks each one (`LAB.md` §6.1). The constraint that matters (PRODUCT §9) is that her context never grows from use, and that is the learned share's cap. The fixed part is the same on every call, so the provider's prompt cache keeps it cheap; what a longer prompt can still cost is quality, which is what the benchmark measures.
 
 - **A write never fails for lack of room.** New skills enter as candidates, outside the index (§5.4). Hermes's memory writes fail silently at its cap; that can't happen here.
 - **The index holds active and established skills, strongest first.** When they don't fit, `skills.maintain` moves the weakest to dormant: out of the index, still found by search.
@@ -89,11 +89,11 @@ Where these come from (measured 2026-10-10 against Hermes Agent at commit `66605
 
 | Level | Who learns | What | Stored as | Prompt tokens |
 |---|---|---|---|---|
-| Organization | Dana, through `org.review` | Which agents and teams exist: hire, split, merge, retire | Proposals (CONCEPT §7) | None |
+| Organization | Dana, through `org.review` | Which agents and teams exist: hire, split, merge, retire | Proposals (PRODUCT §7) | None |
 | Agent | Every agent, through the `learn` job | Skills and memory for its domain | Skills (§5); memory items (§10) | Within §3's budget |
 | Routing | Dana | Which disposition and target suit which kind of request, for you | Routing data | None |
 
-**Routing data** is folded from `disposition.recorded` and outcomes: dispositions and how they turned out, taps on "go deeper", mid-task escalations, and your corrections ("no, give that to Megan"). It reranks `registry.search` results and moves the line of Dana's envelope for you (CONCEPT §4.1). It is data, not text in Dana's prompt; at most it surfaces as a one-line hint when relevant ("you usually want depth on AI-model topics").
+**Routing data** is folded from `disposition.recorded` and outcomes: dispositions and how they turned out, taps on "go deeper", mid-task escalations, and your corrections ("no, give that to Megan"). It reranks `registry.search` results and moves the line between what Dana handles herself and what she delegates (PRODUCT §4.1). It is data, not text in Dana's prompt; at most it surfaces as a one-line hint when relevant ("you usually want depth on AI-model topics").
 
 ## 5. Skills
 
@@ -232,7 +232,7 @@ The learn job is the only background model spend in the runtime.
 
 ### 7.1 Her layer
 
-Dana does one layer of work herself and delegates or hires for the rest: an executive assistant, not a super-agent. She handles requests inside her envelope (CONCEPT §4.1): her assistant tools, general knowledge, a few steps, reversible or gated.
+Dana does one layer of work herself and delegates or hires for the rest: an executive assistant, not a super-agent. She handles a request herself when it needs only her assistant tools and general knowledge, takes a few steps, and is reversible or gated (PRODUCT §4.1).
 
 - **Starting skills:** scheduling, email triage and drafting, quick research briefings, summaries, reminders, notes.
 - **Routing is not a skill.** It applies to every request, so it lives in her core instructions.
@@ -248,7 +248,7 @@ Signals, free from the log, with thresholds from the lab (`LAB.md` §8):
 |---|---|
 | A skill needs a tool outside Dana's toolset | Hard: enough on its own |
 | One domain's skills take more than a third of Dana's learned share | Soft |
-| Dana keeps escalating mid-task in one domain (CONCEPT §4.1) | Soft |
+| Dana keeps escalating mid-task in one domain (PRODUCT §4.1) | Soft |
 | Negatives rising on one domain's skills | Soft |
 | Enough volume in the domain for a specialist to pay off | Required with any soft signal |
 
@@ -282,12 +282,12 @@ Weekly, and at once on a hard signal. The signals are checked first, with no mod
 
 | Proposal | Triggered by |
 |---|---|
-| Hire a specialist or team | Outgrow signals (§7.2). Work that needs tools no agent has is also proposed in the moment, as the *propose* disposition (CONCEPT §4) |
+| Hire a specialist or team | Outgrow signals (§7.2). Work that needs tools no agent has is also proposed in the moment, as the *propose* disposition (PRODUCT §4) |
 | Split an agent | Persistent budget pressure (§3) with two or more domains among its established skills |
 | Merge agents | Two agents whose registry cards and routed work overlap |
 | Retire an agent | Nothing routed to it for 60 days, or a failed probation |
 
-Each is an organization change, so each asks you (CONCEPT §2.2).
+Each is an organization change, so each asks you (PRODUCT §2.2).
 
 ### 9.2 The hiring card
 
@@ -314,7 +314,7 @@ How often you accept her proposals, how many hires pass probation, and how many 
 
 ### 10.1 Scopes
 
-Unchanged from `ARCHITECTURE.md` §8.3. The learn job writes agent and project memory; Dana writes personal memory; promotion into personal memory stays an explicit, visible step (CONCEPT §2.9).
+Unchanged from `ARCHITECTURE.md` §8.3. The learn job writes agent and project memory; Dana writes personal memory; promotion into personal memory stays an explicit, visible step (PRODUCT §2.9).
 
 ### 10.2 Recall
 
@@ -363,4 +363,4 @@ Code: the strength and lifecycle fold in `packages/core`; the skills store and `
 1. **Sharing back.** Can you submit a personal skill to the catalog, and how is it scrubbed? Later (`LAB.md` §14).
 2. **Teams.** Do team leads learn changes to their operating model (stage order, gates)? Not in this draft: an operating model changes only through proposals.
 
-Settled 2026-10-10: learning is on by default; one shared learning skill; Dana's starting skills (§7.1); thumbs and edits as explicit feedback (§5.2); Dana's base lifted from CONCEPT A-10's ~2k to a fixed part sized by her job plus the capped learned share (§3). For scale, one Hermes report measured 13.9k tokens of fixed overhead per call ([issue #4379](https://github.com/NousResearch/hermes-agent/issues/4379)).
+Settled 2026-10-10: learning is on by default; one shared learning skill; Dana's starting skills (§7.1); thumbs and edits as explicit feedback (§5.2); Dana's base lifted from the hackathon brief's ~2k to a fixed part sized by her job plus the capped learned share (§3). For scale, one Hermes report measured 13.9k tokens of fixed overhead per call ([issue #4379](https://github.com/NousResearch/hermes-agent/issues/4379)).

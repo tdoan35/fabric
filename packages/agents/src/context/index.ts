@@ -1,6 +1,6 @@
 // CTX owns this folder (TEAM in the 7-agent setup): the brief compiler and context assembly.
 //
-// Two rules shape everything here (CONCEPT §2.6, §6):
+// Two rules shape everything here (PRODUCT §2.6, §6):
 //   1. A brief is compiled, never copied: BriefInput has no transcript field, and compileBrief never sees one.
 //   2. A snapshot records exactly what crossed the boundary: every section carries the real `content`.
 import { getEncoding } from "js-tiktoken";
@@ -30,7 +30,7 @@ function fmtSpan(s: number): string {
 
 // ---- The brief ----
 
-/** Deliberately has no transcript field: the brief is compiled, never copied from the chat (CONCEPT §2.6). */
+/** Deliberately has no transcript field: the brief is compiled, never copied from the chat (PRODUCT §2.6). */
 export interface BriefInput {
   /** The user's request, as Dana restated it in the handoff call. */
   request: string;

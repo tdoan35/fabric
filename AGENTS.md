@@ -1,12 +1,19 @@
-# Fabric web
+# Fabric
 
-Vite + React Router (data router) single-page app. No server rendering — the backend is a separate service (see `docs/ARCHITECTURE.md`), reached only through `src/lib/api`. Keep it that way so the same build can ship to the web and inside Electron.
+TypeScript monorepo on npm workspaces. What we're building is in `docs/`; start with `docs/ARCHITECTURE.md`. The code is still the hackathon build, and `docs/ARCHITECTURE.md` §12 maps what each part becomes.
 
-- Routes: `src/router.tsx`; route components live in `src/routes/`.
-- Navigation: `Link` / `useLocation` / `useSearchParams` / `useParams` from `react-router`.
-- Styles: Tailwind v4 via `@tailwindcss/vite`; theme tokens in `src/styles/globals.css`.
-- UI primitives: shadcn (`components.json`), in `src/components/ui/`.
-- Desktop: `electron/main.mjs` wraps the same build. `npm run electron:dev` (Vite + HMR inside Electron), `npm run electron:start` (built `dist/` over the `app://` protocol), `npm run electron:dist` (installer into `release/` via electron-builder). Renderer code must not assume Electron; desktop-only APIs go through `electron/preload.cjs`, read via `desktop` from `src/lib/desktop.ts` (undefined on the web). The window is frameless (macOS keeps traffic lights); `src/components/shell/title-bar.tsx` draws the bar, and layout offsets by `--titlebar-height` (0 on the web).
+| Path | What | Instructions |
+|---|---|---|
+| `apps/web` | Vite + React Router SPA, also wrapped by Electron | `apps/web/AGENTS.md` |
+| `apps/server` | HTTP API (Hono) | — |
+| `apps/mobile` | Expo companion app, outside the workspaces with its own lockfile | `apps/mobile/AGENTS.md` |
+| `packages/*` | `agents`, `contracts`, `db`, `fixtures`, `integrations` | — |
+
+A directory's `AGENTS.md` applies to everything under it, on top of this file. Read it before changing files there.
+
+From the repo root:
+- `npm run dev` starts the server and the web dev server together.
+- The PR gate (CI `verify`): `npm ci`, `npm run typecheck`, `npm test`, `npm run build`, `npm run build-storybook -w web`, `npm run test-storybook -w web`. `npm run lint` runs as its own CI job. Storybook details: `docs/STORYBOOK.md`.
 
 ---
 

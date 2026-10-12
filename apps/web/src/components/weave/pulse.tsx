@@ -164,7 +164,7 @@ function EventLine({ entry }: { entry: EventEntry }) {
   );
 }
 
-/** What a specialist learned, shown so agent memory never grows silently (CONCEPT §2.9). */
+/** What a specialist learned, shown so agent memory never grows silently (PRODUCT §2.9). */
 function MemoryCard({ entry }: { entry: MemoryEntry }) {
   const name = agentOf(entry.agentId).name;
   return (

@@ -28,7 +28,7 @@ export interface RosterEntry {
   avatar?: string;
 }
 
-/** A row on a proposal card: the default, and its one-line justification (CONCEPT §7). */
+/** A row on a proposal card: the default, and its one-line justification (PRODUCT §7). */
 export interface ProposalRow {
   label: string;
   value: string;
@@ -119,7 +119,7 @@ export interface Task {
   sessionId?: string;
 }
 
-/** What crossed the delegation boundary into a loop, and what stayed with Dana (CONCEPT §6). */
+/** What crossed the delegation boundary into a loop, and what stayed with Dana (PRODUCT §6). */
 export interface Brief {
   tokens: number;
   objective: string;

@@ -93,7 +93,7 @@ export async function runHandoff(deps: HandoffDeps, input: HandoffInput): Promis
   if (dana) {
     // Dana's own context, beside each specialist's (INSPECTOR): her files, skills, connectors and —
     // when this turn recalled any — Personal memory. The specialists' snapshots never change: they
-    // keep listing personal memory under notLoaded, and their sections never contain it (CONCEPT §2.9).
+    // keep listing personal memory under notLoaded, and their sections never contain it (PRODUCT §2.9).
     await deps.writer.saveSnapshot({
       runId: run.id,
       agentId: dana.agent.id,

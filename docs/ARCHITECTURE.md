@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | Status | Draft, 2026-10-08. Not built. Replaces the hackathon architecture (v0.2, in git history) |
-| Spec | `CONCEPT.md`. Its §2 invariants are binding; this document answers its §9 and §11 architecture questions |
+| Spec | `PRODUCT.md`. Its §2 invariants are binding |
 | Companion | `RUNTIME.md`: the event log, jobs and recovery that everything here runs on. `LEARNING.md`: how agents learn and forget. `LAB.md`: what Fabric measures on its own budget |
 | Decision | Fabric is its own product, in TypeScript. One server codebase runs inside the desktop app, on a host you run, or in Fabric's cloud. Hermes Agent is prior art, not a dependency |
 
@@ -41,9 +41,11 @@ The server is the same code in all three places. What changes is where it runs, 
 | 2026-10-08 | Chat channels are in v1 |
 | 2026-10-08 | Long-running background work (hours to days, with approvals) is in v1 |
 | 2026-10-08 | No workflow engine. Temporal was reviewed and set aside: the local server runs inside the desktop app, where Temporal can't |
-| 2026-10-10 | Dana handles requests inside her envelope directly and delegates the rest: route by depth, not topic (CONCEPT §4.1) |
+| 2026-10-10 | Dana handles small requests directly and delegates the rest: route by depth, not topic (PRODUCT §4.1) |
 | 2026-10-10 | Agents learn skills under a per-agent context budget, with a lifecycle that fades and deletes unused skills. Skills need no approval; organization changes do (`LEARNING.md`) |
 | 2026-10-10 | Evaluation happens in Fabric's lab on Fabric's budget; a user's tokens are never spent on evaluation unless they ask (`LAB.md`) |
+| 2026-10-11 | No runtime limit on direct handling. Dana's judgment decides when to delegate; a turn is bounded only by `MAX_STEPS` (`RUNTIME.md` §5.1) |
+| 2026-10-11 | Scheduled runs act as their owner inside a per-fire budget and may delegate. Creating agents or teams and gated actions still ask (§6.5) |
 
 ## 2. Where it runs
 
@@ -53,7 +55,7 @@ The server is the same code in all three places. What changes is where it runs, 
 | Process | Electron utility process; API and workers in one process | API and workers in one process | Stateless API servers plus an autoscaled worker pool |
 | Database | PGlite (Postgres compiled to WASM, in-process) with `pglite-pgvector`, in the app's data directory | Postgres + pgvector | Postgres, tenant-scoped with row-level security |
 | Object storage | Files in the app's data directory | Local disk or any S3-compatible store | S3-compatible |
-| Sandboxes | Local Docker by default. Your own machine only with explicit approval (CONCEPT A-7) | Docker on the host | Managed microVMs |
+| Sandboxes | Local Docker by default. Your own machine only with explicit approval (PRODUCT §8.3) | Docker on the host | Managed microVMs |
 | Sign-in | None: the owner is implicit; paired devices get tokens | Owner passkey; paired devices get tokens | Accounts: OAuth (Google, Apple, GitHub), email, passkeys |
 | Always on | While the machine is awake (§6.4) | Yes | Yes |
 | Channels | Outbound-only transports: no public URL needed (§7.3) | Either | Webhooks |
@@ -70,19 +72,19 @@ The server is the same code in all three places. What changes is where it runs, 
 | Primitive | What it is |
 |---|---|
 | **Workspace** | The tenant. One person for now. Every table carries `workspace_id`. A local or remote server holds one workspace |
-| **Agent** | A versioned definition: `SOUL.md`, `IDENTITY.md`, its own `USER.md`, skills, tools and MCP servers with a policy, a model, a memory policy, default budgets. A run snapshots the version it started with (CONCEPT §2.4) |
-| **Dana** | An agent with routing tools: `registry.search`, `propose_agent`, `propose_team`, `delegate`, `ask_user`. Every routed turn records a `disposition` fact (CONCEPT §4) |
-| **Team** | A versioned operating model stored as data: lead, members and roles, stages `{label, agents, gate}`, completion criteria, rework budget, default budgets (CONCEPT §2.5, §13) |
+| **Agent** | A versioned definition: `SOUL.md`, `IDENTITY.md`, its own `USER.md`, skills, tools and MCP servers with a policy, a model, a memory policy, default budgets. A run snapshots the version it started with (PRODUCT §2.4) |
+| **Dana** | An agent with routing tools: `registry.search`, `propose_agent`, `propose_team`, `delegate`, `ask_user`. Every routed turn records a `disposition` fact (PRODUCT §4) |
+| **Team** | A versioned operating model stored as data: lead, members and roles, stages `{label, agents, gate}`, completion criteria, rework budget, default budgets (PRODUCT §2.5, §5) |
 | **Project** | Groups sessions and tasks |
-| **Session** | A conversation between you and one agent, on any surface. A log stream of its own. Direct chat with a specialist is a session too, recorded as `direct · user-chosen` (A-2) |
-| **Task** | One objective in a project, owned by one agent or team (A-12) |
+| **Session** | A conversation between you and one agent, on any surface. A log stream of its own. Direct chat with a specialist is a session too, recorded as `direct · user-chosen` (PRODUCT §4) |
+| **Task** | One objective in a project, owned by one agent or team (PRODUCT §3) |
 | **Run** | One attempt at a task, or one delegation. A log stream of its own. Runs form a tree through delegation. Shown in the UI as a loop |
 | **Artifact** | An output stored by reference (object storage), never pasted across a boundary |
 | **Memory** | Four scopes: personal, agent, team/project, run (§8.3) |
 | **Registry entry** | A compact card for an agent, team or template, with tags and an embedding (§8.4) |
-| **Proposal** | A reviewable card for a new agent, team or catalog install. Nothing is created until you approve it (CONCEPT §7) |
+| **Proposal** | A reviewable card for a new agent, team or catalog install. Nothing is created until you approve it (PRODUCT §7) |
 | **Channel account / binding** | A connected bot or inbox, and the mapping from a chat on it to a session (§7) |
-| **Schedule** | A recurring trigger owned by an agent: starts a run or posts into a session |
+| **Schedule** | A recurring trigger owned by an agent or team: starts a run or posts into a session (§6.5) |
 
 ## 4. Delegation
 
@@ -103,12 +105,12 @@ delegate({
 |---|---|
 | Identity | The callee runs as itself: its own soul, model, skills and memory |
 | Context | The callee receives the brief and its own `USER.md`, never the caller's transcript. The run records what was loaded and what was not (§8.2) |
-| Permissions | Effective access = callee definition ∩ caller grants ∩ workspace policy. Merge, deploy, spend, credential and outbound-send actions always ask you (A-3), whoever asks for them |
-| Budget | Reserved from the parent's remaining budget; unused budget returns. Exhaustion blocks the run and escalates: member → lead → Dana → you (CONCEPT §2.8) |
+| Permissions | Effective access = callee definition ∩ caller grants ∩ workspace policy. Merge, deploy, spend, credential and outbound-send actions always ask you (PRODUCT §8.3), whoever asks for them |
+| Budget | Reserved from the parent's remaining budget; unused budget returns. Exhaustion blocks the run and escalates: member → lead → Dana → you (PRODUCT §2.8) |
 | Return | Outcome, evidence, open questions, artifact links, cost. Size-capped. With `output`, validated against the schema with one correction turn, and the raw text kept if it still fails |
 | Await | The parent's `delegate` call stays open until the child finishes |
 | Background | The call returns `{runId}` at once. The result is posted to the caller's stream later, and the caller's next turn sees it |
-| Memory | The callee writes only its own agent memory and the run's scratch. Promotion to personal memory is an explicit, visible step (CONCEPT §2.9) |
+| Memory | The callee writes only its own agent memory and the run's scratch. Promotion to personal memory is an explicit, visible step (PRODUCT §2.9) |
 | Limits | Depth limit, cycle check (Megan → Dana → Megan is refused), and a per-workspace cap on concurrent runs |
 | Cancellation | Cancelling a run cancels its whole subtree |
 
@@ -118,7 +120,7 @@ delegate({
 
 Delegating to a team starts a **team run**. Its `decide` follows the team's operating model: stages in order, a stage's agents in parallel, then the gate. Each lane is a delegation to a member. At the review gate the reviewer's delegation returns a structured verdict: accept finalizes the run; request changes starts a rework pass, or blocks the run when the rework budget is spent.
 
-The orchestration is deterministic data, not an LLM improvising, so it is inspectable and replayable (CONCEPT §9.2.6). A team's lead is still an agent: it writes the plan and the synthesis as delegations within the stages. This is `RUNTIME.md` §5.3's team loop, with lanes as delegations instead of raw model calls.
+The orchestration is deterministic data, not an LLM improvising, so it is inspectable and replayable (PRODUCT §5). A team's lead is still an agent: it writes the plan and the synthesis as delegations within the stages. This is `RUNTIME.md` §5.3's team loop, with lanes as delegations instead of raw model calls.
 
 ## 6. Long-running work
 
@@ -130,7 +132,7 @@ Runs can last hours or days. None of their state lives in a process.
 
 ### 6.2 Progress
 
-Runs report progress as they go: leads post `run.progress` updates and milestone facts. The Weave page shows asks in its inbox and progress in its Pulse feed (CONCEPT A-11). You choose where results and asks are delivered: app, push, or a channel.
+Runs report progress as they go: leads post `run.progress` updates and milestone facts. The Weave page shows asks in its inbox and progress in its Pulse feed (PRODUCT §8.2). You choose where results and asks are delivered: app, push, or a channel.
 
 ### 6.3 Stalls
 
@@ -140,6 +142,22 @@ Each running run has a watchdog timer. If no fact arrives within the run's stall
 
 On a local server, work pauses while the machine sleeps and resumes on wake. Timers that came due during sleep fire on wake under the schedule's catch-up rules. The app says so plainly, and suggests a remote host or the cloud for work that has to keep going. A run lives on the connection where it started; moving a workspace between connections is an open question (§14).
 
+### 6.5 Schedules
+
+A schedule is a recurring trigger owned by an agent or a team. Mechanics (one `schedule.fire` job per slot, overlap and catch-up rules) are in `RUNTIME.md` §9.
+
+| Field | What it is |
+|---|---|
+| Owner | The agent or team that does the work. The calendar shows its face; a team shows its lead |
+| Target | Start a run (a new loop on a task in a project, so a team's run lands on the Work board), or post the prompt into the schedule's own session |
+| Recurrence | Picked as once, daily, weekdays, weekly on chosen days, or monthly, at a time. Stored as cron plus an IANA timezone |
+| Budget | Per fire. Each run a schedule starts reserves it like any run |
+
+- **Fires.** Each slot is recorded once, as fired, skipped, missed or failed, with a link to the run or message it produced. "Run now" records a fire at the current time; "Skip this one" records a slot as skipped ahead of time.
+- **Occurrences.** The calendar's read model expands each enabled schedule over the window it shows and overlays the recorded fires. A fire wins over its slot, and a fire off the pattern (from "Run now") still shows. States: upcoming, running, accepted, blocked, stopped, posted, skipped, missed, failed.
+- **What a scheduled run may do.** It runs as its owner, with the owner's access, inside its budget. It may delegate, since delegation only narrows access and draws from the same budget (§4). Creating agents or teams and gated actions still ask you. This replaces the hackathon rule that scheduled turns had read-only tools.
+- **External calendars** (Google Calendar) are out of scope for v1. The occurrences read model is where they would merge in.
+
 ## 7. Channels
 
 ### 7.1 Model
@@ -147,7 +165,7 @@ On a local server, work pauses while the machine sleeps and resumes on wake. Tim
 | Piece | What it is |
 |---|---|
 | Channel account | A bot token, app installation or inbox owned by the workspace. Active on exactly one connection at a time (Telegram allows one poller per bot) |
-| Binding | A chat or thread on that account ↔ a session. A DM to the bot binds to Dana by default; you can bind a chat to a specialist (a direct chat, A-2) |
+| Binding | A chat or thread on that account ↔ a session. A DM to the bot binds to Dana by default; you can bind a chat to a specialist (a direct chat, PRODUCT §4) |
 | Sender allowlist | Only identities you paired from the app can talk to an agent. A message from anyone else is dropped and shown as a pairing request in Weave |
 
 ### 7.2 Flow
@@ -166,11 +184,11 @@ Proposed v1 set: Telegram, Slack, email. Then Discord, WhatsApp, Signal, iMessag
 
 ### 8.1 Briefs
 
-The caller's model writes the brief through the `delegate` tool's schema. The runtime checks it before the child starts: an objective, completion criteria, and artifact references that resolve. A brief that fails the check goes back to the caller as a tool error with one correction turn. This is the v1 brief compiler (CONCEPT §9.2.2); smarter assistance comes once real briefs show where they go wrong.
+The caller's model writes the brief through the `delegate` tool's schema. The runtime checks it before the child starts: an objective, completion criteria, and artifact references that resolve. A brief that fails the check goes back to the caller as a tool error with one correction turn. This is the v1 brief compiler; smarter assistance comes once real briefs show where they go wrong.
 
 ### 8.2 Context assembly
 
-Each model call's context is assembled from the agent's definition files, its skills index, the brief, recalled memory from the scopes it may read, and retrieved team knowledge. The assembly is saved as a `context.snapshot` before the call, with a "not loaded" list (your transcript, personal memory, other agents' skills). The inspector reads it to answer "what was actually loaded?" (CONCEPT §6).
+Each model call's context is assembled from the agent's definition files, its skills index, the brief, recalled memory from the scopes it may read, and retrieved team knowledge. The assembly is saved as a `context.snapshot` before the call, with a "not loaded" list (your transcript, personal memory, other agents' skills). The inspector reads it to answer "what was actually loaded?" (PRODUCT §6).
 
 Long sessions are compacted with marker events: a summary fact supersedes the events before it for context purposes, and nothing is deleted.
 
@@ -183,17 +201,17 @@ Long sessions are compacted with marker events: a summary fact supersedes the ev
 | Team / project | Members, when retrieved | Members, via the team's knowledge tool |
 | Run | That run | That run; dropped at the end unless promoted |
 
-A specialist's `USER.md` is the ceiling of what it knows about you, edited only by explicit promotion (A-9). Memory items live in one table keyed by `(scope_type, scope_id)`, with pgvector and full-text search. Every write is a `memory.written` fact applied to the table in the same transaction, so Weave can list it and you can forget it. Forgetting and real deletion are in `LEARNING.md` §10: the fact carries a reference, and the content lives outside the append-only log so it can be erased.
+A specialist's `USER.md` is the ceiling of what it knows about you, edited only by explicit promotion (PRODUCT §3). Memory items live in one table keyed by `(scope_type, scope_id)`, with pgvector and full-text search. Every write is a `memory.written` fact applied to the table in the same transaction, so Weave can list it and you can forget it. Forgetting and real deletion are in `LEARNING.md` §10: the fact carries a reference, and the content lives outside the append-only log so it can be erased.
 
 ### 8.4 Registry
 
-Cards for agents, teams and templates: a compact description, tags, an embedding. Dana's `registry.search` runs a hybrid query (full-text and vector) and returns the top few cards, never full definitions (CONCEPT §2.3). A card is rewritten when its definition changes.
+Cards for agents, teams and templates: a compact description, tags, an embedding. Dana's `registry.search` runs a hybrid query (full-text and vector) and returns the top few cards, never full definitions (PRODUCT §2.3). A card is rewritten when its definition changes.
 
 ## 9. Tools, sandboxes and credentials
 
 - **Built-in tools:** `delegate`, `ask_user`, `memory.*`, `skills.*`, `artifacts.*`, files, shell, browser, web search, `schedule.*`, `send`. Agents can add MCP servers.
 - **Every tool declares** its effect class (`read`, `idempotent`, `rerunnable`, `once`; `RUNTIME.md` §6) and its gate (none, by approval mode, always human).
-- **Policy is enforced in `tool.exec`**, against the run's effective access (§4). UI toggles describe; the runtime enforces (CONCEPT §2.7).
+- **Policy is enforced in `tool.exec`**, against the run's effective access (§4). UI toggles describe; the runtime enforces (PRODUCT §2.7).
 - **Sandboxes:** one persistent sandbox per workspace that sleeps when idle, a working directory per run, a slot leased per tool call, and a network allowlist per agent. Providers: local Docker, the host machine (approval required), cloud microVMs (Sprites today). The browser runs inside the sandbox.
 - **Credentials** (model keys, channel tokens, connector secrets) live in an encrypted vault: the OS keychain locally, envelope encryption with a KMS in the cloud. They are injected into tool calls by the runtime, scoped per agent, and never appear in prompts or the log.
 - **Skills** use the Agent Skills format (`SKILL.md` folders), loaded on demand. Agents can be imported from Hermes or Claude Code as proposals. Agents learn and forget skills under a per-agent context budget (`LEARNING.md`); catalog skills load only on models where the lab found they help (`LAB.md`).
@@ -203,7 +221,7 @@ Cards for agents, teams and templates: a compact description, tags, an embedding
 - **One protocol** for desktop, web and mobile: HTTP commands plus SSE streams that resume from `Last-Event-ID`. Types live in `packages/contracts`.
 - **Every client follows the same streams,** so a session continues across surfaces without sync code.
 - **Model tokens** stream outside the log (`RUNTIME.md` §8).
-- **Screens:** chat is the landing page. Weave holds asks and progress, Work holds tasks and loops, Agent Studio holds definitions (CONCEPT §8, A-11, A-12).
+- **Screens:** chat is the landing page. Weave holds asks and progress, Work holds tasks and loops, Schedule holds recurring jobs, Agent Studio holds definitions (PRODUCT §8.2).
 - **Push** goes to mobile and desktop for asks, blocks and results, following your delivery preferences.
 
 ## 11. Identity, tenancy and billing
@@ -211,7 +229,7 @@ Cards for agents, teams and templates: a compact description, tags, an embedding
 - **Auth:** none locally (implicit owner, device tokens for paired devices); an owner passkey on a remote host; Better Auth in the cloud (Neon Auth is a managed version).
 - **Tenancy:** `workspace_id` on every table. In the cloud each job runs with `SET LOCAL app.workspace_id` and row-level security enforces it. The schema is the same everywhere.
 - **Billing (cloud):** a usage ledger written from facts (model usage, sandbox minutes, tool costs) draws down prepaid credits bought through Stripe. Budgets are checked in `decide`.
-- **Cost attribution:** every `llm.completed` carries usage; cost rolls up the run tree, so each run, agent and team has its own cost and the honesty metrics of CONCEPT §6 (handoff rework rate, cost against a single-agent baseline) come from facts.
+- **Cost attribution:** every `llm.completed` carries usage; cost rolls up the run tree, so each run, agent and team has its own cost and the honesty metrics of PRODUCT §6 (handoff rework rate, cost against a single-agent baseline) come from facts.
 
 ## 12. Repo layout
 

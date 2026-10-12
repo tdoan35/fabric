@@ -10,7 +10,7 @@ import { theme } from "@/lib/theme";
 import { ResultTable } from "@/components/work/result-table";
 
 /**
- * Read-only report (MOBILE-PLAN §2): the numbers and caveats, provenance, who made it, artifact
+ * Read-only report: the numbers and caveats, provenance, who made it, artifact
  * names, and the email note — the same content as the web's ReportView, minus the links that only
  * make sense at a desk. A recorded source is always badged as a replay;
  * reports are immutable, so this fetches once instead of polling.
