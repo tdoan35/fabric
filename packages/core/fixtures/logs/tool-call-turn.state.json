@@ -1,0 +1,13 @@
+{
+  "status": "running",
+  "def": { "name": "sana", "engine": 2 },
+  "turn": 1,
+  "pendingInputs": [],
+  "calls": 2,
+  "openToolCalls": [],
+  "waits": [],
+  "costUsd": 0.03,
+  "reservedUsd": 0,
+  "compactedUpTo": 0,
+  "cancelRequested": false
+}
