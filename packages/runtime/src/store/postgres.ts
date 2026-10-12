@@ -9,6 +9,12 @@ export class PostgresAdapter implements Adapter {
 
   constructor(url: string) {
     this.pool = new Pool({ connectionString: url });
+    // Errors on idle pool clients (a dropped connection, the test harness's
+    // `drop database ... with (force)` racing pool.end(), which resolves before the
+    // sockets close) surface as pool "error" events. pg-pool rethrows those as
+    // uncaught exceptions when no listener is attached, killing the process after
+    // the work is already done — so always attach one.
+    this.pool.on("error", () => undefined);
   }
 
   async exec(sql: string): Promise<void> {
