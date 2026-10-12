@@ -1,0 +1,24 @@
+{
+  "name": "@fabric/core",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Runtime R1 core: the event envelope, per-type payload schemas, fact/telemetry classes, upcasters and stream ids (RUNTIME 2-3). Pure data: no I/O.",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "vitest run",
+    "mutate": "stryker run"
+  },
+  "dependencies": {
+    "zod": "^4.6.5"
+  },
+  "devDependencies": {
+    "@stryker-mutator/core": "^10.0.0",
+    "@stryker-mutator/vitest-runner": "^10.0.0",
+    "@fabric/fixtures": "*",
+    "vitest": "^5.0.3"
+  }
+}
