@@ -63,6 +63,11 @@ jobs:
       - name: Build
         run: npm run build
 
+      # Mutation testing (ANY-25). A no-op until a workspace defines `mutate`; the
+      # pass mark is `thresholds.break` in that package's stryker.config.json.
+      - name: Mutation tests
+        run: npm run mutate --workspaces --if-present
+
       - name: Build Storybook
         run: npm run build-storybook -w web
 
