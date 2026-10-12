@@ -53,11 +53,6 @@ export function latestVersion(type: string): number {
   return registry.get(type)?.latest ?? 0;
 }
 
-/** The upcaster lifting `fromVersion` to `fromVersion + 1`, if registered. */
-export function upcasterFor(type: string, fromVersion: number): Upcaster | undefined {
-  return registry.get(type)?.upcasters.get(fromVersion);
-}
-
 /** Internal lookup for `parseEvent`; undefined for unknown types. */
 export function entryFor(type: string): Entry | undefined {
   return registry.get(type);

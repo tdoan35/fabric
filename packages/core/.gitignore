@@ -1,0 +1,3 @@
+# stryker artifacts (mutation reports and sandboxes)
+reports/
+.stryker-tmp/
