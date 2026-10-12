@@ -80,7 +80,7 @@ Route by depth, not topic. Quick lookups are assistant work, the way an executiv
 | Stakes | Informational, reversible, or behind an approval gate | A decision depends on the answer |
 
 - **Ambiguous depth: answer, then offer.** Dana answers at the cheapest depth that is useful on its own and offers more as a one-tap action under the answer ("Have Megan research this"). She clarifies first only when a wrong guess would waste real work.
-- **Escalating midway.** When work turns out bigger than it looked, Dana delegates: what she found goes into the brief, and the change is recorded as a new disposition (`direct → agent:megan`, "sources conflict"). This is her judgment; the runtime bounds a turn only by `MAX_STEPS` (`RUNTIME.md` §5.1).
+- **Escalating midway.** When work turns out bigger than it looked, Dana delegates: what she found goes into the brief, and the change is recorded as a new disposition (`direct → agent:megan`, "sources conflict"). This is her judgment; the runtime never forces it. A direct turn is bounded by `MAX_STEPS` and a per-turn cost cap, and hitting the cap stops the turn with an offer to delegate rather than a silent cut-off (§2.8, `RUNTIME.md` §5.1).
 - **Learning the line.** Taps on the offer, mid-task escalations and corrections ("no, give that to Megan") are routing data. They move the line for you without adding text to Dana's prompt (`LEARNING.md` §4).
 - **Where it lives.** The policy is in Dana's core instructions, because it applies to every request. The examples below are test cases in her benchmark (`LAB.md` §6.1).
 
@@ -90,7 +90,7 @@ Route by depth, not topic. Quick lookups are assistant work, the way an executiv
 | "Tell me about the latest advances in open-source models" | Direct briefing with sources, plus the "go deeper" action |
 | "Which open model should we use for our product? We decide on Friday" | Delegate → Megan · Researcher, with the decision criteria in the brief: a decision depends on it |
 | "Write me a report on open-source model trends" | Delegate → Megan · Researcher: a deliverable |
-| "Keep me posted on major open-model releases" | Propose a weekly schedule owned by Megan · Researcher: recurring |
+| "Keep me posted on major open-model releases" | Delegate → Megan · Researcher as a weekly schedule: recurring. Dana confirms first, since a schedule spends on every fire (§8.3) |
 | "Check whether Qwen beats Llama on our eval set" | Delegate → Research Team: it runs code and needs independent validation |
 
 ## 5. Teams
@@ -148,7 +148,7 @@ The target feel is Muse or Grok's assistant apps; the functional depth is Hermes
 | **Chat** | The landing page: conversations with Dana, with delegation, progress and proposal cards inline |
 | **Weave** | Where the organization reports to you. An inbox of typed asks (approval, question, escalation, proposal, finding, result) with the cost of delay, escalation options when a budget runs out (raise · accept with caveat · stop), and snooze until an event. A Pulse feed of lead updates, memory writes and granted autonomy. Counts only for asks, amber not red, quiet events hidden by default |
 | **Work** | Tasks and their loops. A project's board has columns every team shares (Proposed · In progress · In review · Done); a team view shows the same tasks in that team's own steps. A task's page shows its loop: the workflow, member lanes, the brief and its criteria, the inspector, and replays of earlier loops. Asks appear only as flags linking to Weave |
-| **Schedule** | Agents' recurring jobs on a weekly calendar. Past slots show what ran and how it went; future slots show what is planned. A side rail holds a month calendar, an agent filter and the list of routines |
+| **Schedule** | Agents' and teams' recurring jobs on a weekly calendar. Past slots show what ran and how it went; future slots show what is planned. A side rail holds a month calendar, an owner filter (agents and teams; a team shows its lead's face) and the list of routines |
 | **Agent Studio** | Definitions: agents, teams and organizations. Workspace files as readable markdown with token counts, skills and memory with provenance, the context budget and what fills it |
 | **Mobile** | A companion, not a port: chat, Weave, Work at a glance, reports, and push for asks. Agent Studio, the inspector and loop lanes stay on desktop and web |
 
@@ -157,7 +157,7 @@ Weave pushes what needs you; Work shows where everything is. Ideas stay in chat 
 ### 8.3 Approvals and autonomy
 
 - **Approval modes** in the composer: Ask · Auto-approve edits · Full auto. They relax approval only for actions inside the sandbox.
-- **Always asks,** whatever the mode and whoever requests it: creating agents or teams, and the merge, deploy, spend, credential and external-send gates. Gated asks are answered in the app, never from a Weave list action or a chat channel.
+- **Always asks,** whatever the mode and whoever requests it: creating agents, teams or schedules, and the merge, deploy, spend, credential and external-send gates. Gated asks are answered in the app, never from a Weave list action or a chat channel.
 - **Execution is isolated by default.** Running on your own machine or a remote host needs explicit approval and states what it can reach.
 - **Trust grows with use.** Detail stays visible until you stop needing it, and "why did it do that?" is always one tap away.
 

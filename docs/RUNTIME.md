@@ -149,7 +149,7 @@ interface AgentState {
 ```
 
 `decide` for the agent loop, in order:
-1. **Cancel or budget.** `cancelRequested` → `run.cancel_requested` to every open child run, close open tool calls as cancelled, append `run.stopped`. Cost or time over budget → `run.blocked` with the reason, escalated to the parent.
+1. **Cancel or budget.** `cancelRequested` → `run.cancel_requested` to every open child run, close open tool calls as cancelled, append `run.stopped`. Cost or time over budget → `run.blocked` with the reason, escalated to the parent. A session turn over its per-turn cost cap ends as in rule 4, and its reply says so and offers to delegate (PRODUCT §4.1).
 2. **Last fact is `llm.completed` with tool calls** → for each call, check policy and route it:
    - denied → `tool.denied`;
    - `delegate` → §5.2;

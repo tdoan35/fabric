@@ -44,7 +44,7 @@ The server is the same code in all three places. What changes is where it runs, 
 | 2026-10-10 | Dana handles small requests directly and delegates the rest: route by depth, not topic (PRODUCT §4.1) |
 | 2026-10-10 | Agents learn skills under a per-agent context budget, with a lifecycle that fades and deletes unused skills. Skills need no approval; organization changes do (`LEARNING.md`) |
 | 2026-10-10 | Evaluation happens in Fabric's lab on Fabric's budget; a user's tokens are never spent on evaluation unless they ask (`LAB.md`) |
-| 2026-10-11 | No runtime limit on direct handling. Dana's judgment decides when to delegate; a turn is bounded only by `MAX_STEPS` (`RUNTIME.md` §5.1) |
+| 2026-10-11 | The runtime never forces delegation; Dana's judgment decides. A direct turn is bounded by `MAX_STEPS` and a per-turn cost cap; hitting the cap stops the turn with an offer to delegate (`RUNTIME.md` §5.1) |
 | 2026-10-11 | Scheduled runs act as their owner inside a per-fire budget and may delegate. Creating agents or teams and gated actions still ask (§6.5) |
 
 ## 2. Where it runs
