@@ -24,7 +24,7 @@ async function request<T>(path: string, schema: z.ZodType, init?: RequestInit, m
   return value as T;
 }
 
-/** The M0 surface (MOBILE-PLAN §2) plus `getRegistry`/`listProjects`. Chat (POST /api/chat) and SSE
+/** The M0 surface plus `getRegistry`/`listProjects`. Chat (POST /api/chat) and SSE
  * (/api/stream) live in lib/chat.ts and lib/stream.ts. */
 export const httpApi = {
   getRegistry: () => request<Registry>("/registry", RegistrySchema),

@@ -1,12 +1,19 @@
-# Fabric web
+# Fabric
 
-Vite + React Router (data router) single-page app. No server rendering — the backend is a separate service (see `docs/ARCHITECTURE.md`), reached only through `src/lib/api`. Keep it that way so the same build can ship to the web and inside Electron.
+TypeScript monorepo on npm workspaces. What we're building is in `docs/`; start with `docs/ARCHITECTURE.md`. The code is still the hackathon build, and `docs/ARCHITECTURE.md` §12 maps what each part becomes.
 
-- Routes: `src/router.tsx`; route components live in `src/routes/`.
-- Navigation: `Link` / `useLocation` / `useSearchParams` / `useParams` from `react-router`.
-- Styles: Tailwind v4 via `@tailwindcss/vite`; theme tokens in `src/styles/globals.css`.
-- UI primitives: shadcn (`components.json`), in `src/components/ui/`.
-- Desktop: `electron/main.mjs` wraps the same build. `npm run electron:dev` (Vite + HMR inside Electron), `npm run electron:start` (built `dist/` over the `app://` protocol), `npm run electron:dist` (installer into `release/` via electron-builder). Renderer code must not assume Electron; desktop-only APIs go through `electron/preload.cjs`, read via `desktop` from `src/lib/desktop.ts` (undefined on the web). The window is frameless (macOS keeps traffic lights); `src/components/shell/title-bar.tsx` draws the bar, and layout offsets by `--titlebar-height` (0 on the web).
+| Path | What | Instructions |
+|---|---|---|
+| `apps/web` | Vite + React Router SPA, also wrapped by Electron | `apps/web/AGENTS.md` |
+| `apps/server` | HTTP API (Hono) | — |
+| `apps/mobile` | Expo companion app, outside the workspaces with its own lockfile | `apps/mobile/AGENTS.md` |
+| `packages/*` | `agents`, `contracts`, `db`, `fixtures`, `integrations` | — |
+
+A directory's `AGENTS.md` applies to everything under it, on top of this file. Read it before changing files there.
+
+From the repo root:
+- `npm run dev` starts the server and the web dev server together.
+- The PR gate (CI `verify`): `npm ci`, `npm run typecheck`, `npm test`, `npm run build`, `npm run build-storybook -w web`, `npx playwright install --with-deps chromium` (once per machine), `npm run test-storybook -w web`. `npm run lint` runs as its own CI job. Storybook details: `docs/STORYBOOK.md`.
 
 ---
 
@@ -22,7 +29,7 @@ Triggered two ways: the `linear-factory` webhook (Linear `Issue` events on team 
 2. For each: check the `fabric` board for a live card. Create with `--idempotency-key <LINEAR-ID>` (e.g. `ANY-42`) — the key dedupes; never create a second card for the same issue.
 3. **GATE:** if the issue lacks testable acceptance criteria (commands + expected output, or observable behavior), do not invent them. Do not create a card. Comment on the issue requesting criteria and report the bounce in your run output.
 4. Card: `hermes kanban --board fabric create "<ANY-N>: <title>" --body-file <snapshot> --idempotency-key <ANY-N> --workspace worktree --assignee fab-builder-a`. The body is a verbatim snapshot of the spec at sync time (description + acceptance criteria + file pointers + Linear URL). Mid-flight spec edits do NOT mutate in-flight cards — if a synced issue changed materially, flag it in your output instead. **Always assign the coder lane (`fab-builder-a`) at create time** — the dispatcher only claims Ready cards with an assignee, so an unassigned card stalls forever. Rework/fixer routing reassigns later (ladder: fab-builder-a → fab-l1 → fab-l2).
-   Then create the **review card** (same run, always — this makes skipping review impossible: the card sits in todo until the coder card completes, however the coder finishes): `hermes kanban --board fabric create "REVIEW <ANY-N>: <title>" --parent <coder-card-id> --assignee fab-reviewer --workspace worktree --idempotency-key <ANY-N>-review`. Body first line: `REVIEW_OF: <coder-card-id>`, then the review contract: read-only (no tracked-file edits, no push, no requesting review on this card); get the diff from the coder card's completion metadata (commit/branch/lane_checkout) or the PR on the public repo; verify the diff stays inside the declared file scope, touches no protected paths (`.github/`, `AGENTS.md`, `docs/adr/`) and is under ~1k changed lines; re-run the acceptance gates from a clean `npm ci` — never trust the implementer's claims; every story/test assertion must be able to fail (no tautologies); GitHub CI (`verify`, `lint`) green on the PR head is environment proof — double-check local failures before calling them blocking. Completion contract (parsed by scripts, never paraphrased): summary MUST start with exactly `VERDICT: APPROVE` or `VERDICT: REJECT`, and completion metadata MUST include `{"verdict": "<same VERDICT line>", "reviewed_sha": "<full PR head sha>"}` and MUST NOT set `commit`/`branch` keys (review cards are never published). APPROVE enables auto-merge; REJECT routes to the rework ladder. If the coder card already exists from an earlier sync (idempotency hit) and has no review child, create the review card then. **Never create a review card for kickback-ladder rework cards** — rework uses the same-card review loop (`request-review`/`request-changes`) on the rework card itself.
+   Then create the **review card** (same run, always — this makes skipping review impossible: the card sits in todo until the coder card completes, however the coder finishes): `hermes kanban --board fabric create "REVIEW <ANY-N>: <title>" --parent <coder-card-id> --assignee fab-reviewer --workspace worktree --idempotency-key <ANY-N>-review`. Body first line: `REVIEW_OF: <coder-card-id>`, then the review contract: read-only (no tracked-file edits, no push, no requesting review on this card); get the diff from the coder card's completion metadata (commit/branch/lane_checkout) or the PR on the public repo; verify the diff stays inside the declared file scope, touches no protected paths (`.github/`, `docs/adr/`, any `AGENTS.md` or `CLAUDE.md` at any depth) and is under ~1k changed lines; re-run the acceptance gates from a clean `npm ci` — never trust the implementer's claims; every story/test assertion must be able to fail (no tautologies); GitHub CI (`verify`, `lint`) green on the PR head is environment proof — double-check local failures before calling them blocking. Completion contract (parsed by scripts, never paraphrased): summary MUST start with exactly `VERDICT: APPROVE` or `VERDICT: REJECT`, and completion metadata MUST include `{"verdict": "<same VERDICT line>", "reviewed_sha": "<full PR head sha>"}` and MUST NOT set `commit`/`branch` keys (review cards are never published). APPROVE enables auto-merge; REJECT routes to the rework ladder. If the coder card already exists from an earlier sync (idempotency hit) and has no review child, create the review card then. **Never create a review card for kickback-ladder rework cards** — rework uses the same-card review loop (`request-review`/`request-changes`) on the rework card itself.
 5. Dependencies: for each Linear `blocked by` relation on the issue, run `hermes kanban --board fabric link <parent-card-id> <child-card-id>` so the board's ordering mirrors Linear's. If the blocking issue has no card yet (unlabeled or not yet synced), skip it and re-check the relation on every run — create the link as soon as both cards exist.
 6. Comment on the Linear issue with the card ID when synced. Only Ty closes Linear issues.
 7. End every run with one line: `SYNC: created=N bounced=N skipped=N` (+ details). You never touch code and never ask questions — a missing decision is a bounce, not a clarification.
@@ -32,7 +39,7 @@ Triggered two ways: the `linear-factory` webhook (Linear `Issue` events on team 
 - Terminal state after review: the **reviewer driver** (profile `fab-reviewer`, never the read-only reviewer sandbox itself) parses `VERDICT: APPROVE` and runs `gh pr merge --auto --squash <PR>`. GitHub then merges the moment all required checks (CI `verify`, `lint`) pass. No GitHub-side human approval is required.
 - **Auto-merge is the default for every factory card.** No label gate anymore. Opt OUT by adding the `human-review` Linear label (triage embeds `auto-merge: no` in the card body) — then the driver stops at APPROVED and pings Ty instead.
 - **Hard overrides — never auto-merged, regardless of opt-out label:**
-  - diff touches protected paths (`.github/`, `AGENTS.md`, `docs/adr/`)
+  - diff touches protected paths (`.github/`, `docs/adr/`, any `AGENTS.md` or `CLAUDE.md` at any depth)
   - any required check red, or the verdict is not exactly `APPROVE`
   - diff strays outside the file scope declared on the card
 

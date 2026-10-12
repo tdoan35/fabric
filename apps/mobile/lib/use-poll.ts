@@ -13,12 +13,12 @@ export interface PollState<T> {
 }
 
 /**
- * Focus-aware poll (MOBILE-PLAN §2): fetches immediately, then every `intervalMs` while the
+ * Focus-aware poll: fetches immediately, then every `intervalMs` while the
  * screen is focused, and stops when it isn't. `refresh()` drives RefreshControl. Errors keep
  * the last `data` (a flaky venue network must not blank the screen) and clear on the next hit.
  *
  * M1: pass `matches` to refetch the moment a matching /api/stream AppEvent arrives (SSE
- * invalidation, MOBILE-PLAN §2 M1). The poll stays as the fallback and still owns the cadence;
+ * invalidation). The poll stays as the fallback and still owns the cadence;
  * event-driven ticks only fire while focused, so a backgrounded screen fetches nothing.
  */
 export function usePoll<T>(fn: () => Promise<T>, intervalMs = 3000, matches?: (e: AppEvent) => boolean): PollState<T> {

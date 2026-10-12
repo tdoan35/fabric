@@ -2,7 +2,7 @@ import { useSyncExternalStore } from "react";
 import type { ItemAction } from "@fabric/contracts";
 
 /**
- * Local-only Weave decisions (MOBILE-PLAN §2): there is no server decision endpoint yet — the
+ * Local-only Weave decisions: there is no server decision endpoint yet — the
  * same as the web today (apps/web/src/lib/weave-store.ts, module store + useSyncExternalStore).
  * Module-level state survives polling, navigation and remounts; a poll merges over it and never
  * clears it. Snooze/undo/pulse stay desktop-only in M0.

@@ -65,5 +65,5 @@ export const light = {
 /** --radius 0.625rem = 10px; sm…xxl are the calc() multiples from globals.css. */
 export const radius = { sm: 6, md: 8, lg: 10, xl: 14, xxl: 18, full: 999 } as const;
 
-/** The app renders dark-first (MOBILE-PLAN §3); `light` is kept for a future toggle. */
+/** The app renders dark-first; `light` is kept for a future toggle. */
 export const theme = { colors: dark, radius } as const;

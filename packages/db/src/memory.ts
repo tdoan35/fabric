@@ -8,7 +8,7 @@ import { memories } from "./schema";
 /** One importable memory. Ids are stable (`mnemo:<table>:<origin id>`), so re-imports upsert. */
 export interface MemoryUpsert {
   id: string;
-  scope?: string; // personal | agent | team | run (CONCEPT §2.9)
+  scope?: string; // personal | agent | team | run (PRODUCT §2.9)
   scopeId?: string;
   kind: string; // canonical | episode | instruction | preference | context | …
   text: string;

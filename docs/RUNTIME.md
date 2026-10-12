@@ -149,7 +149,7 @@ interface AgentState {
 ```
 
 `decide` for the agent loop, in order:
-1. **Cancel or budget.** `cancelRequested` → `run.cancel_requested` to every open child run, close open tool calls as cancelled, append `run.stopped`. Cost or time over budget → `run.blocked` with the reason, escalated to the parent.
+1. **Cancel or budget.** `cancelRequested` → `run.cancel_requested` to every open child run, close open tool calls as cancelled, append `run.stopped`. Cost or time over budget → `run.blocked` with the reason, escalated to the parent. A session turn over its per-turn cost cap ends as in rule 4, and its reply says so and offers to delegate (PRODUCT §4.1).
 2. **Last fact is `llm.completed` with tool calls** → for each call, check policy and route it:
    - denied → `tool.denied`;
    - `delegate` → §5.2;
@@ -237,7 +237,7 @@ Every append notifies its streams. API servers read the new events and push them
 
 ## 9. Schedules
 
-Each enabled schedule always has its next `schedule.fire` job queued with `run_at = slot`. There is no 30-second tick.
+Each enabled schedule always has its next `schedule.fire` job queued with `run_at = slot`. There is no 30-second tick. What a schedule is, and what its runs may do, is in `ARCHITECTURE.md` §6.5.
 
 - **Overlap.** Each schedule says what happens when its previous run is still going: `skip` (default), `queue_one`, or `allow`.
 - **Catch-up.** A fire more than 10 minutes late is marked missed. After a local server wakes from sleep, only the most recent missed slot fires, and only if it is inside the catch-up window; the others are marked missed. Nothing is dropped silently.

@@ -10,7 +10,7 @@ import { ItemDetail } from "@/components/weave/item-detail";
 import { markRead } from "@/components/weave/store";
 
 /**
- * One Weave item (MOBILE-PLAN §2 M0): the same snapshot as the list, polled while focused, so a
+ * One Weave item: the same snapshot as the list, polled while focused, so a
  * fresh "results ready" item is never stale. Opening it clears the unread dot; resolutions made
  * here live in the local store (components/weave/store.ts) and survive polling.
  */

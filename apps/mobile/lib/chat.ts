@@ -1,4 +1,4 @@
-// Chat with Dana over the real server (MOBILE-PLAN §2 M1). Mirrors apps/web/src/lib/api/http.ts
+// Chat with Dana over the real server. Mirrors apps/web/src/lib/api/http.ts
 // `chatStream` and apps/web/src/lib/chat/http-assistant.ts `toWire`: POST /api/chat with
 // ChatRequestSchema, NDJSON where every line is a CUMULATIVE snapshot of the assistant message —
 // replace the in-progress message, never append. The fetch implementation is injected (expo/fetch

@@ -1,4 +1,4 @@
-// One chat thread over the real server (MOBILE-PLAN §2 M1), shared by the Chat tab's new thread
+// One chat thread over the real server, shared by the Chat tab's new thread
 // and /thread/[id]. History loads from GET /api/sessions/:id/messages (skipped for a freshly
 // minted id); sending POSTs /api/chat and replaces the in-progress assistant message on every
 // NDJSON line — each line is a CUMULATIVE snapshot (§4.3), never an append. Approvals stay on the

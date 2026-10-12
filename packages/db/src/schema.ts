@@ -335,13 +335,13 @@ export const seedState = pgTable("seed_state", {
   seededAt: ts("seeded_at").notNull().defaultNow(),
 });
 
-// ---- Memory (the Mnemosyne import; CONCEPT §2.9 scopes. Seed never truncates it.) ----
+// ---- Memory (the Mnemosyne import; PRODUCT §2.9 scopes. Seed never truncates it.) ----
 
 /** pgvector column; the importer and recall hand raw 384-d arrays / '[…]' literals. */
 export const memories = pgTable("memories", {
   /** `mnemo:<source table>:<origin id>` for imported rows: stable, so re-imports upsert. */
   id: text("id").primaryKey(),
-  scope: text("scope").notNull().default("personal"), // personal | agent | team | run (CONCEPT §2.9)
+  scope: text("scope").notNull().default("personal"), // personal | agent | team | run (PRODUCT §2.9)
   scopeId: text("scope_id").notNull().default("dana"),
   kind: text("kind").notNull(), // canonical | episode | instruction | preference | context | …
   text: text("text").notNull(),

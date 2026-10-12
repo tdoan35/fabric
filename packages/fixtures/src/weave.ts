@@ -133,7 +133,7 @@ export const inboxSeed: InboxItem[] = [
       { agentId: "carlos", text: "Request changes: warm-up still leaks into p50", at: t("10:38") },
       { agentId: "elliot", text: "Escalated to Dana: rework budget spent", at: t("10:40") },
     ],
-    why: "Runs stop when their rework budget runs out (CONCEPT §2.8). The escalation goes member → lead → Dana → you.",
+    why: "Runs stop when their rework budget runs out. The escalation goes member → lead → Dana → you.",
     actions: [
       {
         id: "raise", label: "Raise budget to 3", detail: "One more attempt · ~40 min · ~$0.20", variant: "primary",
