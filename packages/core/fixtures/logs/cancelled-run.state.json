@@ -12,7 +12,10 @@
   ],
   "waits": [],
   "costUsd": 0.05,
+  "turnCostUsd": 0.05,
   "reservedUsd": 0,
   "compactedUpTo": 0,
-  "cancelRequested": true
+  "cancelRequested": true,
+  "lastFact": {"type":"run.stopped","payload":{"by":"ty","text":"Cancelled by the operator."}},
+  "callAttempt": 0
 }
