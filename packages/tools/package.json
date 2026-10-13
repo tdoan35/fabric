@@ -1,0 +1,22 @@
+{
+  "name": "@fabric/tools",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Built-in tools, the defineTool shape and the registry (ARCH §9): one declaration serving the model (JSON Schema) and the runtime (ToolPort), each with its effect class, gate, kind and execution step.",
+  "exports": {
+    ".": "./src/index.ts",
+    "./*": "./src/*/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@fabric/runtime": "*",
+    "zod": "^4.6.5"
+  },
+  "devDependencies": {
+    "vitest": "^5.0.3"
+  }
+}
