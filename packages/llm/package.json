@@ -1,0 +1,26 @@
+{
+  "name": "@fabric/llm",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Model access through the Neon AI Gateway with per-call usage metering (ARCH §10): one factory over spark, openrouter and neon; pricing; later BYOK.",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@ai-sdk/openai-compatible": "^3.0.62",
+    "@ai-sdk/provider": "^4.0.21",
+    "@fabric/runtime": "*",
+    "@neon/ai-sdk-provider": "^1.0.0",
+    "@openrouter/ai-sdk-provider": "^3.1.0",
+    "ai": "^7.0.127"
+  },
+  "devDependencies": {
+    "vitest": "^5.0.3",
+    "zod": "^4.6.5"
+  }
+}

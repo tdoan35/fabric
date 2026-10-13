@@ -3,7 +3,7 @@
 import { describe, expect, it, beforeEach, afterEach, vi } from "vitest";
 import { generateObject, generateText, streamText } from "ai";
 import { z } from "zod";
-import { defaultThinking, model, modelFamily, providerModelId, neonAnthropicOptions, runCostUsd, runUsages, sparkThinkingBody, type MeterContext, type ThinkingLevel } from "../llm";
+import { defaultThinking, model, modelFamily, providerModelId, neonAnthropicOptions, runCostUsd, runUsages, sparkThinkingBody, type MeterContext, type ThinkingLevel } from "../index";
 
 const sparkCompletion = (usage: Record<string, unknown> = { prompt_tokens: 12, completion_tokens: 34, total_tokens: 46 }) => ({
   id: "cmpl-1",
