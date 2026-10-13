@@ -6,7 +6,7 @@ import type { SessionEvent } from "../sessions";
 import { applyDelta, encodeFrame, parseFrame, projectThread, PostMessageRequestSchema } from "../sessions";
 
 /** A well-formed session event; `payload` stays loose, as on the wire. */
-const ev = (seq: number, type: string, payload: unknown, ts = `2026-10-12T12:00:${String(seq).padStart(2, "0")}Z`): SessionEvent => ({
+const ev = (seq: number, type: string, payload: unknown = {}, ts = `2026-10-12T12:00:${String(seq).padStart(2, "0")}Z`): SessionEvent => ({
   seq,
   type,
   class: "fact",
