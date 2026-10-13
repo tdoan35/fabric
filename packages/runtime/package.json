@@ -1,0 +1,27 @@
+{
+  "name": "@fabric/runtime",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Runtime R5 storage: durable event-log streams on PGlite and Postgres — append with head bumps, facts-only causation dedupe, commit-time notify and the enqueue port, readStream (RUNTIME 2).",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "vitest run",
+    "bench:queue": "tsx bench/bench.ts"
+  },
+  "dependencies": {
+    "@fabric/core": "*",
+    "@electric-sql/pglite": "^0.3.0",
+    "pg": "^8.16.0",
+    "pg-boss": "^12.37.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22",
+    "@types/pg": "^8",
+    "tsx": "^4.19.2",
+    "vitest": "^5.0.3"
+  }
+}

@@ -23,7 +23,7 @@ The factory plan (roles, budgets, ladder) lives at `/home/ty/fabric-factory-plan
 
 ## Triage (profile `fab-triage`) — Linear → kanban sync
 
-Triggered two ways: the `linear-factory` webhook (Linear `Issue` events on team `ANY` involving the `factory-ready` label → Hermes route on profile `fab-triage`; payload is a trigger only, never the truth) and the 15-minute `factory-linear-sync` cron, which stays as reconciliation for missed deliveries. Either way the agent re-reads Linear via MCP and compares spec hashes. Procedure:
+Triggered two ways: the `linear-factory` webhook (Linear `Issue` events on team `ANY` involving the `factory-ready` label → Hermes route on profile `fab-triage`; payload is a trigger only, never the truth) and the 2-minute `factory-linear-sync` cron, which stays as reconciliation for missed deliveries (a cheap Linear probe gates it, so the agent runs only when the set of `factory-ready` issues changes). Either way the agent re-reads Linear via MCP and compares spec hashes. Procedure:
 
 1. List issues in team `Anyone-ai` labeled `factory-ready`, excluding Completed/Canceled.
 2. For each: check the `fabric` board for a live card. Create with `--idempotency-key <LINEAR-ID>` (e.g. `ANY-42`) — the key dedupes; never create a second card for the same issue.
@@ -46,16 +46,17 @@ A card whose spec says `TDD: required` lists its test cases with IDs (e.g. `R3.4
 
 ### Merge policy — auto-merge (default, since 2026-10-10)
 
-- Terminal state after review: the **reviewer driver** (profile `fab-reviewer`, never the read-only reviewer sandbox itself) parses `VERDICT: APPROVE` and runs `gh pr merge --auto --squash <PR>`. GitHub then merges the moment all required checks (CI `verify`, `lint`) pass. No GitHub-side human approval is required.
-- **Auto-merge is the default for every factory card.** No label gate anymore. Opt OUT by adding the `human-review` Linear label (triage embeds `auto-merge: no` in the card body) — then the driver stops at APPROVED and pings Ty instead.
+- Terminal state after review: guardian seam **S4** (a no-agent script, never the read-only reviewer sandbox) runs `gh pr merge --auto --squash` once the PR head has a parsed `VERDICT: APPROVE` for that exact sha and the required checks (CI `verify`, `lint`) are green. S4 runs every 2 minutes in its own fast-lane cron as well as in the full guardian tick. No GitHub-side human approval is required.
+- **Auto-merge is the default for every factory card.** No label gate anymore. Opt OUT by adding the `human-review` Linear label (triage embeds `auto-merge: no` in the card body) — then S4 holds the PR at APPROVED and logs it for Ty instead.
 - **Hard overrides — never auto-merged, regardless of opt-out label:**
   - diff touches protected paths (`.github/`, `docs/adr/`, any `AGENTS.md` or `CLAUDE.md` at any depth)
   - any required check red, or the verdict is not exactly `APPROVE`
   - diff strays outside the file scope declared on the card
 
   (The ~1k changed-lines size guard was lifted by Ty on 2026-10-11: PR size no longer blocks auto-merge; the reviewer's full-diff APPROVE is the size gate.)
-- On triggering auto-merge, the driver comments the PR link on the Linear issue. Merges are squash merges; the driver deletes the branch.
-- **Post-merge lifecycle (automated, no-agent `factory_merge_watch.py` cron every 5m):** when a factory PR merges, its Linear issue is set to Done (comment with the merged PR link), and the **next eligible sibling** in the same epic is flagged `factory-ready` — eligible = open, not yet flagged, and not blocked by any open issue; ordered by priority then issue number. At most one open sibling carries `factory-ready` at a time. Ty keeps final authority: remove the flag or edit the spec before triage syncs it.
+- Merges are squash merges, and the branch is deleted on merge.
+- **Post-merge lifecycle (automated, no-agent `factory_merge_watch.py` cron every 2m):** when a factory PR merges, its Linear issue is set to Done (comment with the merged PR link), and in every **track** of its epic that has no open flagged child, the **next eligible sibling** is flagged `factory-ready` — eligible = open, not yet flagged, and not blocked by any open issue (in this epic or any other); ordered by priority then issue number. The merge also flags any issue in **another** epic that it was the last open blocker of, if that issue's track has no open flagged child. Ty keeps final authority: remove the flag or edit the spec before triage syncs it.
+- **Tracks and concurrency.** A track is a `track:<name>` label on an epic's children; children without one share the default track. At most one open child per track carries `factory-ready`, so an epic with no track labels still runs as one chain. Spec writers put children on separate tracks only when their file scopes are disjoint, and express any cross-track ordering as `blocked by` relations. The board runs up to 4 cards at once (`kanban.max_in_progress`), at most 2 per profile; the model server keeps one stream free for Ty's own Hermes traffic.
 - **Working alongside the factory (Ty's own PRs).** Ty may merge his own PRs to `main` at any time; the factory adapts. Before merging, run `python3 ~/.hermes/scripts/factory_overlap.py <PR>` — it compares the PR's files with every in-flight card's `File scope:` and every open `factory/*` PR. `CLEAR` = merge freely. `OVERLAP` = merging is still allowed but costs the factory PR a re-review or a conflict pass; alternatively wait for that card to land first. `main` is strict-protected, so every merge leaves open factory PRs BEHIND; guardian seam **S9** (10m) merges `main` into them via update-branch (merge, never rebase — the reviewed commit stays an ancestor):
   - incoming `main` files disjoint from the PR's files and no shared config (`.github/`, `.storybook/`, `package*.json`, tsconfig/vite/vitest/eslint config) → the review verdict carries forward to the new head (recorded in `~/.hermes/factory/branch-sync.json`); auto-merge proceeds once CI is green on it.
   - overlap or shared config → auto-merge is disabled before the update and a `REVIEW … (post-sync)` card is created for the new head.
