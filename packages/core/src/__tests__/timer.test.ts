@@ -33,7 +33,10 @@ const evt = (seq: number, type: string, payload: Record<string, unknown>, stream
   seq,
 });
 
-const runCreated = (definition: Record<string, unknown>): unknown =>
+/** The envelope shape `evt` builds; lets fixtures spread elements (TS2698 otherwise). */
+type TestEvent = ReturnType<typeof evt>;
+
+const runCreated = (definition: Record<string, unknown>): TestEvent =>
   evt(1, "run.created", {
     definition,
     engineVersion: "v1",
@@ -161,7 +164,7 @@ test("T8: a wait with one reminder queues two timers; the firing reminds and lea
 // -- the stall watchdog ---------------------------------------------------------
 
 /** A running stream mid-call: llm completed asking for `shell`, the call open. */
-function runningEvents(definition: Record<string, unknown>, callId = "c1"): unknown[] {
+function runningEvents(definition: Record<string, unknown>, callId = "c1"): TestEvent[] {
   return [
     runCreated(definition),
     evt(2, "run.started", { objective: "Run the checks" }),
