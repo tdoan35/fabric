@@ -33,20 +33,20 @@ function modelEmitting(
   return { model, calls: () => calls };
 }
 
-const textStream = (parts: string[], finish: LanguageModelV4FinishReason = "stop", usage = v4Usage(11, 7)): Chunk[] => [
+const textStream = (parts: string[], finish: "stop" | "length" | "content-filter" | "tool-calls" | "error" | "other" = "stop", usage = v4Usage(11, 7)): Chunk[] => [
   { type: "stream-start", warnings: [] },
   ...parts.flatMap((delta): Chunk[] => [
     { type: "text-start", id: "t1" },
     { type: "text-delta", id: "t1", delta },
     { type: "text-end", id: "t1" },
   ]),
-  { type: "finish", finishReason, usage },
+  { type: "finish", finishReason: { unified: finish, raw: finish }, usage },
 ];
 
 const toolStream = (calls: { id: string; name: string; input: string }[]): Chunk[] => [
   { type: "stream-start", warnings: [] },
   ...calls.map(({ id, name, input }): Chunk => ({ type: "tool-call", toolCallId: id, toolName: name, input })),
-  { type: "finish", finishReason: "tool-calls", usage: v4Usage(3, 2) },
+  { type: "finish", finishReason: { unified: "tool-calls", raw: "tool-calls" }, usage: v4Usage(3, 2) },
 ];
 
 const call = (
@@ -63,6 +63,9 @@ const call = (
 beforeEach(() => {
   vi.unstubAllEnvs();
   vi.stubEnv("LLM_PROVIDER", "spark");
+  vi.stubEnv("SPARK_BASE_URL", "http://spark.test/v1");
+  vi.stubEnv("SPARK_API_KEY", "test-key");
+  vi.stubEnv("SPARK_MODEL", "qwen3.8-flash-next");
 });
 
 afterEach(() => {
