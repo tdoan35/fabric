@@ -5,7 +5,8 @@
   "type": "module",
   "description": "Runtime R5 storage: durable event-log streams on PGlite and Postgres — append with head bumps, facts-only causation dedupe, commit-time notify and the enqueue port, readStream (RUNTIME 2).",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./testing": "./src/testing/drivers.ts"
   },
   "scripts": {
     "typecheck": "tsc -p tsconfig.json",
