@@ -82,8 +82,13 @@ export function createRegistry(defs: readonly ToolDef[]): ToolRegistry {
           }
 
           try {
+            // ANY-72: the call's id rides in io; the scope the tool sees is
+            // the caller's plus that id, so a `once` tool can derive its
+            // idempotency key (RUNTIME §6) without a second channel.
+            const callScope =
+              io.callId === undefined ? scope : { ...scope, callId: io.callId };
             const result = await def.execute(parsed.data, {
-              scope,
+              scope: callScope,
               onLine: io.onLine ?? (() => {}),
             });
             return { ok: true, result };

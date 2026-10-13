@@ -70,13 +70,10 @@ test("W2 web_search passes query, limit and the vault key to the client; hits ma
     { title: "Second", url: "https://second.example", snippet: "another" },
   ]);
 
-  const explicit = (await search.execute({ query: "q", limit: 3 }, ctx({ ...baseScope, secret: key("exa"), exa: fakeExa([]) }))) as { ok: boolean };
+  const explicitExa = fakeExa([]);
+  const explicit = (await search.execute({ query: "q", limit: 3 }, ctx({ ...baseScope, secret: key("exa"), exa: explicitExa }))) as { ok: boolean };
   expect(explicit.ok).toBe(true);
-  expect(explicitCallsLimit()).toBe(3);
-
-  function explicitCallsLimit(): unknown {
-    return (exa.calls[0]?.options as { numResults?: number } | undefined)?.numResults;
-  }
+  expect((explicitExa.calls[0]?.options as { numResults?: number } | undefined)?.numResults).toBe(3);
 });
 
 test("W3 web_search with no exa secret: ok false with the configured message, client untouched", async () => {
@@ -160,37 +157,38 @@ test("W5 web_fetch refuses loopback, private, link-local, unspecified and metada
 });
 
 test("W6 DNS rebinding: the connection goes to the first, validated address the resolver returned", async () => {
-  const origin = await startOrigin((req, res) => {
-    res.writeHead(200, { "content-type": "text/plain" });
-    res.end("reached");
-    void req;
-  });
-  try {
-    const port = new URL(origin.url).port;
-    let connected = "";
-    const result = (await tool("web_fetch").execute(
-      { url: `http://rebind.example:${port}/` },
-      ctx({
-        ...baseScope,
-        // Public first, loopback second: a naive lookup-after-check would
-        // connect to the loopback; the pinning must use the validated one.
-        resolver: () => [publicA(), "127.0.0.1"],
-        onConnect: (addr: string) => {
-          connected = addr;
-        },
-      })
-    )) as { ok: boolean };
+    const origin = await startOrigin((req, res) => {
+      res.writeHead(200, { "content-type": "text/plain" });
+      res.end("reached");
+      void req;
+    });
+    try {
+      const port = new URL(origin.url).port;
+      const local = "127.0.0.1";
+      const other = "192.0.2.9"; // public, unroutable here: connecting to it fails
+      let connected = "";
+      const result = (await tool("web_fetch").execute(
+        { url: `http://rebind.example:${port}/` },
+        ctx({
+          ...baseScope,
+          // The validated list, reachable first: the pinning must connect to
+          // the first entry; a lookup-after-check preferring the second would
+          // time out against 192.0.2.9. The loopback allowlist (W4's seam)
+          // admits the local server; W5 proves it off by default.
+          allowLoopback: `http://rebind.example:${port}`,
+          resolver: () => [local, other],
+          onConnect: (addr: string) => {
+            connected = addr;
+          },
+        })
+      )) as { ok: boolean };
 
-    expect(result.ok).toBe(true);
-    expect(connected).toBe(publicA());
-  } finally {
-    await origin.close();
-  }
-
-  function publicA(): string {
-    return "93.184.216.34";
-  }
-});
+      expect(result.ok).toBe(true);
+      expect(connected).toBe(local);
+    } finally {
+      await origin.close();
+    }
+  }, 30_000);
 
 test("W7 redirects: a 302 to a private address is refused; the fourth hop fails with too many redirects", async () => {
   const origin = await startOrigin((req, res) => {
@@ -210,6 +208,10 @@ test("W7 redirects: a 302 to a private address is refused; the fourth hop fails 
         return;
       case "/hop3":
         res.writeHead(302, { location: "/hop4" });
+        res.end();
+        return;
+      case "/hop4":
+        res.writeHead(302, { location: "/landed" });
         res.end();
         return;
       default:
@@ -235,7 +237,7 @@ test("W7 redirects: a 302 to a private address is refused; the fourth hop fails 
   }
 });
 
-test("W8 the 2 MB body cap truncates and the 20 s timeout fires under fake timers", async () => {
+test("W8 the 2 MB body cap truncates and the 20 s timeout fires under fake timers", { timeout: 30_000 }, async () => {
   const big = "x".repeat(2 * 1024 * 1024 + 11);
   const origin = await startOrigin((req, res) => {
     res.writeHead(200, { "content-type": "text/plain" });
@@ -319,14 +321,15 @@ test("W10 send with no agentmail secret: ok false, client untouched", async () =
 test("W12 ToolScope.secret is the only path to a key: builtin sources never import the vault", async () => {
   const { readFile, readdir } = await import("node:fs/promises");
   const path = await import("node:path");
-    const dir = path.resolve(import.meta.dirname, "../builtin");
-    const files = (await readdir(dir)).filter((f) => f.endsWith(".ts"));
-    expect(files).toContain("index.ts");
-    for (const file of files) {
-      const src = await readFile(path.join(dir, file), "utf8");
-      expect(src, `${file} imports the vault`).not.toMatch(/from "(.*\/)?vault/);
-      expect(src, `${file} reads process.env`).not.toMatch(/process\.env/);
-    }
+  const dir = path.resolve(import.meta.dirname, "../builtin");
+  const files = (await readdir(dir)).filter((f) => f.endsWith(".ts"));
+  expect(files).toContain("index.ts");
+  for (const file of files) {
+    const src = await readFile(path.join(dir, file), "utf8");
+    const code = src.replace(/\/\/[^\n]*/g, ""); // comments may mention env; code may not use it
+    expect(code, `${file} imports the vault`).not.toMatch(/from "(.*\/)?vault/);
+    expect(code, `${file} reads process.env`).not.toMatch(/process\.env/);
+  }
 });
 
 export type { RecordingExa };

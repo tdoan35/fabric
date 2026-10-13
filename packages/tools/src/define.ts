@@ -14,6 +14,12 @@ export type ToolScope = {
   agentId: string;
   /** The run's working folder, when the caller has one. */
   runDir?: string;
+  /** Named-secret lookup bound to this agent (ANY-72): `vault.get(name, { agentId })`
+   * behind an arrow, so tools never see the vault itself. */
+  secret?: (name: string) => Promise<string>;
+  /** The `tool.call`'s id (ANY-72): the stable seed for a `once` tool's
+   * idempotency key (RUNTIME §6). */
+  callId?: string;
 };
 
 /** `mode` follows the session's approval mode; `always` always asks a human. */
