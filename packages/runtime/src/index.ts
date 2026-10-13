@@ -65,3 +65,4 @@ export {
   type EventRow,
 } from "./workers/index";
 export { handleLlmCallJob, type LlmCallJobDeps } from "./workers/index";
+export { handleToolExecJob, type ToolExecJobDeps } from "./workers/index";
