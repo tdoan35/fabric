@@ -204,7 +204,7 @@ export class PgQueue implements Queue {
     client.on("error", () => undefined);
     try {
       await client.connect();
-      await client.query(`listen ${this.#wakeChannel}`);
+      await client.query(`listen ${this.#wakeChannel()}`);
       client.on("notification", () => this.#wake());
       this.#listener = client;
     } catch {
@@ -597,7 +597,7 @@ export class PgQueue implements Queue {
   async #announce(): Promise<void> {
     this.#wake();
     if (this.#pool !== null) {
-      await this.#exec(`select pg_notify($1, '')`, [this.#wakeChannel]).catch(() => undefined);
+      await this.#exec(`select pg_notify($1, '')`, [this.#wakeChannel()]).catch(() => undefined);
     }
   }
 
