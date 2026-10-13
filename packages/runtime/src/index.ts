@@ -66,3 +66,7 @@ export {
 } from "./workers/index";
 export { handleLlmCallJob, type LlmCallJobDeps } from "./workers/index";
 export { handleToolExecJob, type ToolExecJobDeps } from "./workers/index";
+// The remaining handlers and the worker loop (ANY-40 R9c).
+export { handleDelegateResolveJob, type DelegateResolveJobDeps } from "./workers/index";
+export { handleDeliverJob, type DeliverJobDeps } from "./workers/index";
+export { runWorker, runUntilIdle, WORKER_JOB_TYPES, type WorkerOptions, type WorkerPorts } from "./workers/loop";
