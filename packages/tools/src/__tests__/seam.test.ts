@@ -15,6 +15,7 @@ import {
   openStore,
   type EventInput,
   type StoredEvent,
+  type RuntimeStore,
 } from "@fabric/runtime";
 import { createRegistry, defineTool } from "../index";
 
