@@ -54,7 +54,7 @@ async function seed(store: RuntimeStore, events: readonly EventInput[]) {
   await store.transaction((tx) => append(tx, WORKSPACE, [{ streamId: STREAM, events }]));
 }
 
-async function claimedToolExec(store: RuntimeStore, queue: MemoryQueue, now = 0) {
+async function claimedToolExec(store: RuntimeStore, queue: Queue, now = 0) {
   await store.transaction((tx) =>
     queue.enqueue(tx, { type: "tool.exec", key: CALL_KEY, streamId: STREAM, workspaceId: WORKSPACE })
   );
@@ -233,7 +233,7 @@ describeDrivers("runtime tool.exec worker (ANY-39 R9b)", (h) => {
     );
     expect(kinds).toEqual(["term", "term", "term"]);
     // exactly one re-decide — the completion's; the telemetry added none
-    expect(spied.enqueued.map((job) => job.type)).toEqual(["decide"]);
+    expect(spied.enqueued.map((job) => job.type)).toEqual(["tool.exec", "decide"]);
   });
 
   test("W11a a result carrying an artifact and a memory write records both next to the completion", async () => {
