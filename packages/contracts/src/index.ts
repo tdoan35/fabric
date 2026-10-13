@@ -6,5 +6,6 @@ export * from "./schedule";
 export * from "./tools";
 export * from "./events";
 export * from "./api";
+export * from "./sessions";
 export * from "./read-models";
 export * from "./errors";
