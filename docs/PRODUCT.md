@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| Status | Current, 2026-10-11. Replaces `CONCEPT.md`, the hackathon brief (in git history) |
+| Status | Current, 2026-10-11; amended 2026-10-13 (§2.7, §4.1, §8.3). Replaces `CONCEPT.md`, the hackathon brief (in git history) |
 | Scope | What Fabric is and the rules it keeps. The system: `ARCHITECTURE.md` and `RUNTIME.md`. How agents learn: `LEARNING.md`. What Fabric measures: `LAB.md` |
 | Owner | Ty Thanh Doan |
 | Name | "Fabric" is a codename: it collides with Daniel Miessler's Fabric, Microsoft Fabric and Fabric.js. The brand is undecided |
@@ -28,9 +28,13 @@ Binding. Changing one is a deliberate, dated amendment to this section.
 4. **Agents are definitions; runs are instances.** One definition takes part in many runs and teams, each with its own isolated context.
 5. **A team is an operating model, not a group chat:** purpose, members, a lead accountable for the outcome, decision rights, stages and handoffs, completion criteria, budgets.
 6. **Context boundaries are a design surface.** What crosses a delegation boundary is minimal and inspectable: you can always ask what a run actually loaded.
-7. **New capabilities start minimal.** A proposed specialist's defaults are minimal and explained, never a clone of the assistant. UI toggles describe behaviour; the runtime enforces isolation.
+7. **New capabilities start minimal.** A proposed specialist's defaults are minimal and explained, never a clone of the assistant. UI toggles describe behaviour; the runtime enforces policy, and isolation wherever a sandbox or the cloud runs the work (§8.3).
 8. **Work is bounded.** Runs carry time, cost and rework budgets. Running out produces an actionable blocked state, not an endless loop.
 9. **Memory is scoped:** personal, agent, team/project, run. A specialist's learning never silently writes into the assistant's personal memory.
+
+**Amendments.**
+
+- **2026-10-13, invariant 7:** "the runtime enforces isolation" became "the runtime enforces policy, and isolation wherever a sandbox or the cloud runs the work". On a server you run, agents run on that machine as you by default, so isolation there is an opt-in (§8.3; ARCHITECTURE §9).
 
 ## 3. Primitives
 
@@ -74,7 +78,7 @@ Route by depth, not topic. Quick lookups are assistant work, the way an executiv
 
 | Criterion | Handle directly | Delegate when |
 |---|---|---|
-| Tools | Her assistant toolset: web search, calendar, mail, notes | It needs code execution, the sandbox or specialist tools |
+| Tools | Her assistant toolset: web search, calendar, mail, notes, and a small workspace of her own for quick file and data jobs | It needs real code work, a long-running sandbox or specialist tools |
 | Expertise | General knowledge is enough | It needs a specialist's judgment: weighing benchmarks, licences, methodology |
 | Size | A few steps and a chat-length answer | Many sources, cross-checking, a report or other deliverable, or anything recurring |
 | Stakes | Informational, reversible, or behind an approval gate | A decision depends on the answer |
@@ -156,9 +160,9 @@ Weave pushes what needs you; Work shows where everything is. Ideas stay in chat 
 
 ### 8.3 Approvals and autonomy
 
-- **Approval modes** in the composer: Ask · Auto-approve edits · Full auto. They relax approval only for actions inside the sandbox.
+- **Approval modes** in the composer: Ask (the default) · Auto-approve edits · Full auto. Auto-approve edits covers file writes; commands run without asking only under Full auto. No mode relaxes the always-ask gates below.
 - **Always asks,** whatever the mode and whoever requests it: creating agents, teams or schedules, and the merge, deploy, spend, credential and external-send gates. Gated asks are answered in the app, never from a Weave list action or a chat channel.
-- **Execution is isolated by default.** Running on your own machine or a remote host needs explicit approval and states what it can reach.
+- **Where work runs.** On a server you run (the desktop app's local server, or your own host), agents run directly on that machine as you, by default; a sandbox per agent is an opt-in. In Fabric's cloud, work is always isolated, in the cheapest isolated step that can do the job (ARCHITECTURE §9). Amended 2026-10-13; this was "execution is isolated by default".
 - **Trust grows with use.** Detail stays visible until you stop needing it, and "why did it do that?" is always one tap away.
 
 ## 9. Non-goals and constraints

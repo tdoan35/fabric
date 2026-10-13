@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| Status | Draft, 2026-10-08. Not built. Replaces the hackathon architecture (v0.2, in git history) |
+| Status | Draft, 2026-10-08; amended 2026-10-13 (§2, §9, §14.5). Not built. Replaces the hackathon architecture (v0.2, in git history) |
 | Spec | `PRODUCT.md`. Its §2 invariants are binding |
 | Companion | `RUNTIME.md`: the event log, jobs and recovery that everything here runs on. `LEARNING.md`: how agents learn and forget. `LAB.md`: what Fabric measures on its own budget |
 | Decision | Fabric is its own product, in TypeScript. One server codebase runs inside the desktop app, on a host you run, or in Fabric's cloud. Hermes Agent is prior art, not a dependency |
@@ -46,6 +46,8 @@ The server is the same code in all three places. What changes is where it runs, 
 | 2026-10-10 | Evaluation happens in Fabric's lab on Fabric's budget; a user's tokens are never spent on evaluation unless they ask (`LAB.md`) |
 | 2026-10-11 | The runtime never forces delegation; Dana's judgment decides. A direct turn is bounded by `MAX_STEPS` and a per-turn cost cap; hitting the cap stops the turn with an offer to delegate (`RUNTIME.md` §5.1) |
 | 2026-10-11 | Scheduled runs act as their owner inside a per-fire budget and may delegate. Creating agents or teams and gated actions still ask (§6.5) |
+| 2026-10-13 | On a server you run, tools run on that machine as you by default; sandboxes are opt-in. The cloud uses the execution ladder and is priced like SaaS, not per machine (§9) |
+| 2026-10-13 | Credentials reach sandboxed work only through a fail-closed broker outside the sandbox; logins are one browser profile per user, shared by agents (§9) |
 
 ## 2. Where it runs
 
@@ -55,7 +57,7 @@ The server is the same code in all three places. What changes is where it runs, 
 | Process | Electron utility process; API and workers in one process | API and workers in one process | Stateless API servers plus an autoscaled worker pool |
 | Database | PGlite (Postgres compiled to WASM, in-process) with `pglite-pgvector`, in the app's data directory | Postgres + pgvector | Postgres, tenant-scoped with row-level security |
 | Object storage | Files in the app's data directory | Local disk or any S3-compatible store | S3-compatible |
-| Sandboxes | Local Docker by default. Your own machine only with explicit approval (PRODUCT §8.3) | Docker on the host | Managed microVMs |
+| Where tools run | Your machine, as you; a Docker sandbox per agent is opt-in (§9) | The host, as its user; Docker per agent opt-in | The execution ladder: server-side tools, a virtual workspace, throwaway sandboxes; a persistent computer as a paid add-on (§9) |
 | Sign-in | None: the owner is implicit; paired devices get tokens | Owner passkey; paired devices get tokens | Accounts: OAuth (Google, Apple, GitHub), email, passkeys |
 | Always on | While the machine is awake (§6.4) | Yes | Yes |
 | Channels | Outbound-only transports: no public URL needed (§7.3) | Either | Webhooks |
@@ -210,10 +212,24 @@ Cards for agents, teams and templates: a compact description, tags, an embedding
 ## 9. Tools, sandboxes and credentials
 
 - **Built-in tools:** `delegate`, `ask_user`, `memory.*`, `skills.*`, `artifacts.*`, files, shell, browser, web search, `schedule.*`, `send`. Agents can add MCP servers.
-- **Every tool declares** its effect class (`read`, `idempotent`, `rerunnable`, `once`; `RUNTIME.md` §6) and its gate (none, by approval mode, always human).
-- **Policy is enforced in `tool.exec`**, against the run's effective access (§4). UI toggles describe; the runtime enforces (PRODUCT §2.7).
-- **Sandboxes:** one persistent sandbox per workspace that sleeps when idle, a working directory per run, a slot leased per tool call, and a network allowlist per agent. Providers: local Docker, the host machine (approval required), cloud microVMs (Sprites today). The browser runs inside the sandbox.
-- **Credentials** (model keys, channel tokens, connector secrets) live in an encrypted vault: the OS keychain locally, envelope encryption with a KMS in the cloud. They are injected into tool calls by the runtime, scoped per agent, and never appear in prompts or the log.
+- **Every tool declares** its effect class (`read`, `idempotent`, `rerunnable`, `once`; `RUNTIME.md` §6), its gate (none, by approval mode, always human), and the lowest execution step it needs (below).
+- **Policy is enforced in `tool.exec`**, against the run's effective access (§4) and the session's approval mode (PRODUCT §8.3). A call that needs approval becomes a `human.requested` wait. UI toggles describe; the runtime enforces (PRODUCT §2.7).
+- **Where tools run** (decided 2026-10-13):
+  - *On a server you run* (local or remote host): directly on that machine, as you, by default. That covers files, the shell (bash, zsh or PowerShell, detected per host) and anything you can reach. A sandbox per agent (Docker) is an opt-in; Windows gets its own sandbox design.
+  - *In the cloud*: the **execution ladder**. Each job uses the cheapest step that can do it:
+    0. Server-side tools: connectors through their APIs, web search, memory, artifacts.
+    1. A virtual workspace in an isolated worker with no vault access: files, text tools, light Python/JS, folders mounted as files. Whether this step ships, and on which engine, is decided by a spike.
+    2. A throwaway sandbox for real programs, billed per second (cloud microVMs, Sprites today).
+    3. A persistent computer: an always-warm VM with its own disk, sold as a paid add-on.
+
+    A per-workspace cap on concurrent sandboxes holds a slot per tool call, never per run, with chat turns first; a call waiting for a slot is recorded, so it is never mistaken for a stall. "Always on" comes from the runtime (log, timers, schedules), not from an always-on computer.
+- **Isolation** is per agent wherever a sandbox or the cloud runs the job. An agent sees its own working folder and the folders it is granted. No sandbox is handed from one agent to another: work passes by reference, through project folders in object storage with narrowed grants, or through git.
+- **Persistence:** in the cloud, object-storage folders. A run's working folder is kept for a few days. A persistent disk exists only on your own machine or the persistent computer. No GPUs in v1.
+- **Credentials** (model keys, channel tokens, connector secrets) live in an encrypted vault: the OS keychain locally, an encrypted table on a remote host, envelope encryption with a KMS in the cloud. They never appear in prompts or the log.
+  - **The broker.** Sandboxed and cloud jobs never see a secret: a credential broker in the Fabric server swaps placeholders for real credentials per request. It serves named endpoints (no TLS interception in v1). It fails closed: no rule, no request. Each credential is scoped by host, method and path. Every use is recorded without the value.
+  - **Git** uses a GitHub App limited to the repos you attach. Agents push only `fabric/*` branches; merging always asks.
+  - **On your own machine** the default host execution can read what you can, so the broker protects only sandboxed work there.
+- **Browser logins:** one encrypted browser profile per user, shared by the agents that have the browser tool. A sandboxed browser loads it for a job and saves it after, one job at a time. You take over the browser for passwords, 2FA and payments.
 - **Skills** use the Agent Skills format (`SKILL.md` folders), loaded on demand. Agents can be imported from Hermes or Claude Code as proposals. Agents learn and forget skills under a per-agent context budget (`LEARNING.md`); catalog skills load only on models where the lab found they help (`LAB.md`).
 
 ## 10. Surfaces and protocol
@@ -275,6 +291,6 @@ apps/web, apps/mobile
 2. **Push for local and remote connections.** Push credentials belong to the app's publisher, so self-run servers can't send push directly. Options: a free Fabric push relay, or rely on channels for notifications when not on the cloud.
 3. **Moving a workspace between connections** (local → cloud, for example): v1 or later. The log makes export straightforward; channel accounts and in-flight runs need a handover.
 4. **Cloud:** bring-your-own-key in the cloud, and the pricing shape.
-5. **Sandboxes:** what persists in a workspace's sandbox, and whether v1 needs GPUs.
+5. **Sandboxes:** answered 2026-10-13 (§9). Cloud persistence is object-storage folders, a persistent disk only on your own machine or the paid persistent computer; no GPUs in v1.
 6. **Multiple connections at once:** one connection per window (proposed), or a combined view across connections.
 7. **License:** Apache-2.0, everything in one repo (proposed).
