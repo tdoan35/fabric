@@ -5,8 +5,8 @@
 import { createHash, randomBytes } from "node:crypto";
 import type { IncomingHttpHeaders } from "node:http";
 import { createServer } from "node:http";
-import { AddressInfo } from "node:net";
-import { afterAll, beforeAll, beforeEach, expect, test } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, expect, test } from "vitest";
+import type { AddressInfo } from "node:net";
 import { memoryVault } from "../vault";
 import {
   createTokenStore,
@@ -78,7 +78,7 @@ beforeEach(() => {
   answer = { kind: "ok" };
 });
 
-const rules: readonly CredentialRule[] = [
+const rules = (): readonly CredentialRule[] => [
   {
     name: "github",
     upstream: upstreamUrl,
@@ -129,7 +129,7 @@ beforeEach(async () => {
   tokens = createTokenStore(() => clock);
   broker = await startBroker({
     vault,
-    rules,
+    rules: rules(),
     tokens,
     onUse: (record) => uses.push(record),
   });
@@ -186,13 +186,13 @@ test("B3 a missing, garbage, expired or revoked token is a 403 and the upstream 
   const garbage = await egress("github/repos/fabric", { headers: bearer("garbage-token") });
   expect(garbage.status).toBe(403);
 
-  const expiring = broker.tokens.issue({ workspaceId: WORKSPACE, agentId: "dana", ttlMs: 5_000 });
+  const expiring = tokens.issue({ workspaceId: WORKSPACE, agentId: "dana", ttlMs: 5_000 });
   clock += 6_000; // past the ttl
   const expired = await egress("github/repos/fabric", { headers: bearer(expiring) });
   expect(expired.status).toBe(403);
 
   const revoked = tokenFor();
-  broker.tokens.revoke(revoked);
+  tokens.revoke(revoked);
   const afterRevoke = await egress("github/repos/fabric", { headers: bearer(revoked) });
   expect(afterRevoke.status).toBe(403);
 
@@ -234,7 +234,7 @@ test("B7 a missing secret is a 403 `credential unavailable` and nothing is sent 
   const emptyTokens = createTokenStore(() => clock);
   const empty = await startBroker({
     vault: memoryVault(),
-    rules,
+    rules: rules(),
     tokens: emptyTokens,
     onUse: () => {},
   });
@@ -270,13 +270,19 @@ test("B8 the caller's Authorization, Cookie and X-Fabric-* headers never reach t
 
 test("B9 a 302 is returned unfollowed: cross-host Location is stripped, same-host Location is kept", async () => {
   answer = { kind: "redirect", location: "http://example.invalid/elsewhere" };
-  const crossHost = await egress("github/repos/fabric", { headers: bearer(tokenFor()) });
+  const crossHost = await egress("github/repos/fabric", {
+    headers: bearer(tokenFor()),
+    redirect: "manual", // the caller, like the broker, does not follow
+  });
   expect(crossHost.status).toBe(302);
   expect(crossHost.headers.get("location")).toBeNull();
   expect(received).toHaveLength(1);
 
   answer = { kind: "redirect", location: `${upstreamUrl}/next` };
-  const sameHost = await egress("github/repos/fabric", { headers: bearer(tokenFor()) });
+  const sameHost = await egress("github/repos/fabric", {
+    headers: bearer(tokenFor()),
+    redirect: "manual",
+  });
   expect(sameHost.status).toBe(302);
   expect(sameHost.headers.get("location")).toBe(`${upstreamUrl}/next`);
   expect(received).toHaveLength(2);
