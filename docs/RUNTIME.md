@@ -297,6 +297,7 @@ Cost of the crash: one interrupted sandbox command and one extra model call. Cha
 - **2026-10-08: Sessions run on the log in v1.** Channels, sessions that continue across devices, and long-running delegations all need a turn to outlive the client that started it. The spike's chat measurement still applies: first token through the queue within ~200 ms of a direct call.
 - **2026-10-08: No workflow engine.** Temporal was reviewed as the alternative: the same model (event history, workflow tasks, activities), mature, with an AI SDK integration. It was set aside because the local server runs inside the desktop app, where Temporal's server can't. Five of its features became amendments above: per-job timeouts, heartbeats and retries (§4); validated answers to waits (§7); idempotent run creation (§5.2); schedule overlap rules (§9); replay tests in CI (§10). Its history limits motivated compaction for long sessions (§5.1).
 - **2026-10-08: Large outputs** go to object storage: files in the app's data directory locally, S3-compatible elsewhere.
+- **2026-10-12: Queue: own table.** The pg-boss probe (ANY-33) passes 11 of 12 conformance cases on both drivers — Q7's final assertion pins the id literal `qjob-1`, unsatisfiable on pg-boss's uuid ids — and exceeds the idle budget at 79 queries/min on both (limit 60, empty-claim probe alone is fetch + expiry + re-check); pickup p95 4.5 ms on PGlite and 16.3 ms on Postgres (limit 50) and the ~60 s dead-worker handover (limit 2× the 60 s lease) passed, but the rule needs all four.
 
 **Queue: decided by the spike.** It must run unchanged on PGlite (single connection, in-process) and on Postgres.
 
@@ -309,7 +310,7 @@ Cost of the crash: one interrupted sandbox command and one extra model call. Cha
 | Per-workspace cap | None built in | `groupConcurrency` grouped by workspace | A count in the claim query |
 | Maturity | Long-stable core | Heartbeats and group concurrency are recent | New code: `SKIP LOCKED` claims, leases, heartbeats, backoff |
 
-Leaning: pg-boss if it runs on PGlite with acceptable latency; otherwise our own table, kept small. Hermes Agent's hand-built cron and kanban (a long list of crash and ownership invariants in its `cron/AGENTS.md`) are the warning about how much an own queue grows; most of that list comes from many processes sharing files, which one database with transactions avoids.
+Decided: own table (the 2026-10-12 bullet under Decided above). Hermes Agent's hand-built cron and kanban (a long list of crash and ownership invariants in its `cron/AGENTS.md`) are the warning about how much an own queue grows; most of that list comes from many processes sharing files, which one database with transactions avoids.
 
 **Still open**
 1. **Token streaming transport** under load in the cloud: NOTIFY payloads are capped at 8 KB and share one channel.
