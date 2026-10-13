@@ -356,4 +356,48 @@ describe("R8 durable queue [pglite]", () => {
     expect(reclaimed?.jobId).toBe(job.id);
     expect(reclaimed?.attempt).toBe(2);
   });
+
+  it("R8.7 a listener on a second connection wakes from another instance's commit", async () => {
+    await withSharedDb(async (url) => {
+      const bootstrap = new PgQueue({
+        connection: { kind: "postgres", connectionString: url },
+        generateId: () => `qjob-warm`,
+      });
+      await bootstrap.get("warm-up"); // settle the schema before anyone listens
+      await bootstrap.close();
+
+      // Two independent instances, two connection pools: only the cross-process
+      // LISTEN/NOTIFY leg can carry the wake between them.
+      const enqueuer = new PgQueue({
+        connection: { kind: "postgres", connectionString: url },
+        generateId: () => `qjob-${randomUUID()}`,
+      });
+      const listener = new PgQueue({
+        connection: { kind: "postgres", connectionString: url },
+        generateId: () => `qjob-${randomUUID()}`,
+      });
+      dispose.push(() =>
+        Promise.all([enqueuer.close(), listener.close()]).then(() => undefined)
+      );
+
+      const backstopMs = 60_000;
+      const started = Date.now();
+      const waiting = listener.claimWaiting("worker-listen", ["deliver"], {
+        backstopMs,
+        now: () => Date.now(),
+      });
+      await sleep(100); // the first claim ran, found nothing, and the waiter is parked
+      const tx = nowTx();
+      const job = await enqueuer.enqueue(tx, {
+        type: "deliver",
+        key: "deliver:wake:cross",
+        workspaceId: "ws-cross",
+      });
+      tx.commit();
+      const lease = await waiting;
+      expect(lease?.jobId).toBe(job.id);
+      // The wake arrived over NOTIFY, not the 60 s backstop.
+      expect(Date.now() - started).toBeLessThan(backstopMs / 2);
+    });
+  });
 });
