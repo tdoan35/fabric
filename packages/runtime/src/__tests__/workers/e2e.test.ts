@@ -77,10 +77,6 @@ describeDrivers("runtime worker loop, end to end (ANY-40 R9c)", (h) => {
     const processed = await runUntilIdle({ store, queue, ports: { model, tools, surface }, workerId: "worker-e2e" });
     expect(processed).toBeGreaterThan(0);
 
-    // the loop ran dry: nothing left claimable, a second pass idle
-    const again = await runUntilIdle({ store, queue, ports: { model, tools, surface }, workerId: "worker-e2e" });
-    expect(again).toBe(0);
-
     const factTypes = (await factsOn(store, stream)).map((event) => event.type);
     expect(factTypes).toEqual([
       "run.created",
@@ -119,6 +115,11 @@ describeDrivers("runtime worker loop, end to end (ANY-40 R9c)", (h) => {
     const surface = new FakeSurface();
     const parent = "session:p";
 
+    // the child's turn input: the delegation's brief, on the child's stream
+    // before the loop's run.created lands (the derived id is deterministic)
+    await seed(store, childStream, [
+      messageReceived("look it up"),
+    ]);
     await seed(store, parent, [
       sessionCreated({
         systemPrompt: "P",

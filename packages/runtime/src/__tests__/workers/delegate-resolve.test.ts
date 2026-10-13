@@ -85,6 +85,7 @@ describeDrivers("runtime delegate.resolve worker (ANY-40 R9c)", (h) => {
     ]);
     await seed(store, childStream, [
       runCreated({ systemPrompt: "S", tools: [] }, { sessionId: "p1", callId: "c1" }),
+      llmCompleted(1, 1, "child done", [], 0.5),
       { type: "run.finished", actor: "decide", payload: { result: "child done", costUsd: 0.5 } },
     ]);
     await enqueue(store, queue, { type: "delegate.resolve", key, streamId: childStream, workspaceId: WORKSPACE });
@@ -136,6 +137,7 @@ describeDrivers("runtime delegate.resolve worker (ANY-40 R9c)", (h) => {
     ]);
     await seed(store, childStream, [
       runCreated({ systemPrompt: "S", tools: [] }, { sessionId: "p2", callId: "c1" }),
+      llmCompleted(1, 1, "bg done", [], 0.4),
       { type: "run.finished", actor: "decide", payload: { result: "bg done", costUsd: 0.4 } },
     ]);
     await enqueue(store, queue, { type: "delegate.resolve", key, streamId: childStream, workspaceId: WORKSPACE });
