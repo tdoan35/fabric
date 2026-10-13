@@ -99,7 +99,15 @@ describe("R8 durable queue [pglite]", () => {
   it("R8.3 an appended fact and its decide job commit together; a rolled-back append leaves no job", async () => {
     const adapter = new PgliteAdapter();
     await migrate(adapter);
-    const queue = makeQueueWith(adapter, dispose);
+    // The store's adapter queries bare rows; the queue wants pg's {rows}.
+    const pglite = {
+      query: async (sql: string, values?: unknown[]) => ({
+        rows: await adapter.query(sql, (values ?? []) as never),
+      }),
+      exec: (sql: string) => adapter.exec(sql),
+    };
+    const queue = new PgQueue({ connection: { kind: "pglite", pglite } });
+    dispose.push(() => adapter.close());
     const port = trackedDecidePort(queue, "ws-a");
 
     // Committed: the fact and its decide job land in one transaction.
@@ -173,16 +181,6 @@ describe("R8 durable queue [pglite]", () => {
     expect(reclaimed?.jobId).toBe(job.id);
     expect(reclaimed?.attempt).toBe(2);
   });
-
-  function makeQueueWith(pglite: unknown, sink: (() => Promise<void>)[]): PgQueue {
-    let seq = 0;
-    const queue = new PgQueue({
-      connection: { kind: "pglite", pglite: pglite as never },
-      generateId: () => `qjob-${++seq}`,
-    });
-    sink.push(() => (pglite as { close(): Promise<void> }).close());
-    return queue;
-  }
 });
 
 // ---------------------------------------------------------------------------
@@ -208,7 +206,8 @@ describe("R8 durable queue [pglite]", () => {
     return queue;
   };
 
-  /** A fresh database shared by everything opened inside `run`; dropped after. */
+  /** A fresh database shared by everything opened inside `run`; dropped, and
+   * its admin pool closed, in the suite's afterAll (after the queues close). */
   async function withSharedDb(run: (url: string) => Promise<void>): Promise<void> {
     const admin = new Pool({ connectionString: PG_URL! });
     const database = `runtime_q_${randomUUID().replace(/-/g, "").slice(0, 8)}`;
@@ -216,13 +215,10 @@ describe("R8 durable queue [pglite]", () => {
     const url = new URL(PG_URL!);
     url.pathname = `/${database}`;
     dispose.push(async () => {
-      await admin.query(`drop database if exists "${database}" with (force)`);
+      await admin.query(`drop database if exists "${database}" with (force)`).catch(() => undefined);
+      await admin.end().catch(() => undefined);
     });
-    try {
-      await run(url.toString());
-    } finally {
-      await admin.query(`drop database if exists "${database}" with (force)`);
-    }
+    await run(url.toString());
   }
 
   it("R8.2 runQueueConformance (R6 Q1–Q12) passes on Postgres", async () => {
@@ -241,6 +237,7 @@ describe("R8 durable queue [pglite]", () => {
     await withSharedDb(async (url) => {
       const { openStore } = await import("../../index");
       const store = await openStore({ driver: "postgres", url });
+      dispose.push(() => store.close().catch(() => undefined));
       const queue = new PgQueue({
         connection: { kind: "postgres", connectionString: url },
         generateId: () => `qjob-${randomUUID()}`,
@@ -282,7 +279,7 @@ describe("R8 durable queue [pglite]", () => {
             generateId: () => `qjob-${randomUUID()}`,
           })
       );
-      dispose.push(() => Promise.all(queues.map((queue) => queue.close())));
+      dispose.push(() => Promise.all(queues.map((queue) => queue.close())).then(() => undefined));
       const [enqueuer, a, b] = queues;
       await enqueuer.get("warm-up"); // settle the schema before the second pool opens
 
