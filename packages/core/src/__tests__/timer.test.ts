@@ -112,12 +112,12 @@ test("T8: a wait with one reminder queues two timers; the firing reminds and lea
   const state = fold(events, {});
   const decision = decideAgent(state, { ...ASK_DEF }, NOW);
 
-  // two timers: the deadline, and the reminder 15 s ahead of it
+  // two timers: the deadline, and the reminder 15 s ahead of it (armed after the rule's own)
   expect(timers(decision).map((job) => job.key)).toEqual([
-    `${STREAM}:timer:wait:1:c1:reminder:0`,
     `${STREAM}:timer:wait:1:c1`,
+    `${STREAM}:timer:wait:1:c1:reminder:0`,
   ]);
-  expect(timers(decision).map((job) => job.runAt)).toEqual([NOW + 45_000, NOW + 60_000]);
+  expect(timers(decision).map((job) => job.runAt)).toEqual([NOW + 60_000, NOW + 45_000]);
 
   // the reminder fires: one telemetry fact-shaped note, no jobs, the human not answered
   const waited = fold(
@@ -134,7 +134,7 @@ test("T8: a wait with one reminder queues two timers; the firing reminds and lea
     {}
   );
   const trigger = parseTimerTrigger(STREAM, `${STREAM}:timer:wait:1:c1:reminder:0`);
-  const fired = decideTimer(waited, trigger as TimerTrigger, NOW + 45_000);
+  const fired = decideTimer(waited, STREAM, trigger as TimerTrigger, NOW + 45_000);
   expect(fired.jobs).toEqual([]);
   expect(fired.events.map((event) => event.type)).toEqual(["run.progress"]);
   expect(fired.events[0]!.payload).toMatchObject({ milestone: "reminder" });
@@ -185,7 +185,7 @@ test("watchdog strike one with no progress requeues the lost calls and arms the 
   const state = fold(runningEvents({ tools: ["shell"], stallAfterMs: 30_000 }), {});
   expect(state.status).toBe("running");
 
-    const fired = decideTimer(state, { kind: "watchdog", armedHead: 5, strike: 1 }, NOW);
+    const fired = decideTimer(state, STREAM, { kind: "watchdog", armedHead: 5, strike: 1 }, NOW);
   expect(fired.events).toEqual([]);
   expect(fired.jobs).toEqual([
     // the open call's job, under its ordinary key: a live lease dedupes, a lost one returns
@@ -217,7 +217,7 @@ test("watchdog strike one requeues a requested-but-unanswered model call too", (
     evt(5, "llm.requested", { turn: 1, callNo: 2, model: "m1", params: {}, snapshotId: null }),
   ];
   const state = fold(events, {});
-  const fired = decideTimer(state, { kind: "watchdog", armedHead: 5, strike: 1 }, NOW);
+  const fired = decideTimer(state, STREAM, { kind: "watchdog", armedHead: 5, strike: 1 }, NOW);
   expect(fired.events).toEqual([]);
   expect(fired.jobs).toEqual([
     { type: "llm.call", key: `${STREAM}:1:llm:2`, streamId: STREAM },
@@ -232,7 +232,7 @@ test("watchdog strike one requeues a requested-but-unanswered model call too", (
 
 test("watchdog strike two, still no progress: run.blocked with reason stall", () => {
   const state = fold(runningEvents({ tools: ["shell"], stallAfterMs: 30_000 }), {});
-  const fired = decideTimer(state, { kind: "watchdog", armedHead: 5, strike: 2 }, NOW);
+  const fired = decideTimer(state, STREAM, { kind: "watchdog", armedHead: 5, strike: 2 }, NOW);
   expect(fired.jobs).toEqual([]);
   expect(fired.events).toEqual([{ type: "run.blocked", payload: { reason: "stall" }, streamId: undefined }]);
 });
@@ -240,11 +240,16 @@ test("watchdog strike two, still no progress: run.blocked with reason stall", ()
 test("watchdog with progress since the armed head is a no-op at either strike", () => {
   const events = runningEvents({ tools: ["shell"], stallAfterMs: 30_000 });
   const progressed = fold(
-    [...events, evt(6, "tool.result", { line: "pong", kind: "term" })],
+    // a fact after the armed head: the tool result telemetry does not count, a call does
+    [
+      ...events,
+      evt(6, "tool.result", { line: "pong", kind: "term" }),
+      evt(7, "tool.call", { tool: "shell", summary: "", callId: "c2", args: {}, effect: "read" }),
+    ],
     {}
   );
   for (const strike of [1, 2] as const) {
-    const fired = decideTimer(progressed, { kind: "watchdog", armedHead: 5, strike }, NOW);
+    const fired = decideTimer(progressed, STREAM, { kind: "watchdog", armedHead: 5, strike }, NOW);
     expect(fired).toEqual({ events: [], jobs: [] });
   }
 });
@@ -270,7 +275,7 @@ test("watchdog never bites a waiting, idle or terminal stream", () => {
   );
   for (const state of [waiting, finished]) {
     for (const strike of [1, 2] as const) {
-      expect(decideTimer(state, { kind: "watchdog", armedHead: state.head, strike }, NOW)).toEqual({
+      expect(decideTimer(state, STREAM, { kind: "watchdog", armedHead: state.head, strike }, NOW)).toEqual({
         events: [],
         jobs: [],
       });
@@ -289,7 +294,7 @@ test("budget: a still-running run at startedAt + timeS blocks with budget_time; 
     ],
     {}
   );
-  const fired = decideTimer(running, { kind: "budget" }, NOW + 60_000);
+  const fired = decideTimer(running, STREAM, { kind: "budget" }, NOW + 60_000);
   expect(fired.jobs).toEqual([]);
   expect(fired.events).toEqual([
     { type: "run.blocked", payload: { reason: "budget_time" }, streamId: undefined },
@@ -313,27 +318,33 @@ test("budget: a still-running run at startedAt + timeS blocks with budget_time; 
     ],
     {}
   );
-  expect(decideTimer(finished, { kind: "budget" }, NOW + 60_000)).toEqual({ events: [], jobs: [] });
+  expect(decideTimer(finished, STREAM, { kind: "budget" }, NOW + 60_000)).toEqual({ events: [], jobs: [] });
 });
 
 // -- the arms -------------------------------------------------------------------
 
-test("a running decide on a stream with a stall window and a time budget arms both timers", () => {
-  const state = fold(runningEvents({ tools: ["shell"], stallAfterMs: 30_000, budget: { timeS: 60 } }), {});
-  const decision = decideAgent(state, STALL_DEF, NOW);
+test("a running decide on a run with a stall window and a time budget arms both timers", () => {
+  const RUN = "run:r1";
+  const events = runningEvents({
+    tools: ["shell"],
+    stallAfterMs: 30_000,
+    budget: { timeS: 60 },
+  }).map((event) => ({ ...event, streamId: RUN }));
+  const state = fold(events, {});
+  const decision = decideAgent(state, { ...STALL_DEF, streamId: RUN }, NOW);
 
   expect(timers(decision).map((job) => job.key)).toEqual([
-    `${STREAM}:timer:watchdog:h5`,
-    `${STREAM}:timer:budget`,
+    `${RUN}:timer:watchdog:h5`,
+    `${RUN}:timer:budget`,
   ]);
   expect(timers(decision).map((job) => job.runAt)).toEqual([NOW + 30_000, NOW + 60_000]);
   // the re-arm key is the head: the next fact arms a later timer
-  expect(parseTimerTrigger(STREAM, `${STREAM}:timer:watchdog:h5`)).toEqual({
+  expect(parseTimerTrigger(RUN, `${RUN}:timer:watchdog:h5`)).toEqual({
     kind: "watchdog",
     armedHead: 5,
     strike: 1,
   });
-  expect(parseTimerTrigger(STREAM, `${STREAM}:timer:budget`)).toEqual({ kind: "budget" });
+  expect(parseTimerTrigger(RUN, `${RUN}:timer:budget`)).toEqual({ kind: "budget" });
 });
 
 test("no timers are armed without the knobs, and none on a waiting stream", () => {

@@ -69,7 +69,7 @@ describeDrivers("runtime wait/cancel API (ANY-36 R10)", (h) => {
     const store = await h.openStore();
     const stream = "session:a1";
     const queue = new MemoryQueue();
-    await waitingStream(store);
+    await waitingStream(store, stream);
 
     const result = await respond(store, WORKSPACE, stream, "w1", "yes", {
       by: "ty",
@@ -85,7 +85,7 @@ describeDrivers("runtime wait/cancel API (ANY-36 R10)", (h) => {
 
     // the deadline timer, fired after the answer: no events, nothing to decide
     await store.transaction((tx) =>
-      queue.enqueue(tx, { type: "run.timer", key: `${stream}:timer:w1`, streamId, workspaceId: WORKSPACE })
+      queue.enqueue(tx, { type: "run.timer", key: `${stream}:timer:w1`, streamId: stream, workspaceId: WORKSPACE })
     );
     const lease = await queue.claim("worker-timer", ["run.timer"], DEADLINE);
     expect(lease?.key).toBe(`${stream}:timer:w1`);
@@ -98,11 +98,11 @@ describeDrivers("runtime wait/cancel API (ANY-36 R10)", (h) => {
     const store = await h.openStore();
     const stream = "session:a2";
     const queue = new MemoryQueue();
-    await waitingStream(store);
+    await waitingStream(store, stream);
 
     // the deadline passes unanswered: the timer fires (and observes, appending nothing)
     await store.transaction((tx) =>
-      queue.enqueue(tx, { type: "run.timer", key: `${stream}:timer:w1`, streamId, workspaceId: WORKSPACE })
+      queue.enqueue(tx, { type: "run.timer", key: `${stream}:timer:w1`, streamId: stream, workspaceId: WORKSPACE })
     );
     const lease = await queue.claim("worker-timer", ["run.timer"], DEADLINE);
     await handleTimerJob(lease!, { store, queue, now: () => DEADLINE });
@@ -119,7 +119,7 @@ describeDrivers("runtime wait/cancel API (ANY-36 R10)", (h) => {
   test("T4: a second answer to the same wait is refused as already_answered", async () => {
     const store = await h.openStore();
     const stream = "session:a3";
-    await waitingStream(store);
+    await waitingStream(store, stream);
 
     const opts = { by: "ty", surface: "app" as const, now: () => NOW + 1_000 };
     expect(await respond(store, WORKSPACE, stream, "w1", "yes", opts)).toEqual({ outcome: "accepted" });
@@ -131,7 +131,7 @@ describeDrivers("runtime wait/cancel API (ANY-36 R10)", (h) => {
   test("T5: an answer on a cancelled run is refused as cancelled", async () => {
     const store = await h.openStore();
     const stream = "session:a4";
-    await waitingStream(store);
+    await waitingStream(store, stream);
     await cancel(store, WORKSPACE, stream, "ty");
 
     expect((await of(store, stream, "run.cancel_requested"))[0]!.payload).toEqual({ by: "ty" });
@@ -169,7 +169,7 @@ describeDrivers("runtime wait/cancel API (ANY-36 R10)", (h) => {
   test("T7: ten concurrent answers from separate connections yield exactly one acceptance", async () => {
     const store = await h.openStore();
     const stream = "session:a6";
-    await waitingStream(store);
+    await waitingStream(store, stream);
 
     const results = await Promise.all(
       Array.from({ length: 10 }, (_, n) =>

@@ -135,7 +135,7 @@ describeDrivers("runtime run.timer worker (ANY-36 R10)", (h) => {
     ]);
 
     // the watchdog armed at head 5 fires with no progress
-    await enqueue(store, queue, { type: "run.timer", key: `${stream}:timer:watchdog:h5`, streamId });
+    await enqueue(store, queue, { type: "run.timer", key: `${stream}:timer:watchdog:h5`, streamId: stream });
     const lease = await queue.claim("worker-timer", ["run.timer"], 100_000);
     expect(lease?.key).toBe(`${stream}:timer:watchdog:h5`);
     await handleTimerJob(lease!, { store, queue, now: () => 100_000 });
@@ -170,7 +170,7 @@ describeDrivers("runtime run.timer worker (ANY-36 R10)", (h) => {
       llmCompleted(1, [{ id: "c1", name: "shell", args: {} }]),
       toolCall("c1"),
     ]);
-    await enqueue(store, queue, { type: "run.timer", key: `${stream}:timer:watchdog:h5`, streamId });
+    await enqueue(store, queue, { type: "run.timer", key: `${stream}:timer:watchdog:h5`, streamId: stream });
 
     const first = await queue.claim("worker-timer", ["run.timer"], 100_000);
     await handleTimerJob(first!, { store, queue, now: () => 100_000 });
@@ -201,13 +201,16 @@ describeDrivers("runtime run.timer worker (ANY-36 R10)", (h) => {
       runCreated({ tools: [], budget: { timeS: 60 } }),
       runStarted,
       llmRequested(1),
-      llmCompleted(1, []),
-      { type: "run.finished", actor: "decide", payload: { result: "done", costUsd: 0.1 } },
     ]);
 
     // one decide per run arms the budget timer at now + timeS
     await runDecide(store, queue, running, 1_000);
     await runDecide(store, queue, finished, 1_000);
+    // the second run finishes at +50 s, inside its budget
+    await seed(store, finished, [
+      llmCompleted(1, []),
+      { type: "run.finished", actor: "decide", payload: { result: "done", costUsd: 0.1 } },
+    ]);
     const budget = await queue.claim("probe-a", ["run.timer"], 61_000);
     expect(budget?.key).toBe(`${running}:timer:budget`);
     expect((await queue.get(budget!.jobId))?.runAt).toBe(61_000);

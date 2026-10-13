@@ -34,5 +34,6 @@
       "text": "Cancelled by the operator."
     }
   },
-  "callAttempt": 0
+  "callAttempt": 0,
+  "head": 8
 }
