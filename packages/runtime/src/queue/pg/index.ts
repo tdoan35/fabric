@@ -84,6 +84,14 @@ function guarded(key: string, run: () => Promise<void>): Promise<void> {
   return next;
 }
 
+/** Staged applies not yet written, keyed per database: `#settle` waits for the
+ * database's outstanding applies, so an operation following any queue's
+ `commit()` — on a sibling instance too — never observes the pre-insert
+ * snapshot (the R8.4 two-worker race). The instance's own drain is `#drain`;
+ * this covers the pool-per-instance shape where the commit's writes land on
+ * another queue's connection. */
+const stagedApplies = new Map<string | object, Set<Promise<void>>>();
+
 const CLAIM_SQL = `
 with cfg as (
   select * from jsonb_to_recordset($4::jsonb)
@@ -152,6 +160,12 @@ export class PgQueue implements Queue {
   #intents: Intent[] = [];
   #drain: Promise<void> | null = null;
   #wakeWaiters = new Set<() => void>();
+  /** Where this queue's staged applies are registered (the database, or the
+   * PGlite instance); null only before init. */
+  #stagedKey: string | object | null = null;
+  /** Resolve sides of this instance's outstanding staged applies; the drain's
+   * end is the latest point any of them can be waiting on. */
+  #stagedResolvers = new Set<() => void>();
 
   constructor(options: PgQueueOptions) {
     this.#options = options;
@@ -172,6 +186,8 @@ export class PgQueue implements Queue {
     let guardKey = `pglite:${randomUUID()}`;
     if (connection.kind === "pglite") {
       this.#pglite = connection.pglite;
+      // Sibling queues over the same PGlite share the staged registry too.
+      this.#stagedKey = connection.pglite;
     } else {
       let url: string;
       if (connection.kind === "postgresAdmin") {
@@ -181,6 +197,7 @@ export class PgQueue implements Queue {
         url = connection.connectionString;
       }
       guardKey = url;
+      this.#stagedKey = url;
       this.#connectionUrl = url;
       this.#pool = new Pool({
         connectionString: url,
@@ -285,6 +302,9 @@ export class PgQueue implements Queue {
       return record;
     }
     tx.onCommit(() => {
+      // Registered synchronously in the hook, BEFORE the apply is queued: any
+      // later #settle on this database waits for this apply.
+      this.#trackStaged();
       this.#intents.push({
         run: async () => {
           await this.#insertLive((sql, values) => this.#exec(sql, values), record);
@@ -618,12 +638,39 @@ export class PgQueue implements Queue {
       }
     } finally {
       this.#drain = null;
+      // The drain ended — cleanly, or mid-loop on an error. Nothing further
+      // runs for this batch: release this instance's staged waits so a
+      // #settle on any queue sharing the database cannot hang on a dropped
+      // intent (an apply lost to a failed sibling is the pre-existing
+      // fire-and-forget semantics, unchanged).
+      for (const resolve of this.#stagedResolvers) resolve();
+      this.#stagedResolvers.clear();
     }
   }
 
-  /** Init, then whatever commit hooks are still in flight. */
-  #settle(): Promise<void> {
-    return this.#ready.then(() => this.#drain ?? undefined);
+  /** Register a not-yet-written staged apply under this queue's database key;
+   * resolved when this instance's drain ends (the latest point the apply can
+   * still be pending — the intents all run inside one drain). */
+  #trackStaged(): void {
+    const key = this.#stagedKey;
+    if (key === null) return;
+    let set = stagedApplies.get(key);
+    if (!set) stagedApplies.set(key, (set = new Set()));
+    let resolveApplied!: () => void;
+    const applied = new Promise<void>((resolve) => (resolveApplied = resolve));
+    set.add(applied);
+    void applied.then(() => set?.delete(applied));
+    this.#stagedResolvers.add(resolveApplied);
+  }
+
+  /** Init, then whatever commit hooks are still in flight, then this
+   * database's outstanding staged applies — sibling queues' commits too, so a
+   * claim after another instance's `commit()` cannot see the pre-insert
+   * snapshot (R8.4). */
+  #settle(): Promise<unknown> {
+    const staged =
+      this.#stagedKey !== null ? [...(stagedApplies.get(this.#stagedKey) ?? [])] : [];
+    return this.#ready.then(() => Promise.all([this.#drain, ...staged]));
   }
 
   #wakeChannel(): string {
