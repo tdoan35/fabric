@@ -9,6 +9,7 @@ import type { JSONObject, LanguageModelV3, LanguageModelV4, LanguageModelV4Strea
 import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
 import { createOpenRouter } from "@openrouter/ai-sdk-provider";
 import { createNeon } from "@neon/ai-sdk-provider";
+import { costOf } from "./pricing";
 
 /** A model instance (AI SDK spec v4), as returned by model(). */
 export type LanguageModel = LanguageModelV4;
@@ -210,32 +211,9 @@ function neonModel(id: string): LanguageModelV3 {
   return createNeon({ baseURL, apiKey })(id);
 }
 
-// ---- Cost (ARCH §10): Spark is free, OpenRouter reports usage.cost, Neon comes from a table in code ----
+// ---- Cost (ARCH §10): the tables live in ./pricing, shared with the model port ----
 
-export const NEON_PRICES: Record<string, { inputPerMtok: number; outputPerMtok: number }> = {
-  // Placeholder list prices (DANA re-checks against GET /v1/models pricing at the venue); metered costs are flagged estimated.
-  "claude-sonnet-5": { inputPerMtok: 3, outputPerMtok: 15 },
-  "claude-haiku-4-5": { inputPerMtok: 1, outputPerMtok: 5 },
-  "claude-opus-5-5": { inputPerMtok: 5, outputPerMtok: 25 },
-};
-
-function costOf(
-  provider: Provider,
-  modelId: string,
-  inputTokens: number,
-  outputTokens: number,
-  meta: SharedV4ProviderMetadata | undefined,
-): { costUsd?: number; estimated?: boolean } {
-  if (provider === "spark") return { costUsd: 0 };
-  if (provider === "openrouter") {
-    const usage = meta && "openrouter" in meta ? (meta as { openrouter?: { usage?: { cost?: unknown } } }).openrouter?.usage : undefined;
-    const cost = typeof usage?.cost === "number" ? usage.cost : undefined;
-    return cost != null ? { costUsd: cost } : {};
-  }
-  const price = NEON_PRICES[modelId];
-  if (!price) return { estimated: true };
-  return { costUsd: (inputTokens / 1e6) * price.inputPerMtok + (outputTokens / 1e6) * price.outputPerMtok, estimated: true };
-}
+export { NEON_PRICES } from "./pricing";
 
 // ---- Metering ----
 
