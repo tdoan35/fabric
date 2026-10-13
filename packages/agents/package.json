@@ -20,6 +20,7 @@
     "@fabric/contracts": "*",
     "@fabric/db": "*",
     "@fabric/integrations": "*",
+    "@fabric/llm": "*",
     "@huggingface/transformers": "^3.7.6",
     "@mastra/core": "^1.74.0",
     "@neon/ai-sdk-provider": "^1.0.0",
