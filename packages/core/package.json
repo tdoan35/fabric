@@ -5,7 +5,8 @@
   "type": "module",
   "description": "Runtime R1 core: the event envelope, per-type payload schemas, fact/telemetry classes, upcasters and stream ids (RUNTIME 2-3). Pure data: no I/O.",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./policy": "./src/policy/index.ts"
   },
   "scripts": {
     "typecheck": "tsc -p tsconfig.json",
