@@ -18,6 +18,8 @@ export type {
 // Queue (RUNTIME §4): the interface any implementation honours, the in-memory
 // reference implementation, and the conformance suite it must pass.
 export { MemoryQueue } from "./queue/memory";
+export { PgQueue } from "./queue/pg";
+export type { PgQueueConnection, PgQueueOptions } from "./queue/pg";
 export { queueConformanceCases, runQueueConformance } from "./queue/conformance";
 export {
   DEFAULT_PER_WORKSPACE_CONCURRENCY,
