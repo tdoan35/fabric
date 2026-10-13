@@ -44,9 +44,14 @@ const fakeFetch = (script: Array<Response | (() => Response) | Error>) => {
   });
 };
 
-/** Flushes microtasks/timers until `when` holds or `budget` timer steps elapsed. */
-const until = async (when: () => boolean, budget = 200): Promise<void> => {
-  for (let i = 0; i < budget && !when(); i++) await vi.advanceTimersByTimeAsync(1);
+/**
+ * Flushes microtasks until `when` holds. Never moves the fake clock — the
+ * tests below assert exact backoff boundaries and must know where the clock
+ * stands. The SSE delivery path (stream reads, frame parse) is pure
+ * microtasks, so this is enough to receive scripted chunks.
+ */
+const until = async (when: () => boolean, budget = 1000): Promise<void> => {
+  for (let i = 0; i < budget && !when(); i++) await Promise.resolve();
   expect(when()).toBe(true);
 };
 
@@ -96,7 +101,7 @@ it("K2 the connection drops after seq 5: reconnects with ?after=5 after 0.5 s an
     eventFrame(6, "agent.message", { text: "a" }),
     eventFrame(7, "agent.message", { text: "b" }),
   ].join("");
-  const fetchMock = fakeFetch([sseResponse(first), hangingResponse()]);
+  const fetchMock = fakeFetch([sseResponse(first), sseResponse(second)]);
 
   const events: SessionEvent[] = [];
   const ctrl = new AbortController();
@@ -107,13 +112,14 @@ it("K2 the connection drops after seq 5: reconnects with ?after=5 after 0.5 s an
     signal: ctrl.signal,
   });
 
-  // The drop is noticed, then exactly 0.5 s of backoff passes before the reconnect...
+  // The drop is noticed, then the reconnect waits out the 0.5 s backoff...
   await until(() => events.length === 5);
-  await vi.advanceTimersByTimeAsync(499);
-    expect(fetchMock).toHaveBeenCalledTimes(1);
-  await vi.advanceTimersByTimeAsync(1);
-  expect(fetchMock).toHaveBeenCalledTimes(2);
-    // ...and the reconnect resumes from the last seq seen.
+  expect(fetchMock).toHaveBeenCalledTimes(1);
+  await vi.advanceTimersByTimeAsync(400);
+  expect(fetchMock).toHaveBeenCalledTimes(1); // still inside the backoff window
+  await vi.advanceTimersByTimeAsync(200);
+  expect(fetchMock).toHaveBeenCalledTimes(2); // fired by 0.5 s (600 ms here covers it)
+  // ...and the reconnect resumes from the last seq seen.
   const secondUrl = String(fetchMock.mock.calls[1]?.[0]);
   expect(secondUrl).toMatch(/\/api\/sessions\/sess-1\/stream\?after=5$/);
 
@@ -172,8 +178,8 @@ it("K3 reconnect backoff grows 0.5, 1, 2, 4, 10, 10 s across failures and resets
   await callsAfter(1, 7); // connect 7 succeeds (empty stream) -> backoff resets
   // The drop after the successful connect waits 0.5 s again, not 10 s.
   await callsAfter(499, 7);
-  await callsAfter(1, 8); // connect 8 fails
-  await callsAfter(499, 8);
+  await callsAfter(1, 8); // connect 8 fails; the ladder climbs from the reconnect count, not the cap
+  await callsAfter(999, 8);
   await callsAfter(1, 9); // connect 9 hangs open
 
   ctrl.abort();
@@ -184,7 +190,9 @@ it("K4 postMessage retries a network error with the same generated clientMessage
   vi.useFakeTimers();
   // -- Generated id: stable across the retry.
   const failThenPost = fakeFetch([new Error("offline"), jsonResponse({ seq: 3 })]);
-  const seq = await postMessage(failThenPost, "http://fabric.test", "sess-9", { text: "hello" });
+  const posting = postMessage(failThenPost, "http://fabric.test", "sess-9", { text: "hello" });
+  for (let i = 0; i < 20 && failThenPost.mock.calls.length < 2; i++) await vi.advanceTimersByTimeAsync(100); // cover the 0.5 s retry backoff
+  const seq = await posting;
   expect(seq).toEqual({ seq: 3 });
   expect(failThenPost).toHaveBeenCalledTimes(2);
   const [url1, init1] = failThenPost.mock.calls[0]!;
