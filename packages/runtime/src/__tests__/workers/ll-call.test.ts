@@ -1,9 +1,9 @@
 // ANY-35 R9a — W2..W7: the `ll.call` job. The conversation is rebuilt from
 // facts (the definition snapshot's system prompt, the latest compaction
 // summary, then each later input, completion and result), the model is called
-// once with execute-less tools, the result lands as `ll.completed` next to a
+// once with execute-less tools, the result lands as `llm.completed` next to a
 // `context.snapshot`, compaction precedes the call, 429s retry through the
-// queue without a `ll.failed`, non-retryable errors record `ll.failed`, and a
+// queue without a `llm.failed`, non-retryable errors record `llm.failed`, and a
 // retry after the result was recorded appends nothing twice. Both drivers.
 import { expect, test } from "vitest";
 import { append, type EventInput } from "../../index";
@@ -26,7 +26,7 @@ const runCreated = (definition: Record<string, unknown>): EventInput => ({
 });
 
 const requested = (turn: number, callNo: number): EventInput => ({
-  type: "ll.requested",
+  type: "llm.requested",
   actor: "decide",
   payload: { turn, callNo, model: "m1", params: {}, snapshotId: null },
 });
@@ -37,7 +37,7 @@ const assistantCompleted = (
   text: string,
   toolCalls: record[]
 ): EventInput => ({
-  type: "ll.completed",
+  type: "llm.completed",
   actor: "llm.call",
   causation: `run:r2:${turn}:llm:${callNo}`,
   payload: {
@@ -91,9 +91,9 @@ async function seed(store: RuntimeStore, events: readonly EventInput[]) {
 
 async function claimedLlmCall(store: RuntimeStore, queue: MemoryQueue, now = 0) {
   await store.transaction((tx) =>
-    queue.enqueue(tx, { type: "ll.call", key: CALL_KEY, streamId: STREAM, workspaceId: WORKSPACE })
+    queue.enqueue(tx, { type: "llm.call", key: CALL_KEY, streamId: STREAM, workspaceId: WORKSPACE })
   );
-  const lease = await queue.claim("worker-1", ["ll.call"], now);
+  const lease = await queue.claim("worker-1", ["llm.call"], now);
   if (lease === null) throw new Error("expected a claimable ll.call job in the test setup");
   return lease;
 }
@@ -106,7 +106,7 @@ const of = (events: Awaited<ReturnType<typeof streamEvents>>, type: string) =>
   events.filter((event) => event.type === type);
 
 describeDrivers("runtime ll.call worker (ANY-35 R9a)", (h) => {
-  test("W2 one model call with execute-less tools; ll.completed and context.snapshot appended", async () => {
+  test("W2 one model call with execute-less tools; llm.completed and context.snapshot appended", async () => {
     const store = await h.openStore();
     const queue = new MemoryQueue();
     const model = new FakeModel([W2_RESULT]);
@@ -125,7 +125,7 @@ describeDrivers("runtime ll.call worker (ANY-35 R9a)", (h) => {
     ]);
 
     const events = await streamEvents(store);
-    const completed = of(events, "ll.completed");
+    const completed = of(events, "llm.completed");
     expect(completed).toHaveLength(1);
     expect(completed[0]!.payload).toEqual({
       turn: 1,
@@ -207,7 +207,7 @@ describeDrivers("runtime ll.call worker (ANY-35 R9a)", (h) => {
 
     // the compacted fact precedes the completion, and the model saw the
     // summary in the conversation's front, not the pre-compaction history
-    const completed = of(events, "ll.completed");
+    const completed = of(events, "llm.completed");
     expect(completed).toHaveLength(1);
     expect(compactions[0]!.seq).toBeLessThan(completed[0]!.seq);
 
@@ -217,7 +217,7 @@ describeDrivers("runtime ll.call worker (ANY-35 R9a)", (h) => {
     expect(model.calls[0]!.messages[0]!.text).not.toBe(longText); // shortened
   });
 
-  test("W5 a 429 with retryAfter 30 retries no earlier than 30 s later; no ll.failed", async () => {
+  test("W5 a 429 with retryAfter 30 retries no earlier than 30 s later; no llm.failed", async () => {
     const store = await h.openStore();
     const queue = new MemoryQueue();
     const clock = { now: 1_000 };
@@ -231,21 +231,21 @@ describeDrivers("runtime ll.call worker (ANY-35 R9a)", (h) => {
 
     // nothing recorded: the tx rolled back, the queue owns the retry
     const events = await streamEvents(store);
-    expect(of(events, "ll.failed")).toHaveLength(0);
-    expect(of(events, "ll.completed")).toHaveLength(0);
+    expect(of(events, "llm.failed")).toHaveLength(0);
+    expect(of(events, "llm.completed")).toHaveLength(0);
     expect(of(events, "context.snapshot")).toHaveLength(0);
 
     const job = await queue.get(lease.jobId);
     expect(job?.status).toBe("pending");
     expect(job!.runAt).toBeGreaterThanOrEqual(clock.now + 30_000);
-    expect(await queue.claim("worker-2", ["ll.call"], clock.now + 29_999)).toBeNull();
+    expect(await queue.claim("worker-2", ["llm.call"], clock.now + 29_999)).toBeNull();
 
     // and the retry does happen, once the clock passes the backoff
-    const retried = await queue.claim("worker-2", ["ll.call"], clock.now + 600_000);
+    const retried = await queue.claim("worker-2", ["llm.call"], clock.now + 600_000);
     expect(retried?.jobId).toBe(lease.jobId);
   });
 
-  test("W6 a non-retryable error records ll.failed { retryable: false } and completes", async () => {
+  test("W6 a non-retryable error records llm.failed { retryable: false } and completes", async () => {
     const store = await h.openStore();
     const queue = new MemoryQueue();
     const model = new FakeModel([{ message: "context too long", retryable: false }]);
@@ -255,14 +255,14 @@ describeDrivers("runtime ll.call worker (ANY-35 R9a)", (h) => {
     await handleLlmCallJob(lease, { store, queue, model });
 
     const events = await streamEvents(store);
-    const failed = of(events, "ll.failed");
+    const failed = of(events, "llm.failed");
     expect(failed).toHaveLength(1);
     expect(failed[0]!.payload).toMatchObject({ turn: 1, callNo: 1, error: "context too long", retryable: false });
     expect(failed[0]!.causation).toBe(CALL_KEY);
     expect((await queue.get(lease.jobId))?.status).toBe("completed");
   });
 
-  test("W7 the job running twice after the result was recorded appends one ll.completed", async () => {
+  test("W7 the job running twice after the result was recorded appends one llm.completed", async () => {
     const store = await h.openStore();
     const queue = new MemoryQueue();
     const model = new FakeModel([W2_RESULT, W2_RESULT]);
@@ -272,7 +272,7 @@ describeDrivers("runtime ll.call worker (ANY-35 R9a)", (h) => {
     await handleLlmCallJob(lease, { store, queue, model });
     await handleLlmCallJob(lease, { store, queue, model }); // the at-least-once re-run
 
-    expect(of(await streamEvents(store), "ll.completed")).toHaveLength(1);
+    expect(of(await streamEvents(store), "llm.completed")).toHaveLength(1);
     expect(model.calls).toHaveLength(1); // the re-run saw the recorded result and skipped the call
   });
 });
@@ -286,9 +286,9 @@ async function claimedLlmCallForCall(
 ) {
   const key = `run:r2:${turn}:llm:${callNo}`;
   await store.transaction((tx) =>
-    queue.enqueue(tx, { type: "ll.call", key, streamId: STREAM, workspaceId: WORKSPACE })
+    queue.enqueue(tx, { type: "llm.call", key, streamId: STREAM, workspaceId: WORKSPACE })
   );
-  const lease = await queue.claim("worker-1", ["ll.call"], 0);
+  const lease = await queue.claim("worker-1", ["llm.call"], 0);
   if (lease === null) throw new Error(`expected a claimable ${key} job in the test setup`);
   return lease;
 }

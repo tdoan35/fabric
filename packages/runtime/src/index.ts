@@ -37,3 +37,31 @@ export type {
   QueueTx,
   QueueTypeConfig,
 } from "./queue/types";
+
+// Worker ports (RUNTIME §4–§6, ANY-35 R9a): the seams the job handlers run
+// behind, so no test or CI run reaches a real provider.
+export { ModelError } from "./ports";
+export type {
+  ModelCallRequest,
+  ModelDelta,
+  ModelMessage,
+  ModelPort,
+  ModelResult,
+  ModelTool,
+  ModelUsage,
+  SurfaceMessage,
+  SurfacePort,
+  SurfaceReceipt,
+  ToolDescriptor,
+  ToolEffect,
+  ToolPort,
+  ToolRunResult,
+} from "./ports";
+
+// The first job handlers (ANY-35 R9a): `decide` and `ll.call`.
+export {
+  handleDecideJob,
+  type DecideJobDeps,
+  type EventRow,
+} from "./workers/index";
+export { handleLlmCallJob, type LlmCallJobDeps } from "./workers/index";

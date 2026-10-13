@@ -89,8 +89,9 @@ describeDrivers("runtime decide worker (ANY-35 R9a)", (h) => {
 
     const afterFailure = await store.readStream(STREAM, { workspaceId: WORKSPACE });
     expect(afterFailure.length).toBe(seedLength); // no decision events
-    expect(await queue.claim("worker-1", ["ll.call"], 1)).toBeNull(); // and no job
-    expect((await queue.get(failingLease!.jobId))?.status).toBe("leased"); // retryable
+    expect(await queue.claim("worker-1", ["llm.call"], 1)).toBeNull(); // and no job
+    // the handler failed the lease: backoff-run pending, the retry the type config grants
+    expect((await queue.get(failingLease!.jobId))?.status).toBe("pending");
 
     // -- the same decision, the append whole: events and jobs commit together ---
     await enqueueJob(store, queue, { type: "decide", key: "decide:r1:b", streamId: STREAM });
@@ -98,11 +99,11 @@ describeDrivers("runtime decide worker (ANY-35 R9a)", (h) => {
     await handleDecideJob(lease!, { store, queue });
 
     const events = await store.readStream(STREAM, { workspaceId: WORKSPACE });
-    const requested = events.filter((event) => event.type === "ll.requested");
+    const requested = events.filter((event) => event.type === "llm.requested");
     expect(requested).toHaveLength(1);
     expect(String(requested[0]!.causation)).toMatch(/^decide:r1:b/);
 
-    const llCall = await queue.claim("worker-3", ["ll.call"], 3);
+    const llCall = await queue.claim("worker-3", ["llm.call"], 3);
     expect(llCall?.key).toBe("run:r1:1:llm:1");
     expect(llCall?.streamId).toBe(STREAM);
   });
