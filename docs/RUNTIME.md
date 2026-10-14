@@ -51,7 +51,7 @@ Chat turns have the same weakness: a turn lives in one HTTP response, so a turn 
 | **Definition** | The agent or team definition, brief, grants, budgets and engine version, snapshotted into `run.created`. Editing an agent or team never changes a run already under way |
 | **Parent** | A delegated run records its parent `{runId or sessionId, callId}`. Runs form a tree |
 
-**Append** is one transaction: bump each touched stream's head, insert the events, notify the streams, and queue `decide` for each stream that gained a fact. A transaction may touch several streams (a delegation creates the child's stream while recording the parent's tool call). A unique index on `(stream_id, causation)` for result events makes a retried job's second append a no-op.
+**Append** is one transaction: bump each touched stream's head, insert the events, notify the streams, and queue `decide` for each stream that gained a fact. A transaction may touch several streams (a delegation creates the child's stream while recording the parent's tool call). A unique index on `(stream_id, causation)` for result events makes a retried job's second append a no-op. A store transaction opened inside another one's callback, such as a store-backed tool running inside its `tool.exec` job, joins it as a savepoint on the same connection rather than taking a second one; on PGlite's single connection a second one would deadlock.
 
 **One decision at a time per stream.** `decide` jobs are serialized per stream. Executor jobs aren't, so a stage's lanes and a turn's parallel tool calls run at the same time.
 

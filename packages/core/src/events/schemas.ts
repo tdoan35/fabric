@@ -61,6 +61,10 @@ export const EVENT_PAYLOAD_SCHEMAS = {
     incognito: z.boolean(),
     surfaces: z.array(z.string()),
   }),
+  /** The session's approval mode (PRODUCT §8.3, T3): applies from the next decision on. */
+  "session.approval_mode_set": z.strictObject({
+    mode: z.enum(["ask", "auto_edits", "full_auto"]),
+  }),
   "step.started": z.strictObject({
     label: z.string(),
     stage: z.string(),
@@ -141,6 +145,15 @@ export const EVENT_PAYLOAD_SCHEMAS = {
     prompt: z.string(),
     /** Epoch ms; null when the wait has no deadline. */
     deadline: z.number().nullable(),
+    /** The gated tool call an `approve` wait holds, resolved by the approval rules (T3). */
+    approval: z
+      .strictObject({
+        callId: z.string(),
+        tool: z.string(),
+        args: z.record(z.string(), z.unknown()),
+        summary: z.string(),
+      })
+      .optional(),
   }),
   "human.responded": z.strictObject({ waitId: z.string(), decision: z.string(), by: z.string(), surface }),
   /** The text lives outside the log, referenced, so it can be erased (LEARNING §10.4). */
@@ -222,6 +235,7 @@ export const EVENT_CLASSES: Record<EventType, EventClass> = {
   "message.received": "fact",
   "disposition.recorded": "fact",
   "session.created": "fact",
+  "session.approval_mode_set": "fact",
   "step.started": "fact",
   "llm.requested": "fact",
   "llm.completed": "fact",

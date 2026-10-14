@@ -1,0 +1,2 @@
+## Skills
+Load a skill with skills_read when it matches the task. Don't load skills speculatively; when unsure, call skills_list.
