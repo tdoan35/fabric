@@ -48,6 +48,18 @@ export const EVENT_PAYLOAD_SCHEMAS = {
     /** The routed-to agent/team/clarifier; null for a direct answer. */
     target: z.string().nullable(),
     reason: z.string(),
+    /** The routing options the turn weighed; the model's alternatives (S2). */
+    considered: z.array(z.string()),
+    /** Who stated it: the model's own call, the derived fallback, or the user's specialist pick (S2). */
+    source: z.enum(["model", "derived", "user"]),
+    /** The turn the disposition belongs to. */
+    turn: z.number().int(),
+  }),
+  /** A session's opening fact: whose agent it hosts and whether it leaves a trace (S2). */
+  "session.created": z.strictObject({
+    agentId: z.string(),
+    incognito: z.boolean(),
+    surfaces: z.array(z.string()),
   }),
   "step.started": z.strictObject({
     label: z.string(),
@@ -209,6 +221,7 @@ export const EVENT_CLASSES: Record<EventType, EventClass> = {
   "run.started": "fact",
   "message.received": "fact",
   "disposition.recorded": "fact",
+  "session.created": "fact",
   "step.started": "fact",
   "llm.requested": "fact",
   "llm.completed": "fact",
