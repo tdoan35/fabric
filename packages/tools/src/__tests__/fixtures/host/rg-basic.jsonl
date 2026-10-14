@@ -1,0 +1,7 @@
+{"type":"begin","data":{"path":{"text":"notes/alpha.txt"}}}
+{"type":"match","data":{"path":{"text":"notes/alpha.txt"},"lines":{"text":"fabric tools run on the host\n"},"line_number":2,"absolute_offset":11,"submatches":[{"match":{"text":"fabric"},"start":0,"end":6}]}}
+{"type":"end","data":{"path":{"text":"notes/alpha.txt"},"binary_offset":null,"stats":{"elapsed":{"secs":0,"nanos":19649,"human":"0.000020s"},"searches":1,"searches_with_match":1,"bytes_searched":53,"bytes_printed":268,"matched_lines":1,"matches":1}}}
+{"type":"begin","data":{"path":{"text":"notes/nested/beta.md"}}}
+{"type":"match","data":{"path":{"text":"notes/nested/beta.md"},"lines":{"text":"the fabric host shell streams lines\n"},"line_number":2,"absolute_offset":7,"submatches":[{"match":{"text":"fabric"},"start":4,"end":10}]}}
+{"type":"end","data":{"path":{"text":"notes/nested/beta.md"},"binary_offset":null,"stats":{"elapsed":{"secs":0,"nanos":9194,"human":"0.000009s"},"searches":1,"searches_with_match":1,"bytes_searched":67,"bytes_printed":285,"matched_lines":1,"matches":1}}}
+{"type":"summary","data":{"stats":{"elapsed":{"secs":0,"nanos":28843,"human":"28.843µs"},"searches":2,"searches_with_match":2,"bytes_searched":120,"bytes_printed":553,"matched_lines":2,"matches":2}}}
