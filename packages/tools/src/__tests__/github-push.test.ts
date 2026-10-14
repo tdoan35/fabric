@@ -2,12 +2,13 @@
 // records what reaches it; a fake GitHub API serves the installation token
 // and the compare endpoint the non-fast-forward check consults. The push
 // bodies come from the pkt-line fixtures. No network.
-import { afterAll, afterEach, beforeAll, beforeEach, expect, test } from "vitest";
+import { generateKeyPairSync } from "node:crypto";
+import type { AddressInfo } from "node:net";
 import { createServer, type IncomingMessage } from "node:http";
+import { afterAll, afterEach, beforeAll, beforeEach, expect, test } from "vitest";
 import { memoryVault } from "../vault";
 import { createTokenStore, startBroker, type BrokerServer, type BrokerUseRecord } from "../broker";
 import { buildPushBody, fakePack, sha, ZERO_SHA } from "./fixtures/github/pktline";
-import { generateKeyPairSync } from "node:crypto";
 
 const KEY = generateKeyPairSync("rsa", {
   modulusLength: 2048,

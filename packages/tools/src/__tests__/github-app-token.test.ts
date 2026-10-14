@@ -3,6 +3,9 @@
 // every request; the private key is generated at runtime and lives only in
 // the vault. No network.
 import { createPublicKey, generateKeyPairSync, verify as verifySignature } from "node:crypto";
+import type { AddressInfo } from "node:net";
+import { createServer } from "node:http";
+import { afterAll, beforeAll, expect, test } from "vitest";
 import { memoryVault } from "../vault";
 import { createAppTokenManager } from "../broker/github";
 

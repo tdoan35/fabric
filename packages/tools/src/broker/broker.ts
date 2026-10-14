@@ -7,10 +7,21 @@
 // never the secret value.
 import type { IncomingHttpHeaders, IncomingMessage, ServerResponse } from "node:http";
 import { Readable } from "node:stream";
+import type { ReadableStream as NodeWebReadableStream } from "node:stream/web";
 import { pipeline } from "node:stream/promises";
 import type { Vault } from "../vault";
 import { normalizePath, pathAllowed, type CredentialAuth, type CredentialRule } from "./rules";
 import type { TokenStore } from "./tokens";
+import {
+  checkApiRequest,
+  checkPushCommands,
+  createAppTokenManager,
+  isGitHubRule,
+  repoAttached,
+  repoFromGitPath,
+  type AppTokenManager,
+  type GitHubRule,
+} from "./github";
 
 export type BrokerUseRecord = {
   workspaceId: string | null;
@@ -25,9 +36,13 @@ export type BrokerUseRecord = {
   reason?: string;
 };
 
+/** A credential rule, or a GitHub App rule (T11) whose credential is an
+ * installation token and whose traffic passes the git/API policies. */
+export type BrokerRule = CredentialRule | GitHubRule;
+
 export type BrokerDeps = {
   vault: Vault;
-  rules: readonly CredentialRule[];
+  rules: readonly BrokerRule[];
   tokens: TokenStore;
   onUse: (record: BrokerUseRecord) => void;
 };
@@ -102,6 +117,30 @@ function tokenFromAuth(header: unknown): string | null {
     }
   }
   return null;
+}
+
+// -- github-app rules (T11) -------------------------------------------------------
+
+/** One token manager per rule object: the installation token is cached
+ * across requests for the rule's lifetime. */
+const appTokenManagers = new WeakMap<GitHubRule, AppTokenManager>();
+
+/** git smart-HTTP paths: `/<owner>/<repo>(.git)/(info/refs|git-*-pack)`. */
+const GIT_SMART_PATH = /^\/[^/]+\/[^/]+(?:\.git)?\/(?:info\/refs|git-upload-pack|git-receive-pack)$/;
+
+/** The installation credential: basic `x-access-token` over git HTTP
+ * (git's native form), Bearer everywhere else (the API). */
+function gitCredential(isGitPath: boolean, token: string): Record<string, string> {
+  if (!isGitPath) return { authorization: `Bearer ${token}` };
+  return {
+    authorization: `Basic ${Buffer.from(`x-access-token:${token}`, "utf8").toString("base64")}`,
+  };
+}
+
+async function readBody(req: IncomingMessage): Promise<Buffer> {
+  const chunks: Buffer[] = [];
+  for await (const chunk of req) chunks.push(chunk as Buffer);
+  return Buffer.concat(chunks);
 }
 
 // -- the pipeline ----------------------------------------------------------------
@@ -184,23 +223,82 @@ export async function handleBrokerRequest(
     return refuse(deps, res, identified, "path not allowed");
   }
 
-  // 6. credential — fail-closed: nothing is sent without it
-  let secret: string;
-  try {
-    secret = await deps.vault.get(rule.secret, { agentId: identity.agentId });
-  } catch {
-    return refuse(deps, res, identified, "credential unavailable");
+  // 6. credential + (github-app) policy — fail-closed: nothing is sent
+  // without a credential, and GitHub rules enforce their repo/push/API
+  // policy before anything leaves.
+  const hasBody = method !== "GET" && method !== "HEAD";
+  let credential: Record<string, string>;
+  let body: Buffer | ReadableStream<Uint8Array> | undefined;
+
+  if (isGitHubRule(rule)) {
+    const isGitPath = GIT_SMART_PATH.test(decodedPath);
+    if (isGitPath) {
+      // git smart HTTP: only the attached repositories, ever
+      const addressed = repoFromGitPath(decodedPath);
+      if (addressed === null || !repoAttached(rule.auth.repos, addressed.owner, addressed.repo)) {
+        return refuse(deps, res, identified, "repo not attached to this installation");
+      }
+    } else {
+      // api.github.com traffic: the API policy decides before a token is minted
+      const verdict = checkApiRequest(method, decodedPath, rule.auth.repos);
+      if (!verdict.ok) {
+        return refuse(deps, res, identified, verdict.reason);
+      }
+    }
+
+    let token: string;
+    try {
+      let manager = appTokenManagers.get(rule);
+      if (manager === undefined) {
+        manager = createAppTokenManager({ auth: rule.auth, vault: deps.vault });
+        appTokenManagers.set(rule, manager);
+      }
+      token = await manager.getToken();
+    } catch {
+      return refuse(deps, res, identified, "credential unavailable");
+    }
+
+    const isReceivePack = method === "POST" && decodedPath.endsWith("/git-receive-pack");
+    if (isReceivePack) {
+      // the push policy reads the ref commands (never the pack), then the
+      // buffered body is forwarded unchanged
+      const buffered = await readBody(req);
+      const addressed = repoFromGitPath(decodedPath);
+      const verdict = await checkPushCommands({
+        body: buffered,
+        owner: addressed === null ? "" : addressed.owner,
+        repo: addressed === null ? "" : addressed.repo,
+        apiUrl: rule.auth.apiUrl ?? "https://api.github.com",
+        token,
+      });
+      if (!verdict.ok) {
+        return refuse(deps, res, identified, verdict.reason);
+      }
+      body = buffered;
+    } else if (hasBody) {
+      body = Readable.toWeb(req) as unknown as ReadableStream<Uint8Array>;
+    }
+    credential = gitCredential(isGitPath, token);
+  } else {
+    let secret: string;
+    try {
+      secret = await deps.vault.get(rule.secret, { agentId: identity.agentId });
+    } catch {
+      return refuse(deps, res, identified, "credential unavailable");
+    }
+    if (hasBody) {
+      body = Readable.toWeb(req) as unknown as ReadableStream<Uint8Array>;
+    }
+    credential = credentialHeader(rule.auth, secret);
   }
 
   // forward
   const target = `${rule.upstream.replace(/\/+$/, "")}${rawPath}${query}`;
-  const hasBody = method !== "GET" && method !== "HEAD";
   // Readable.toWeb returns a web stream structurally identical to undici's
   // body type; the DOM-less typings cannot unify them.
-  const body = hasBody ? (Readable.toWeb(req) as unknown as ReadableStream<Uint8Array>) : undefined;
   const init: RequestInit = {
     method,
-    headers: forwardHeaders(req.headers, credentialHeader(rule.auth, secret)),
+    headers: forwardHeaders(req.headers, credential),
     redirect: "manual",
     ...(body === undefined ? {} : { body, duplex: "half" }),
   };
@@ -250,7 +348,7 @@ export async function handleBrokerRequest(
     return;
   }
   await pipeline(
-    Readable.fromWeb(upstream.body as unknown as import("node:stream/web").ReadableStream<Uint8Array>),
+    Readable.fromWeb(upstream.body as unknown as NodeWebReadableStream<Uint8Array>),
     res
   );
 }

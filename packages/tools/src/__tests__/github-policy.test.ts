@@ -5,6 +5,7 @@ import { generateKeyPairSync } from "node:crypto";
 import type { AddressInfo } from "node:net";
 import { createServer, type IncomingMessage } from "node:http";
 import { afterAll, beforeAll, afterEach, beforeEach, expect, test } from "vitest";
+import { memoryVault } from "../vault";
 import { createTokenStore, startBroker, type BrokerServer, type BrokerUseRecord } from "../broker";
 import { buildPushBody, fakePack, sha, ZERO_SHA } from "./fixtures/github/pktline";
 
@@ -134,7 +135,7 @@ test("GH9 a repo outside `repos` is refused for info/refs, upload-pack and the A
   expect(apiCall.status).toBe(403);
 
   expect(gitReceived).toHaveLength(0);
-  expect(apiReceived.length).toBe(1); // only the token mint; no data call forwarded
+  expect(apiReceived).toHaveLength(0); // refused before any token was minted
 });
 
 test("GH10 the API policy opens PRs and comments, refuses merges, deletes and graphql", async () => {

@@ -106,6 +106,8 @@ const tokens = createTokenStore();
 beforeAll(async () => {
   root = await mkdtemp(join(tmpdir(), "gh-e2e-"));
   await run("git", ["init", "--bare", "-b", "main", join(root, "o/r.git")], { env: GIT_ENV });
+  // anonymous pushes need this on the fixture, or http-backend refuses receive-pack
+  await run("git", ["--git-dir", join(root, "o/r.git"), "config", "http.receivepack", "true"], { env: GIT_ENV });
   await Promise.all([
     new Promise<void>((resolve) => api.listen(0, "127.0.0.1", resolve)),
     new Promise<void>((resolve) => gitUpstream.listen(0, "127.0.0.1", resolve)),
@@ -152,9 +154,16 @@ afterEach(async () => {
 });
 
 function repoUrl(): string {
+  return `${broker.url}/egress/git/o/r.git`;
+}
+
+/** git probes unauthenticated and retries only after a 401 challenge; the
+ * broker answers 403 (its contract), so the credential rides along on
+ * every request instead — the x-access-token basic form, password token. */
+function gitAuth(): string[] {
   const token = tokens.issue({ workspaceId: "ws", agentId: "dana", ttlMs: 600_000 });
-  // URL userinfo becomes basic auth — the password-token form git can use.
-  return `${broker.url.replace("http://", `http://x-access-token:${token}@`)}/egress/git/o/r.git`;
+  const basic = Buffer.from(`x-access-token:${token}`, "utf8").toString("base64");
+  return ["-c", `http.extraHeader=Authorization: Basic ${basic}`];
 }
 
 test(
@@ -163,8 +172,9 @@ test(
   async () => {
     cloneDir = await mkdtemp(join(tmpdir(), "gh-clone-"));
     const url = repoUrl();
+    const auth = gitAuth();
 
-    await run("git", ["clone", url, cloneDir], { env: GIT_ENV });
+    await run("git", [...auth, "clone", url, cloneDir], { env: GIT_ENV });
 
     await writeFile(join(cloneDir, "note.txt"), "fabric e2e\n", "utf8");
     await run("git", ["add", "note.txt"], { cwd: cloneDir, env: GIT_ENV });
@@ -175,18 +185,17 @@ test(
     );
     const { stdout: head } = await run("git", ["rev-parse", "HEAD"], { cwd: cloneDir, env: GIT_ENV });
 
-    await run("git", ["push", url, `HEAD:refs/heads/fabric/e2e`], { cwd: cloneDir, env: GIT_ENV });
+    await run("git", [...auth, "push", url, `HEAD:refs/heads/fabric/e2e`], { cwd: cloneDir, env: GIT_ENV });
     const { stdout: landed } = await run("git", ["--git-dir", join(root, "o/r.git"), "rev-parse", "refs/heads/fabric/e2e"]);
     expect(landed.trim()).toBe(head.trim());
 
     // pushing to main is refused by the broker policy, not by git
-    const pushMain = await run("git", ["push", url, "HEAD:refs/heads/main"], {
+    const pushMain = (await run("git", [...auth, "push", url, "HEAD:refs/heads/main"], {
       cwd: cloneDir,
       env: GIT_ENV,
-    }).catch((error: { code?: number; stderr?: string }) => error);
+    }).catch((error: unknown) => error)) as { code?: number; stderr?: string };
     expect(pushMain.code).not.toBe(0);
     expect(pushMain.stderr).toContain("403");
-
     const mainMissing = await run("git", ["--git-dir", join(root, "o/r.git"), "rev-parse", "--verify", "refs/heads/main"]).then(
       () => false,
       () => true
