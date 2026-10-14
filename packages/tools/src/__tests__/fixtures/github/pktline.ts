@@ -38,3 +38,28 @@ export function buildPushBody(commands: readonly RefUpdate[], caps: string, pack
 export function fakePack(): Buffer {
   return Buffer.concat([Buffer.from("PACK"), Buffer.alloc(64, 7)]);
 }
+
+/** The pkt-line payloads of a body up to its first flush, as text. */
+function pktPayloads(body: Buffer): Buffer[] {
+  const payloads: Buffer[] = [];
+  let offset = 0;
+  while (offset + 4 <= body.length) {
+    const length = Number.parseInt(body.subarray(offset, offset + 4).toString("ascii"), 16);
+    if (length === 0) break;
+    payloads.push(body.subarray(offset + 4, offset + length));
+    offset += length;
+  }
+  return payloads;
+}
+
+/** A receive-pack result's report-status lines (`unpack ok`, `ng <ref>
+ * <reason>`, …), unwrapping side-band channel 1 when `sideBand` is set. */
+export function reportStatusLines(body: Buffer, sideBand = false): string[] {
+  let status = body;
+  if (sideBand) {
+    const frames = pktPayloads(body);
+    if (frames.some((frame) => frame[0] !== 1)) throw new Error("expected only band-1 frames");
+    status = Buffer.concat(frames.map((frame) => frame.subarray(1)));
+  }
+  return pktPayloads(status).map((payload) => payload.toString("utf8").replace(/\n$/, ""));
+}

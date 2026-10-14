@@ -1,11 +1,12 @@
-// ANY-44 T11 — repo attachment and the API policy (GH9–GH11), plus the
-// secret-leak scan. One fake git upstream and one fake GitHub API on
+// ANY-44 T11 — repo attachment and the API policy (GH9–GH11), the
+// secret-leak scan, and the git smart-HTTP allowlist (GH15). One fake git upstream and one fake GitHub API on
 // 127.0.0.1; two rules (git + api) share one GitHub App auth. No network.
 import { generateKeyPairSync } from "node:crypto";
 import type { AddressInfo } from "node:net";
 import { createServer, type IncomingMessage } from "node:http";
 import { afterAll, beforeAll, afterEach, beforeEach, expect, test } from "vitest";
 import { memoryVault } from "../vault";
+import { createAppTokenManager } from "../broker/github";
 import { createTokenStore, startBroker, type BrokerServer, type BrokerUseRecord } from "../broker";
 import { buildPushBody, fakePack, sha, ZERO_SHA } from "./fixtures/github/pktline";
 
@@ -41,6 +42,12 @@ const api = createServer(async (req, res) => {
     res.end(JSON.stringify({ token: INSTALLATION_TOKEN, expires_at: new Date(Date.now() + 3600_000).toISOString() }));
     return;
   }
+  if (req.method === "POST" && req.url === "/app/installations/500/access_tokens") {
+    await readBody(req);
+    res.writeHead(500, { "content-type": "application/json" });
+    res.end(JSON.stringify({ message: "boom" }));
+    return;
+  }
   if (req.url?.startsWith("/repos/o/r/compare/")) {
     res.writeHead(200, { "content-type": "application/json" });
     res.end(JSON.stringify({ status: "ahead" }));
@@ -74,18 +81,39 @@ beforeEach(async () => {
     rules: [
       {
         name: "git",
+        surface: "git",
         upstream: `http://127.0.0.1:${(gitUpstream.address() as AddressInfo).port}`,
         auth,
         methods: ["GET", "POST"],
-        paths: ["/o/r.git/**", "/o/other.git/**"],
+        paths: ["/o/r.git/**", "/o/other.git/**", "/repos/**"],
         agents: "all",
       },
       {
         name: "api",
+        surface: "api",
         upstream: `http://127.0.0.1:${(api.address() as AddressInfo).port}`,
         auth,
         methods: ["GET", "POST", "PUT", "DELETE"],
-        paths: ["/repos/**", "/graphql"],
+        paths: ["/repos/**", "/graphql", "/o/r.git/**"],
+        agents: "all",
+      },
+      {
+        // a github-app rule on an upstream that is neither github.com nor
+        // api.github.com, with no surface said: refused, never guessed
+        name: "unsure",
+        upstream: `http://127.0.0.1:${(gitUpstream.address() as AddressInfo).port}`,
+        auth,
+        methods: ["GET", "POST"],
+        paths: ["/**"],
+        agents: "all",
+      },
+      {
+        name: "split",
+        surface: "git",
+        upstream: `http://127.0.0.1:${(gitUpstream.address() as AddressInfo).port}`,
+        auth: { ...auth, repos: ["o/r", "someone-else/r"] },
+        methods: ["GET", "POST"],
+        paths: ["/**"],
         agents: "all",
       },
     ],
@@ -201,12 +229,78 @@ test("GH11 the private key never appears in an audit record, a refusal body or a
     body: JSON.stringify({ title: "t" }),
   });
 
-  const haystacks = [...refusals, ...uses.map((record) => JSON.stringify(record))];
+  // thrown errors: a failed mint, and a key the signer cannot use
+  const thrown: string[] = [];
+  const vault = memoryVault();
+  await vault.put("gh_app_key", KEY.privateKey, { agents: "all" });
+  await vault.put("gh_bad_key", KEY.privateKey.replace("MII", "MIX"), { agents: "all" });
+  const apiUrl = `http://127.0.0.1:${(api.address() as AddressInfo).port}`;
+  const failing = [
+    createAppTokenManager({
+      auth: { type: "github-app", appId: 1, installationId: 500, privateKeySecret: "gh_app_key", repos: ["o/r"], apiUrl },
+      vault,
+    }),
+    createAppTokenManager({
+      auth: { type: "github-app", appId: 1, installationId: 77, privateKeySecret: "gh_bad_key", repos: ["o/r"], apiUrl },
+      vault,
+    }),
+  ];
+  for (const manager of failing) {
+    const error = await manager.getToken().then(
+      () => null,
+      (caught: unknown) => caught as Error
+    );
+    expect(error).toBeInstanceOf(Error); // both really threw
+    thrown.push(String(error), error?.stack ?? "", JSON.stringify(error));
+  }
+
+  const haystacks = [...refusals, ...thrown, ...uses.map((record) => JSON.stringify(record))];
   // the PEM, and its base64 payload with the header/footer lines stripped
   const pemPayload = KEY.privateKey.replace(/-----[A-Z ]+-----|\s+/g, "");
-  for (const needle of [KEY.privateKey, pemPayload]) {
+  const pemLines = KEY.privateKey.split("\n").filter((line) => line.length >= 32 && !line.startsWith("-----"));
+  for (const needle of [KEY.privateKey, pemPayload, ...pemLines]) {
     for (const haystack of haystacks) {
       expect(haystack).not.toContain(needle);
     }
   }
+});
+
+test("GH15 git rules allow only smart HTTP (GET info/refs?service, POST packs), decide the surface, refuse misconfiguration", async () => {
+  const refused: [string, string, RequestInit?][] = [
+    ["git", "/o/r.git/info/refs"], // no service
+    ["git", "/o/r.git/info/refs?service=git-upload-archive"],
+    ["git", "/o/r.git/info/refs?service=git-upload-pack&service=git-receive-pack"],
+    ["git", "/o/r.git/info/refs?service=git-upload-pack", { method: "POST", body: "x" }],
+    ["git", "/o/r.git/git-upload-pack"], // GET on a pack endpoint
+    ["git", "/o/r.git/HEAD"], // dumb HTTP
+    ["git", "/o/r.git/objects/info/packs"],
+    ["git", "/repos/o/r/pulls"], // an API path on the git surface
+    ["api", "/o/r.git/info/refs?service=git-upload-pack"], // a git path on the API surface
+    ["unsure", "/o/r.git/info/refs?service=git-upload-pack"],
+    ["split", "/o/r.git/info/refs?service=git-upload-pack"],
+  ];
+  for (const [rule, path, init] of refused) {
+    const response = await egress(rule, path, init);
+    expect(response.status, `${rule} ${init?.method ?? "GET"} ${path}`).toBe(403);
+  }
+  expect(gitReceived).toHaveLength(0);
+  expect(apiReceived).toHaveLength(0); // no refusal minted a token
+
+  // git refusals are text/plain (git prints them); API refusals stay JSON
+  const gitRefusal = await egress("git", "/o/other.git/info/refs?service=git-upload-pack");
+  expect(gitRefusal.headers.get("content-type")).toContain("text/plain");
+  expect(await gitRefusal.text()).toBe("repo not attached to this installation: o/other\n");
+  const apiRefusal = await egress("api", "/repos/o/other/pulls");
+  expect(apiRefusal.headers.get("content-type")).toContain("application/json");
+
+  expect(uses.find((record) => record.rule === "unsure")?.reason).toContain("surface");
+  expect(uses.find((record) => record.rule === "split")?.reason).toContain("one owner");
+
+  // and the allowed shapes go through
+  expect((await egress("git", "/o/r.git/info/refs?service=git-receive-pack")).status).toBe(200);
+  expect((await egress("git", "/o/r.git/git-upload-pack", { method: "POST", body: fakePack() })).status).toBe(200);
+  expect(gitReceived.map((request) => `${request.method} ${request.url}`)).toEqual([
+    "GET /o/r.git/info/refs?service=git-receive-pack",
+    "POST /o/r.git/git-upload-pack",
+  ]);
 });

@@ -2,7 +2,8 @@
 // `git http-backend` (spawned as a CGI per request) sits behind the broker;
 // git itself talks to the broker URL with the egress token as URL userinfo
 // (basic auth, the password-token form). The fake API serves only the
-// installation token. No network.
+// installation token. The bare repo denies non-fast-forwards and deletes,
+// standing in for the GitHub ruleset on refs/heads/fabric/**. No network.
 import { execFile } from "node:child_process";
 import { generateKeyPairSync } from "node:crypto";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
@@ -108,6 +109,9 @@ beforeAll(async () => {
   await run("git", ["init", "--bare", "-b", "main", join(root, "o/r.git")], { env: GIT_ENV });
   // anonymous pushes need this on the fixture, or http-backend refuses receive-pack
   await run("git", ["--git-dir", join(root, "o/r.git"), "config", "http.receivepack", "true"], { env: GIT_ENV });
+  // the ruleset's job upstream: no force pushes, no deletions
+  await run("git", ["--git-dir", join(root, "o/r.git"), "config", "receive.denyNonFastForwards", "true"], { env: GIT_ENV });
+  await run("git", ["--git-dir", join(root, "o/r.git"), "config", "receive.denyDeletes", "true"], { env: GIT_ENV });
   await Promise.all([
     new Promise<void>((resolve) => api.listen(0, "127.0.0.1", resolve)),
     new Promise<void>((resolve) => gitUpstream.listen(0, "127.0.0.1", resolve)),
@@ -132,6 +136,7 @@ beforeEach(async () => {
     rules: [
       {
         name: "git",
+        surface: "git",
         upstream: `http://127.0.0.1:${(gitUpstream.address() as AddressInfo).port}`,
         auth: {
           type: "github-app",
@@ -142,7 +147,7 @@ beforeEach(async () => {
           apiUrl: `http://127.0.0.1:${(api.address() as AddressInfo).port}`,
         },
         methods: ["GET", "POST"],
-        paths: ["/o/r.git/**"],
+        paths: ["/o/r.git/**", "/o/other.git/**"],
         agents: "all",
       },
     ],
@@ -166,8 +171,35 @@ function gitAuth(): string[] {
   return ["-c", `http.extraHeader=Authorization: Basic ${basic}`];
 }
 
+type GitResult = { code?: number; stdout?: string; stderr?: string };
+
+/** Runs git and returns its outcome instead of throwing on a non-zero exit. */
+function attempt(args: string[], cwd?: string): Promise<GitResult> {
+  return run("git", args, { cwd, env: GIT_ENV }).then(
+    ({ stdout, stderr }) => ({ code: 0, stdout, stderr }),
+    (error: unknown) => error as GitResult
+  );
+}
+
+async function bareRef(ref: string): Promise<string | null> {
+  const result = await attempt(["--git-dir", join(root, "o/r.git"), "rev-parse", "--verify", ref]);
+  return result.code === 0 ? (result.stdout ?? "").trim() : null;
+}
+
+async function commit(message: string, extra: string[] = []): Promise<string> {
+  await writeFile(join(cloneDir, "note.txt"), `${message}\n`, "utf8");
+  await run("git", ["add", "note.txt"], { cwd: cloneDir, env: GIT_ENV });
+  await run(
+    "git",
+    ["-c", "user.email=agent@fabric", "-c", "user.name=fabric-agent", "commit", ...extra, "-m", message],
+    { cwd: cloneDir, env: GIT_ENV }
+  );
+  const { stdout } = await run("git", ["rev-parse", "HEAD"], { cwd: cloneDir, env: GIT_ENV });
+  return stdout.trim();
+}
+
 test(
-  "GH12 real git: clone through the broker, push fabric/e2e lands, push to main is refused",
+  "GH12 real git: clone, create and update fabric/e2e land; main, deletes and force pushes are refused with reasons",
   { timeout: 120_000 },
   async () => {
     cloneDir = await mkdtemp(join(tmpdir(), "gh-clone-"));
@@ -176,31 +208,38 @@ test(
 
     await run("git", [...auth, "clone", url, cloneDir], { env: GIT_ENV });
 
-    await writeFile(join(cloneDir, "note.txt"), "fabric e2e\n", "utf8");
-    await run("git", ["add", "note.txt"], { cwd: cloneDir, env: GIT_ENV });
-    await run(
-      "git",
-      ["-c", "user.email=agent@fabric", "-c", "user.name=fabric-agent", "commit", "-m", "e2e commit"],
-      { cwd: cloneDir, env: GIT_ENV }
-    );
-    const { stdout: head } = await run("git", ["rev-parse", "HEAD"], { cwd: cloneDir, env: GIT_ENV });
+    // create, then update (a fast-forward with a non-zero old)
+    const first = await commit("e2e commit");
+    await run("git", [...auth, "push", url, "HEAD:refs/heads/fabric/e2e"], { cwd: cloneDir, env: GIT_ENV });
+    expect(await bareRef("refs/heads/fabric/e2e")).toBe(first);
+    const second = await commit("e2e update");
+    await run("git", [...auth, "push", url, "HEAD:refs/heads/fabric/e2e"], { cwd: cloneDir, env: GIT_ENV });
+    expect(await bareRef("refs/heads/fabric/e2e")).toBe(second);
 
-    await run("git", [...auth, "push", url, `HEAD:refs/heads/fabric/e2e`], { cwd: cloneDir, env: GIT_ENV });
-    const { stdout: landed } = await run("git", ["--git-dir", join(root, "o/r.git"), "rev-parse", "refs/heads/fabric/e2e"]);
-    expect(landed.trim()).toBe(head.trim());
-
-    // pushing to main is refused by the broker policy, not by git
-    const pushMain = (await run("git", [...auth, "push", url, "HEAD:refs/heads/main"], {
-      cwd: cloneDir,
-      env: GIT_ENV,
-    }).catch((error: unknown) => error)) as { code?: number; stderr?: string };
+    // pushing to main is refused by the broker policy, and git says why
+    const pushMain = await attempt([...auth, "push", url, "HEAD:refs/heads/main"], cloneDir);
     expect(pushMain.code).not.toBe(0);
-    expect(pushMain.stderr).toContain("403");
-    const mainMissing = await run("git", ["--git-dir", join(root, "o/r.git"), "rev-parse", "--verify", "refs/heads/main"]).then(
-      () => false,
-      () => true
-    );
-    expect(mainMissing).toBe(true); // bare repo's main is unchanged: still absent
+    expect(pushMain.stderr).toContain("[remote rejected]");
+    expect(pushMain.stderr).toContain("pushes must stay under refs/heads/fabric/");
+    expect(await bareRef("refs/heads/main")).toBeNull(); // bare repo's main is unchanged: still absent
+
+    // a delete is refused by the broker, the branch survives
+    const remove = await attempt([...auth, "push", url, ":refs/heads/fabric/e2e"], cloneDir);
+    expect(remove.code).not.toBe(0);
+    expect(remove.stderr).toContain("ref deletion is not allowed");
+    expect(await bareRef("refs/heads/fabric/e2e")).toBe(second);
+
+    // a force push passes the broker and is refused upstream (the ruleset)
+    await commit("e2e rewritten", ["--amend"]);
+    const force = await attempt([...auth, "push", "--force", url, "HEAD:refs/heads/fabric/e2e"], cloneDir);
+    expect(force.code).not.toBe(0);
+    expect(force.stderr).toContain("non-fast-forward");
+    expect(await bareRef("refs/heads/fabric/e2e")).toBe(second);
+
+    // a repo outside `repos`: git prints the broker's plain-text reason
+    const detached = await attempt([...auth, "clone", repoUrl().replace("/o/r.git", "/o/other.git"), `${cloneDir}-other`]);
+    expect(detached.code).not.toBe(0);
+    expect(detached.stderr).toContain("repo not attached to this installation: o/other");
 
     // the installation token was minted through the app path
     expect(apiReceived.some((request) => request.url === "/app/installations/77/access_tokens")).toBe(true);

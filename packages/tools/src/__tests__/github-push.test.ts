@@ -1,14 +1,15 @@
-// ANY-44 T11 — the push policy (GH4–GH8). A fake git upstream on 127.0.0.1
-// records what reaches it; a fake GitHub API serves the installation token
-// and the compare endpoint the non-fast-forward check consults. The push
-// bodies come from the pkt-line fixtures. No network.
+// ANY-44 T11 — the push policy (GH4–GH8, GH13, GH14). A fake git upstream
+// on 127.0.0.1 records what reaches it; a fake GitHub API serves the
+// installation token and counts compare calls (the broker must make none:
+// fast-forward is GitHub's ruleset to enforce). The push bodies come from
+// the pkt-line fixtures. No network.
 import { generateKeyPairSync } from "node:crypto";
 import type { AddressInfo } from "node:net";
-import { createServer, type IncomingMessage } from "node:http";
+import { createServer, request as httpRequest, type IncomingMessage } from "node:http";
 import { afterAll, afterEach, beforeAll, beforeEach, expect, test } from "vitest";
 import { memoryVault } from "../vault";
 import { createTokenStore, startBroker, type BrokerServer, type BrokerUseRecord } from "../broker";
-import { buildPushBody, fakePack, sha, ZERO_SHA } from "./fixtures/github/pktline";
+import { buildPushBody, fakePack, FLUSH_PKT, pktLine, reportStatusLines, sha, ZERO_SHA } from "./fixtures/github/pktline";
 
 const KEY = generateKeyPairSync("rsa", {
   modulusLength: 2048,
@@ -19,7 +20,6 @@ const INSTALLATION_TOKEN = "ghs_push_test_token";
 
 type Received = { method: string; url: string; authorization: string; body: Buffer };
 let received: Received[] = [];
-let compareStatus = "ahead";
 let compareCalls: { url: string; authorization: string }[] = [];
 
 async function readBody(req: IncomingMessage): Promise<Buffer> {
@@ -50,7 +50,7 @@ const api = createServer(async (req, res) => {
   if (req.method === "GET" && compare) {
     compareCalls.push({ url: req.url ?? "", authorization: req.headers.authorization ?? "" });
     res.writeHead(200, { "content-type": "application/json" });
-    res.end(JSON.stringify({ status: compareStatus }));
+    res.end(JSON.stringify({ status: "diverged" }));
     return;
   }
   res.writeHead(404, { "content-type": "application/json" });
@@ -64,7 +64,6 @@ const uses: BrokerUseRecord[] = [];
 beforeEach(async () => {
   received = [];
   compareCalls = [];
-  compareStatus = "ahead";
   uses.length = 0;
   const vault = memoryVault();
   await vault.put("gh_app_key", KEY.privateKey, { agents: "all" });
@@ -74,6 +73,7 @@ beforeEach(async () => {
     rules: [
       {
         name: "git",
+        surface: "git",
         upstream: `http://127.0.0.1:${(gitUpstream.address() as AddressInfo).port}`,
         auth: {
           type: "github-app",
@@ -112,22 +112,33 @@ function egressToken(): string {
   return tokens.issue({ workspaceId: "ws", agentId: "dana", ttlMs: 300_000 });
 }
 
-function push(commands: readonly { old: string; new: string; ref: string }[]): Promise<Response> {
-  const body = buildPushBody(commands, "report-status", fakePack());
+type Ref = { old: string; new: string; ref: string };
+
+function push(commands: readonly Ref[], caps = "report-status"): Promise<Response> {
+  return pushBody(buildPushBody(commands, caps, fakePack()));
+}
+
+function pushBody(body: Buffer): Promise<Response> {
   return fetch(`${broker.url}/egress/git/o/r.git/git-receive-pack`, {
     method: "POST",
     headers: {
       authorization: `Bearer ${egressToken()}`,
       "content-type": "application/x-git-receive-pack-request",
-      "git-protocol": "version=2",
     },
     body,
   });
 }
 
-test("GH4 a fast-forward push to refs/heads/fabric/* is forwarded with x-access-token basic auth", async () => {
-  const old = sha("ff-old");
-  const response = await push([{ old, new: sha("ff-new"), ref: "refs/heads/fabric/fix-1" }]);
+/** A refused push: 200 with a receive-pack report rejecting every ref. */
+async function rejection(response: Response, sideBand = false): Promise<string[]> {
+  expect(response.status).toBe(200);
+  expect(response.headers.get("content-type")).toBe("application/x-git-receive-pack-result");
+  return reportStatusLines(Buffer.from(await response.arrayBuffer()), sideBand);
+}
+
+test("GH4 a push to refs/heads/fabric/* is forwarded byte-identical with x-access-token basic auth", async () => {
+  const commands = [{ old: ZERO_SHA, new: sha("ff-new"), ref: "refs/heads/fabric/fix-1" }];
+  const response = await push(commands);
 
   expect(response.status).toBe(200);
   expect(received).toHaveLength(1);
@@ -138,51 +149,104 @@ test("GH4 a fast-forward push to refs/heads/fabric/* is forwarded with x-access-
   const expected = Buffer.from(`x-access-token:${INSTALLATION_TOKEN}`, "utf8").toString("base64");
   expect(request.authorization).toBe(`Basic ${expected}`);
   // the pushed body reaches the upstream byte-identical
-  const sent = buildPushBody([{ old, new: sha("ff-new"), ref: "refs/heads/fabric/fix-1" }], "report-status", fakePack());
-  expect(request.body.equals(sent)).toBe(true);
-
-  // non-zero old consulted the compare endpoint with the app token
-  expect(compareCalls).toHaveLength(1);
-  expect(compareCalls[0].url).toBe(`/repos/o/r/compare/${old}...${sha("ff-new")}`);
-  expect(compareCalls[0].authorization).toBe(`Bearer ${INSTALLATION_TOKEN}`);
+  expect(request.body.equals(buildPushBody(commands, "report-status", fakePack()))).toBe(true);
+  expect(uses.at(-1)).toMatchObject({ allowed: true, status: 200 });
 });
 
-test("GH5 a push to refs/heads/main is a 403 and nothing is forwarded", async () => {
-  const response = await push([{ old: ZERO_SHA, new: sha("main-new"), ref: "refs/heads/main" }]);
+test("GH5 a push to refs/heads/main is rejected with its reason and nothing is forwarded", async () => {
+  const lines = await rejection(await push([{ old: ZERO_SHA, new: sha("main-new"), ref: "refs/heads/main" }]));
 
-  expect(response.status).toBe(403);
   expect(received).toHaveLength(0);
-  const error = (await response.json()) as { error: string };
-  expect(error.error).toContain("fabric");
+  expect(lines[0]).toBe("unpack ok");
+  expect(lines[1]).toMatch(/^ng refs\/heads\/main .*refs\/heads\/fabric\//);
+  expect(uses.at(-1)).toMatchObject({ allowed: false, reason: expect.stringContaining("fabric") });
 });
 
-test("GH6 a ref deletion (new = all zeros) is a 403", async () => {
-  const response = await push([{ old: sha("del-old"), new: ZERO_SHA, ref: "refs/heads/fabric/old" }]);
+test("GH6 a ref deletion (new = all zeros) is rejected", async () => {
+  const lines = await rejection(await push([{ old: sha("del-old"), new: ZERO_SHA, ref: "refs/heads/fabric/old" }]));
 
-  expect(response.status).toBe(403);
   expect(received).toHaveLength(0);
-  expect(((await response.json()) as { error: string }).error).toContain("delet");
+  expect(lines[1]).toMatch(/^ng refs\/heads\/fabric\/old .*delet/);
 });
 
-test("GH7 a tag push is a 403", async () => {
-  const response = await push([{ old: ZERO_SHA, new: sha("tag-new"), ref: "refs/tags/v1" }]);
+test("GH7 a tag push is rejected", async () => {
+  const lines = await rejection(await push([{ old: ZERO_SHA, new: sha("tag-new"), ref: "refs/tags/v1" }]));
 
-  expect(response.status).toBe(403);
   expect(received).toHaveLength(0);
-  expect(((await response.json()) as { error: string }).error).toContain("fabric");
+  expect(lines[1]).toMatch(/^ng refs\/tags\/v1 .*fabric/);
 });
 
-test("GH8 a non-fast-forward push is a 403 for both diverged and behind", async () => {
-  compareStatus = "diverged";
-  const diverged = await push([{ old: sha("nf-old"), new: sha("nf-new"), ref: "refs/heads/fabric/fix-1" }]);
-  expect(diverged.status).toBe(403);
-  expect(received).toHaveLength(0);
-  expect(compareCalls).toHaveLength(1); // the check actually ran
+test("GH8 an update to an existing fabric/* branch is forwarded without a compare call", async () => {
+  // The new commits are still in the pack, so GitHub's compare cannot see
+  // them; fast-forward is enforced by the ruleset upstream (GH12 shows its
+  // refusal reaching git).
+  const response = await push([{ old: sha("up-old"), new: sha("up-new"), ref: "refs/heads/fabric/fix-1" }]);
 
-  compareCalls = [];
-  compareStatus = "behind";
-  const behind = await push([{ old: sha("nf-old"), new: sha("nf-new-2"), ref: "refs/heads/fabric/fix-2" }]);
-  expect(behind.status).toBe(403);
+  expect(response.status).toBe(200);
+  expect(received).toHaveLength(1);
+  expect(compareCalls).toHaveLength(0);
+});
+
+test("GH13 the pack is never buffered: commands decide, the pack streams, oversize and truncated sections refuse", async () => {
+  // a refused push is answered while the client is still sending its pack
+  const commands = pktLine(`${ZERO_SHA} ${sha("x")} refs/heads/main\0report-status\n`);
+  const early = await new Promise<{ status: number; body: Buffer }>((resolve, reject) => {
+    const url = new URL(`${broker.url}/egress/git/o/r.git/git-receive-pack`);
+    const request = httpRequest(
+      { host: url.hostname, port: url.port, path: url.pathname, method: "POST", headers: { authorization: `Bearer ${egressToken()}` } },
+      (response) => {
+        const chunks: Buffer[] = [];
+        response.on("data", (chunk: Buffer) => chunks.push(chunk));
+        response.on("end", () => {
+          request.destroy();
+          resolve({ status: response.statusCode ?? 0, body: Buffer.concat(chunks) });
+        });
+      }
+    );
+    request.on("error", reject);
+    request.write(Buffer.concat([commands, FLUSH_PKT, Buffer.from("PACK")])); // the pack never finishes
+  });
+  expect(early.status).toBe(200);
+  expect(reportStatusLines(early.body)[1]).toMatch(/^ng refs\/heads\/main /);
   expect(received).toHaveLength(0);
-  expect(compareCalls).toHaveLength(1);
+
+  // a pack far larger than the command limit streams through intact
+  const bigPack = Buffer.alloc(4 * 1024 * 1024, 9);
+  const big = buildPushBody([{ old: ZERO_SHA, new: sha("big"), ref: "refs/heads/fabric/big" }], "report-status", bigPack);
+  expect((await pushBody(big)).status).toBe(200);
+  expect(received.at(-1)?.body.equals(big)).toBe(true);
+
+  // git's probe before a large push is a bare flush: nothing to update, forwarded
+  expect((await pushBody(FLUSH_PKT)).status).toBe(200);
+  expect(received.at(-1)?.body.equals(FLUSH_PKT)).toBe(true);
+  received = [];
+
+  // a command section past the limit, and one cut off before its flush, refuse
+  const many = Array.from({ length: 1000 }, (_, index) => ({ old: ZERO_SHA, new: sha(`m${index}`), ref: `refs/heads/fabric/m${index}` }));
+  const oversize = await pushBody(buildPushBody(many, "report-status", fakePack()));
+  expect(oversize.status).toBe(403);
+  expect(await oversize.text()).toContain("too-large");
+  const truncated = await pushBody(pktLine(`${ZERO_SHA} ${sha("t")} refs/heads/fabric/t\0report-status\n`));
+  expect(truncated.status).toBe(403);
+  expect(await truncated.text()).toContain("truncated");
+  expect(received).toHaveLength(0);
+});
+
+test("GH14 a push is all or nothing, reported in the client's side band; no report-status means a plain 403", async () => {
+  const mixed = [
+    { old: ZERO_SHA, new: sha("ok"), ref: "refs/heads/fabric/ok" },
+    { old: ZERO_SHA, new: sha("bad"), ref: "refs/heads/main" },
+  ];
+  const lines = await rejection(await push(mixed, "report-status side-band-64k agent=git/2.43.0"), true);
+  expect(lines).toHaveLength(3);
+  expect(lines[0]).toBe("unpack ok");
+  expect(lines[1]).toMatch(/^ng refs\/heads\/fabric\/ok refused with the rest of the push: /);
+  expect(lines[2]).toMatch(/^ng refs\/heads\/main pushes must stay under/);
+  expect(received).toHaveLength(0);
+
+  const silent = await push([{ old: ZERO_SHA, new: sha("s"), ref: "refs/heads/main" }], "agent=git/2.43.0");
+  expect(silent.status).toBe(403);
+  expect(silent.headers.get("content-type")).toContain("text/plain");
+  expect(await silent.text()).toContain("refs/heads/fabric/");
+  expect(received).toHaveLength(0);
 });

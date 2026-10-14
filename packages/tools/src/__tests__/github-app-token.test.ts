@@ -1,4 +1,4 @@
-// ANY-44 T11 — the GitHub App token path (GH1, GH2). A fake GitHub on
+// ANY-44 T11 — the GitHub App token path (GH1, GH2, GH16). A fake GitHub on
 // 127.0.0.1 serves POST /app/installations/{id}/access_tokens and records
 // every request; the private key is generated at runtime and lives only in
 // the vault. No network.
@@ -27,6 +27,16 @@ type TokenCall = { authorization: string; body: unknown };
 const tokenCalls: TokenCall[] = [];
 
 const api = createServer((req, res) => {
+  const malformed: Record<string, unknown> = {
+    "/app/installations/88/access_tokens": { token: "ghs_x", expires_at: "not a date" },
+    "/app/installations/89/access_tokens": { expires_at: new Date(clock + TOKEN_TTL_MS).toISOString() },
+  };
+  if (req.method === "POST" && req.url !== undefined && req.url in malformed) {
+    req.resume();
+    res.writeHead(201, { "content-type": "application/json" });
+    res.end(JSON.stringify(malformed[req.url]));
+    return;
+  }
   if (req.method === "POST" && req.url === `/app/installations/${INSTALLATION_ID}/access_tokens`) {
     const chunks: Buffer[] = [];
     req.on("data", (chunk: Buffer) => chunks.push(chunk));
@@ -116,7 +126,7 @@ test("GH2 the token request scopes repos and permissions, caches per installatio
       appId: APP_ID,
       installationId: INSTALLATION_ID,
       privateKeySecret: "gh_app_key",
-      repos: ["o/r", "other/repo2"],
+      repos: ["o/r", "o/repo2"],
       apiUrl: apiUrl(),
     },
     vault,
@@ -139,4 +149,33 @@ test("GH2 the token request scopes repos and permissions, caches per installatio
   clock += 55 * 60 * 1000 + 1000;
   await manager.getToken();
   expect(tokenCalls).toHaveLength(before + 2);
+});
+
+test("GH16 concurrent callers share one mint; malformed responses and multi-owner repos are refused", async () => {
+  const vault = memoryVault();
+  await vault.put("gh_app_key", KEY.privateKey, { agents: "all" });
+  const auth = {
+    type: "github-app" as const,
+    appId: APP_ID,
+    installationId: INSTALLATION_ID,
+    privateKeySecret: "gh_app_key",
+    repos: ["o/r"],
+    apiUrl: apiUrl(),
+  };
+  clock += 24 * 60 * 60 * 1000; // a fresh clock: nothing cached from GH2
+  const manager = createAppTokenManager({ auth, vault, now: () => clock });
+
+  const before = tokenCalls.length;
+  const tokens = await Promise.all([manager.getToken(), manager.getToken(), manager.getToken()]);
+  expect(tokens).toEqual([TOKEN, TOKEN, TOKEN]);
+  expect(tokenCalls).toHaveLength(before + 1);
+
+  for (const installationId of [88, 89]) {
+    const broken = createAppTokenManager({ auth: { ...auth, installationId }, vault, now: () => clock });
+    await expect(broken.getToken()).rejects.toThrow("malformed");
+  }
+
+  expect(() => createAppTokenManager({ auth: { ...auth, repos: ["o/r", "p/q"] }, vault })).toThrow("one owner");
+  expect(() => createAppTokenManager({ auth: { ...auth, repos: ["just-a-name"] }, vault })).toThrow("owner/name");
+  expect(() => createAppTokenManager({ auth: { ...auth, repos: [] }, vault })).toThrow("owner/name");
 });
