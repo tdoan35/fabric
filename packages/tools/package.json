@@ -14,6 +14,8 @@
   },
   "dependencies": {
     "@fabric/runtime": "*",
+    "agentmail": "^0.5.35",
+    "exa-js": "^2.25.0",
     "zod": "^4.6.5"
   },
   "devDependencies": {

@@ -215,7 +215,10 @@ export async function handleToolExecJob(lease: QueueLease, deps: ToolExecJobDeps
         await append(tx, lease.workspaceId, [{ streamId, events: recoveryFacts(key, callId, effect, args) }]);
       } else {
         const lines: string[] = [];
-        const result: ToolRunResult = await tools.run(tool, args, { onLine: (line) => lines.push(line) });
+        const result: ToolRunResult = await tools.run(tool, args, {
+          onLine: (line) => lines.push(line),
+          callId, // ANY-72: the id a `once` tool derives its idempotency key from
+        });
         const batches: { streamId: string; events: EventInput[] }[] = [];
         if (lines.length > 0) batches.push({ streamId, events: telemetryBatch(key, lines) });
         batches.push({ streamId, events: completionFacts(key, callId, result) });
