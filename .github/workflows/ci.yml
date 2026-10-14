@@ -1,9 +1,12 @@
 # Fabric CI — required gate for every PR (plan §6).
-# Two jobs:
-#   verify — REQUIRED for merge (branch protection context: "verify").
+# Jobs:
+#   checks, mutation, storybook — run in parallel; together they are the gate.
+#   verify — REQUIRED for merge (branch protection context: "verify"). Passes only
+#            when all three pass, and prints the failed jobs' logs so the factory's
+#            CI readback (which excerpts the "verify" job log) still sees the error.
 #   lint   — report-only until the 6 pre-existing errors in apps/web are fixed
 #            (5x react-hooks setState-in-effect, 1x unused import). Then move
-#            lint into verify and delete this note.
+#            lint into checks and delete this note.
 name: CI
 
 on:
@@ -16,9 +19,9 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  verify:
+  checks:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 15
     # Postgres for the runtime's second driver (ANY-26). pgvector at Neon's major
     # version: a plain image would pass here and fail on vector columns in production.
     services:
@@ -63,10 +66,60 @@ jobs:
       - name: Build
         run: npm run build
 
-      # Mutation testing (ANY-25). A no-op until a workspace defines `mutate`; the
-      # pass mark is `thresholds.break` in that package's stryker.config.json.
+  # Mutation testing (ANY-25). Only packages/core defines `mutate`; the pass mark is
+  # `thresholds.break` in its stryker.config.json. On a PR it runs only when the
+  # diff touches core or what core's tests load; on main it always runs.
+  mutation:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # A PR checks out its merge commit: HEAD^1 is the base tip, so
+          # HEAD^1..HEAD is exactly the PR's change.
+          fetch-depth: 2
+
+      - name: Decide whether mutation tests apply
+        id: scope
+        run: |
+          if [ "${{ github.event_name }}" != "pull_request" ]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          elif git diff --quiet HEAD^1 HEAD -- \
+              packages/core packages/fixtures packages/contracts \
+              package.json package-lock.json tsconfig.base.json .github/workflows/ci.yml; then
+            echo "No changes under the mutation scope; skipping."
+            echo "run=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/setup-node@v4
+        if: steps.scope.outputs.run == 'true'
+        with:
+          node-version: 26
+          cache: npm
+
+      - name: Install dependencies
+        if: steps.scope.outputs.run == 'true'
+        run: npm ci
+
       - name: Mutation tests
+        if: steps.scope.outputs.run == 'true'
         run: npm run mutate --workspaces --if-present
+
+  storybook:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 26
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
 
       - name: Build Storybook
         run: npm run build-storybook -w web
@@ -76,6 +129,44 @@ jobs:
 
       - name: Browser story tests (interaction + a11y, vitest project "storybook")
         run: npm run test-storybook -w web
+
+  verify:
+    needs: [checks, mutation, storybook]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: read
+    steps:
+      - name: Require checks, mutation and storybook
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CHECKS: ${{ needs.checks.result }}
+          MUTATION: ${{ needs.mutation.result }}
+          STORYBOOK: ${{ needs.storybook.result }}
+          REPO: ${{ github.repository }}
+          RUN_ID: ${{ github.run_id }}
+        run: |
+          echo "checks=$CHECKS mutation=$MUTATION storybook=$STORYBOOK"
+          if [ "$CHECKS" = success ] && [ "$MUTATION" = success ] && [ "$STORYBOOK" = success ]; then
+            exit 0
+          fi
+          # Per-job logs: `gh run view --log-failed` waits for the whole run, and this
+          # job is part of it. Cut at the runner teardown, as the readback does.
+          gh api "repos/$REPO/actions/runs/$RUN_ID/jobs" --jq '.jobs[]
+              | select(.name != "verify")
+              | select(.conclusion == "failure" or .conclusion == "cancelled" or .conclusion == "timed_out")
+              | "\(.id) \(.name)"' |
+            while read -r id name; do
+              echo "::group::$name"
+              # curl, not `gh api`: gh refuses to print the log's terminal colour codes.
+              curl -fsSL -H "Authorization: Bearer $GH_TOKEN" \
+                "https://api.github.com/repos/$REPO/actions/jobs/$id/logs" |
+                sed '/Post job cleanup\./q' | tail -n 300 || true
+              echo "::endgroup::"
+            done
+          echo "Error: a required job did not succeed"
+          exit 1
 
   lint:
     runs-on: ubuntu-latest
