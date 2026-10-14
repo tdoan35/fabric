@@ -3,10 +3,13 @@
 // criteria — so finalizeRun still posts the results into the routine's thread for free. Assistant
 // jobs are Dana's scheduled turn (assistant.runScheduled). Every outcome lands on the fire and
 import type { Schedule, ScheduleFire } from "@fabric/contracts";
+import type { ChatPart } from "@fabric/contracts";
 import { finishFire, readRegistry, sql } from "@fabric/db";
 import type { Db } from "@fabric/db";
 import { hub } from "./hub";
 import { runtime } from "./runtime";
+import { getRuntime } from "../runtime/bootstrap";
+import { postSystemMessage } from "../runtime/session-messages";
 import { startTeamJob } from "./dev-team";
 import { STAYED } from "./dev-team";
 
@@ -81,6 +84,27 @@ async function fireAssistantJob(schedule: Schedule, fire: ScheduleFire): Promise
     prompt: schedule.prompt,
   });
   await finishFire(runtime().db, fire.id, { messageId });
-  hub.publishApp({ type: "session.message", sessionId: schedule.sessionId, messageId });
+  // S10: a session on the log reads the digest as stream telemetry instead of
+  // the `session.message` ping; legacy threads keep the ping. The digest text
+  // is the turn's own reply, read back from the thread row `runScheduled` wrote.
+  const digestText = async (): Promise<string> => {
+    const rows = await runtime().db.db.execute(sql`select content from chat_messages where id = ${messageId}`);
+    const content = (rows.rows[0] as { content?: ChatPart[] } | undefined)?.content;
+    return (content ?? [])
+      .filter((part): part is Extract<ChatPart, { type: "text" }> => part.type === "text")
+      .map((part) => part.text)
+      .join("\n\n");
+  };
+  const fabric = getRuntime();
+  const posted = fabric !== undefined
+    ? await postSystemMessage(fabric, schedule.sessionId, {
+        id: `schedule:${schedule.id}:${fire.scheduledFor}`,
+        text: await digestText(),
+        origin: { scheduleId: schedule.id },
+      })
+    : false;
+  if (!posted) {
+    hub.publishApp({ type: "session.message", sessionId: schedule.sessionId, messageId });
+  }
   hub.publishApp({ type: "registry.changed" }); // the thread's row: count and unread state
 }
