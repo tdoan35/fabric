@@ -129,12 +129,15 @@ interface StoredEventLike {
 }
 
 /** Boots one session stream with the given definition, posts one message, and
- * drains the real worker loop over the fake ports. */
+ * drains the worker loop over the fake ports. The drain is bounded (core
+ * decide re-emits the turn's end on every re-decide — the S5 known behavior —
+ * so the pass cap sits well past the turn's own ~30 passes). */
 async function runTurn(opts: {
   definition: Record<string, unknown>;
   incognito: boolean;
   script: readonly FakeResult[];
   recall: (query: string) => Promise<readonly { key: string; value: string; source: string }[]>;
+  maxPasses?: number;
 }) {
   const dataDir = await mkdtemp(path.join(tmpdir(), "fabric-s7-"));
   const store = await openStore({ driver: "pglite", dataDir });
@@ -156,23 +159,26 @@ async function runTurn(opts: {
     );
 
     const sent: string[] = [];
-    await runUntilIdle({
-      store,
-      queue,
-      ports: {
-        model: withSessionContext(model, opts.recall),
-        tools: sessionTools({ recall: opts.recall }),
-        surface: {
-          send: async (_target: string, message: { text: string }) => {
-            sent.push(message.text);
-            return {};
+    await runUntilIdle(
+      {
+        store,
+        queue,
+        ports: {
+          model: withSessionContext(model, opts.recall),
+          tools: sessionTools({ recall: opts.recall }),
+          surface: {
+            send: async (_target: string, message: { text: string }) => {
+              sent.push(message.text);
+              return {};
+            },
           },
         },
+        workerId: "worker-s7",
       },
-      workerId: "worker-s7",
-    });
+      opts.maxPasses ?? 100
+    );
 
-    const events = (await store.readStream(stream, { workspaceId: WORKSPACE })) as StoredEventLike[];
+    const events = (await store.readStream(stream, { workspaceId: WORKSPACE })) as unknown as StoredEventLike[];
     return { model, events, sent };
   } finally {
     await store.close();
@@ -281,8 +287,9 @@ test("A5 the per-turn cap ends the turn after one call with the cap message and 
   const { model, events } = await runTurn({
     definition,
     incognito: false,
-    // one call at 0.02 USD is over the 0.01 cap
-    script: [textResult("", 0.02)],
+    // one call at 0.02 USD is over the 0.01 cap; the cap branch speaks after
+    // the call's tool resolves, so the call carries one
+    script: [callResult([{ id: "c1", name: "recall", args: { query: "q" } }], { usage: { inputTokens: 1, outputTokens: 1, costUsd: 0.02 } })],
     recall: recall.recall,
   });
 

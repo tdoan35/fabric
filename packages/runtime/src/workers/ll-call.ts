@@ -16,7 +16,7 @@
 // failed call rolls the attempt back entirely for the retry to redo.
 import { parseEvent } from "@fabric/core";
 import type { Queue, QueueLease } from "../queue/types";
-import type { ModelMessage, ModelPort, ModelResult } from "../ports";
+import type { ModelMessage, ModelPort, ModelResult, ModelTool } from "../ports";
 import { append } from "../store/store";
 import type { EventInput, RuntimeStore } from "../store/types";
 import { enqueueReDecides, readEventRows, type EventRow } from "./decide";
@@ -142,7 +142,9 @@ export function rebuildFrom(rows: readonly EventRow[]): Rebuild {
   }
 
   const def = definitionOf(rows);
-  const system = typeof def.systemPrompt === "string" ? def.systemPrompt : "";
+  // The session definition's `system` (ANY-56 S7) wins; the legacy snapshot key stays.
+  const system =
+    typeof def.system === "string" ? def.system : typeof def.systemPrompt === "string" ? def.systemPrompt : "";
   return { system, pairs, summary, compactedUpTo, call };
 }
 
@@ -260,11 +262,14 @@ export async function handleLlmCallJob(lease: QueueLease, deps: LlmCallJobDeps):
       });
       await append(tx, lease.workspaceId, [{ streamId, events: preEvents }]);
 
-      const tools = arrayValue(definitionOf(rows).tools).filter((name): name is string => typeof name === "string").map((name) => ({ name }));
+      const definition = definitionOf(rows);
+      const tools = toolDeclarationsOf(definition);
+      const thinking = typeof definition.thinking === "string" ? definition.thinking : undefined;
       const result: ModelResult = await model.call({
         system: rebuilt.system,
         messages: conversation.map(({ message }) => message),
         tools,
+        ...(thinking !== undefined ? { thinking } : {}),
         ...(deps.onDelta !== undefined ? { onDelta: deps.onDelta } : {}),
       });
 
@@ -351,6 +356,27 @@ export async function handleLlmCallJob(lease: QueueLease, deps: LlmCallJobDeps):
 
 function arrayValue(value: unknown): unknown[] {
   return Array.isArray(value) ? value : [];
+}
+
+/** The tools the model call carries: the definition's full declarations
+ * (`toolSchemas`, ANY-56 S7) when it carries any, else the legacy name list. */
+function toolDeclarationsOf(definition: Record<string, unknown>): ModelTool[] {
+  const schemas = arrayValue(definition.toolSchemas);
+  if (schemas.length > 0) {
+    return schemas.flatMap((entry) => {
+      if (!isRecord(entry) || typeof entry.name !== "string") return [];
+      return [
+        {
+          name: entry.name,
+          ...(typeof entry.description === "string" ? { description: entry.description } : {}),
+          ...(entry.parameters !== undefined ? { parameters: entry.parameters } : {}),
+        },
+      ];
+    });
+  }
+  return arrayValue(definition.tools)
+    .filter((name): name is string => typeof name === "string")
+    .map((name) => ({ name }));
 }
 
 function isRetryStatus(status: unknown): boolean {
