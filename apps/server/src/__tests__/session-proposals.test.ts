@@ -97,9 +97,30 @@ const reset = async (): Promise<void> => {
     state.dir = undefined;
   }
   if (state.admin !== undefined) {
-    for (const name of state.databases) await state.admin.drop(name).catch(() => undefined);
+    for (const name of state.databases) await dropQuiesced(name);
     state.databases = [];
   }
+};
+
+/** Wait until the server has no live backend on this database (bounded), then drop.
+ * `pool.end()` resolves before the server-side process exits; a `drop ... with (force)`
+ * landing in that window TERMINATEs the exiting connection and the socket's late error
+ * event escapes as an uncaught exception — failing the run despite green tests. */
+const dropQuiesced = async (name: string): Promise<void> => {
+  if (state.admin === undefined) return;
+  const deadline = Date.now() + 2_000;
+  for (;;) {
+    try {
+      const live = await state.admin.admin.db.execute(
+        sql`select 1 from pg_stat_activity where datname = ${name}`,
+      );
+      if (live.rows.length === 0 || Date.now() > deadline) break;
+    } catch {
+      break; // the probe is best-effort; the drop's own guard handles the rest
+    }
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  await state.admin.drop(name).catch(() => undefined);
 };
 
 afterEach(reset);
