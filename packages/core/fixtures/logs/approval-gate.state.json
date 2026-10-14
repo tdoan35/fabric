@@ -1,0 +1,42 @@
+{
+  "status": "idle",
+  "def": {
+    "name": "dana"
+  },
+  "turn": 1,
+  "pendingInputs": [],
+  "calls": 2,
+  "openToolCalls": [],
+  "waits": [],
+  "costUsd": 0.03,
+  "turnCostUsd": 0.03,
+  "reservedUsd": 0,
+  "delegations": [],
+  "compactedUpTo": 0,
+  "cancelRequested": false,
+  "lastFact": {
+    "type": "llm.completed",
+    "payload": {
+      "turn": 1,
+      "callNo": 2,
+      "text": "Done - the note is in notes/today.md.",
+      "toolCalls": [],
+      "usage": {
+        "inputTokens": 120,
+        "outputTokens": 40,
+        "costUsd": 0.02
+      },
+      "finishReason": "stop",
+      "model": "ngram-135m"
+    }
+  },
+  "callAttempt": 0,
+  "head": 9,
+  "session": null,
+  "turnDisposition": false,
+  "turnToolCalls": [
+    { "name": "write_file", "args": { "path": "notes/today.md", "content": "Standup: shipped the gate." } }
+  ],
+  "approvalMode": "ask",
+  "approvals": {}
+}
