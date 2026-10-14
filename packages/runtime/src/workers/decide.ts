@@ -116,6 +116,8 @@ function decideDefFrom(state: AgentState, streamId: string): DecideDef {
   if (isRecord(d.toolEffects)) def.toolEffects = d.toolEffects as DecideDef["toolEffects"];
   if (isRecord(d.dispositionKinds)) def.dispositionKinds = d.dispositionKinds as DecideDef["dispositionKinds"];
   if (isRecord(d.agents)) def.agents = d.agents as DecideDef["agents"];
+  if (typeof d.userChosenAgent === "string") def.userChosenAgent = d.userChosenAgent;
+  if (d.dispositionVirtual === false) def.dispositionVirtual = false;
   return def;
 }
 

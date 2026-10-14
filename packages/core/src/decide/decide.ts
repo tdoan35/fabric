@@ -40,6 +40,9 @@ export type DecideDef = {
   userChosenAgent?: string;
   /** Tools whose calls name the disposition kind; the target from `args[targetArg]` or the fixed one (S2). */
   dispositionKinds?: Readonly<Record<string, { kind: "agent" | "team"; target?: string; targetArg?: string }>>;
+  /** Sessions treat `record_disposition` as virtual (S2). False = the allowlist deny path
+   * instead -- the specialist sessions, where the disposition is the user's, never the model's (S9). */
+  dispositionVirtual?: boolean;
   /** Per-tool policy (T2's `effectiveAccess` ∩ T1's `meta`), rule 2's gate input; absent keeps today's path. */
   toolPolicy?: Readonly<Record<string, { access: "allowed" | "approval"; gate: Gate; kind: ToolKind }>>;
   /** The run's approval mode (T2's `stricterMode`); sessions gate by the folded `state.approvalMode`. */
@@ -379,7 +382,7 @@ function decideRules(state: AgentState, def: DecideDef, now: number): Decision {
         const callId = typeof record.id === "string" ? record.id : "";
         const args = (record.args ?? {}) as Record<string, unknown>;
 
-        if (session && name === "record_disposition") {
+        if (session && def.dispositionVirtual !== false && name === "record_disposition") {
           if (dispositionDone) {
             // One disposition per turn: the second call is answered, none recorded (S2).
             events.push({

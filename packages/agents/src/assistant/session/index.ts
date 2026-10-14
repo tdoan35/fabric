@@ -35,6 +35,12 @@ export {
   type SessionBridgeEngines,
 } from "./bridges";
 export {
+  specialistSessionDef,
+  type SpecialistAgent,
+  type SpecialistSessionConfig,
+  type SpecialistSessionDef,
+} from "./specialist";
+export {
   PROPOSE_TOOLS,
   dbProposalStore,
   runProposeTool,

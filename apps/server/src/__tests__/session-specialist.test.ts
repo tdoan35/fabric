@@ -9,7 +9,9 @@ import path from "node:path";
 import { Hono } from "hono";
 import { openStore, type RuntimeStore } from "@fabric/runtime";
 import { expect, afterEach, test } from "vitest";
-import { setSessionAgents, sessionTurnDefinition, type SpecialistAgent } from "@fabric/agents/session";
+import { setSessionAgents } from "../runtime/bootstrap";
+import { sessionTurnDefinition } from "../runtime/bootstrap";
+import { type SpecialistAgent } from "@fabric/agents/session";
 import { getRuntime, setRuntime, startRuntime, type FabricRuntime } from "../runtime/bootstrap";
 import { sessions } from "../routes/sessions";
 
@@ -46,7 +48,7 @@ const sessionStreams = async (store: RuntimeStore): Promise<string[]> => {
   const rows = await store.transaction(async (tx) =>
     tx.query("select id from streams where id like 'session:%' order by id"),
   );
-  return rows.rows.map((row) => (row as { id: string }).id);
+  return (rows as { id: string }[]).map((row) => row.id);
 };
 
 let dataDir: string | undefined;

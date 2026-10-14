@@ -12,21 +12,23 @@ import { randomUUID } from "node:crypto";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
+import { HTTPException } from "hono/http-exception";
 import { openStore, PgQueue, runWorker } from "@fabric/runtime";
 import type { Queue, RuntimeStore, RuntimeTx, WorkerPorts } from "@fabric/runtime";
 import { createModelPort } from "@fabric/llm";
-import { createDb } from "@fabric/db";
+import { createDb, schema, sql } from "@fabric/db";
 import type { Db } from "@fabric/db";
 import {
   dbProposalStore,
   danaSessionDef,
   legacyBridges,
+  specialistSessionDef,
   sessionTools,
   withBridges,
   withSessionContext,
   type SessionBridgeEngines,
 } from "@fabric/agents/session";
-import type { ProposalActions } from "@fabric/agents/session";
+import type { ProposalActions, SpecialistAgent } from "@fabric/agents/session";
 import { recallFacts } from "@fabric/agents/assistant";
 import { InProcessLiveBus, type LiveBus } from "./live-bus";
 import { createTestModelPort, type TestModelOptions } from "./test-model";
@@ -76,19 +78,29 @@ export const SESSION_TURN_DEF = {
 };
 
 /**
- * The turn definition a new session's stream is stamped with (S7, ANY-56):
- * Dana's for `agentId: "dana"` — the loop knobs, the system prompt and the tool
- * schemas from `danaSessionDef`, the per-turn cap from DANA_TURN_COST_CAP_USD —
-* and the S5 placeholder for every other agent until S9. Incognito sessions
-* carry no recall tool, which is what keeps the memory path shut (PRODUCT
-* §10.7). The env var is read here, at stamp time; the parsed-env object the
-* server builds strips unknown keys, and the definition is not a port.
+ * The turn definition a new session's stream is stamped with (S7, ANY-56; S9,
+ * ANY-59): Dana's for `agentId: "dana"` — the loop knobs, the system prompt and
+ * the tool schemas from `danaSessionDef`, the per-turn cap from
+ * DANA_TURN_COST_CAP_USD — the specialist's (built from the agent's registry
+ * record) for any other known agent, and the S5 placeholder only when no
+ * snapshot is loaded; under a loaded one an unknown agent raises the create
+ * route's 404. Incognito sessions carry no recall tool, which is what keeps the
+ * memory path shut (PRODUCT §10.7). The env var is read here, at stamp time; the
+ * parsed-env object the server builds strips unknown keys, and the definition is
+ * not a port.
  */
 export function sessionTurnDefinition(
   agentId: string,
   opts: { incognito?: boolean } = {}
 ): Record<string, unknown> {
-  if (agentId !== "dana") return SESSION_TURN_DEF;
+  if (agentId !== "dana") {
+    const agent = sessionAgents.get(agentId);
+    if (agent !== undefined) return specialistSessionDef(agent, { incognito: opts.incognito === true });
+    // A loaded snapshot makes the id space closed: an unknown agent is a 404
+    // raised before the create route's transaction touches any stream (S9).
+    if (sessionAgentsLoaded) throw new HTTPException(404, { message: `unknown agent: ${agentId}` });
+    return SESSION_TURN_DEF;
+  }
   const raw = process.env.DANA_TURN_COST_CAP_USD;
   const parsed = raw === undefined ? undefined : Number(raw);
   // S8b: the legacy-engine bridges ride Dana's definition — the `once` effects
@@ -99,6 +111,20 @@ export function sessionTurnDefinition(
       ...(parsed !== undefined && Number.isFinite(parsed) ? { turnCostCapUsd: parsed } : {}),
     }),
   );
+}
+
+// The registry snapshot the stamp consults (S9, ANY-59): the agent records the
+// registry route serves, loaded once at boot from the app database. Unloaded
+// (unit tests, no app database) the stamp keeps the S5 placeholder for every
+// non-Dana agent; loaded, an unknown id is the create route's 404.
+const sessionAgents = new Map<string, SpecialistAgent>();
+let sessionAgentsLoaded = false;
+
+/** The registry snapshot seam: the boot loader and the tests meet here. */
+export function setSessionAgents(records: readonly SpecialistAgent[]): void {
+  sessionAgents.clear();
+  for (const record of records) sessionAgents.set(record.id, record);
+  sessionAgentsLoaded = true;
 }
 
 /** The append enqueue port: one `decide` per touched stream, keyed on the
@@ -369,6 +395,48 @@ export async function startRuntime(env: RuntimeEnv, opts: { worker?: boolean } =
   if (env.DATABASE_URL !== undefined && env.DATABASE_URL !== "") {
     appDb = createDb(env.DATABASE_URL);
     proposals = dbProposalStore(appDb);
+  }
+
+  // S9: the session agents snapshot -- the registry rows the stamp's specialist
+  // definition and the create route's 404 read. Best-effort: a failure only
+  // means specialist sessions stamp the placeholder until the next boot.
+  if (appDb !== undefined) {
+    try {
+      const rows = await appDb.db
+        .select({
+          id: schema.agents.id,
+          name: schema.agents.name,
+          role: schema.agents.role,
+          personality: schema.agents.personality,
+          summary: schema.agents.summary,
+          model: schema.agents.model,
+          workspace: schema.agents.workspace,
+        })
+        .from(schema.agents)
+        .where(sql`status = 'active'`);
+      setSessionAgents(
+        rows.map((row) => {
+          const files = row.workspace?.files ?? [];
+          const instructions = files
+            .map((file) => file.body.trim())
+            .filter((body) => body !== "")
+            .join("\n\n");
+          return {
+            id: row.id,
+            name: row.name,
+            role: row.role,
+            ...(instructions !== "" ? { instructions } : {}),
+            ...(row.personality !== "" ? { personality: row.personality } : {}),
+            ...(row.summary !== "" ? { summary: row.summary } : {}),
+            ...(row.model !== "" ? { model: row.model } : {}),
+          };
+        }),
+      );
+    } catch (error) {
+      console.log(
+        `[runtime] the session agents snapshot failed (${error instanceof Error ? error.message : String(error)}); specialist sessions stamp the placeholder`,
+      );
+    }
   }
 
   const signal = new AbortController();
