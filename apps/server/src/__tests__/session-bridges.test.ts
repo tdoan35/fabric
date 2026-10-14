@@ -60,10 +60,11 @@ test("the worker ToolPort serves both bridges with their once effect", async () 
   const store: RuntimeStore = await openStore({ driver: "pglite", dataDir });
   try {
     const ports = workerPorts({ MODEL_PORT: "test" }, new InProcessLiveBus(), undefined, store);
+    const describe = (name: string) => ports.tools?.describe(name);
 
-    expect(ports.tools.describe("handoff_to_team")).toMatchObject({ effect: "once" });
-    expect(ports.tools.describe("browser_task")).toMatchObject({ effect: "once" });
-    expect(ports.tools.describe("not_a_tool")).toBeUndefined();
+    expect(describe("handoff_to_team")).toMatchObject({ effect: "once" });
+    expect(describe("browser_task")).toMatchObject({ effect: "once" });
+    expect(describe("not_a_tool")).toBeUndefined();
   } finally {
     await store.close();
     await rm(dataDir, { recursive: true, force: true });

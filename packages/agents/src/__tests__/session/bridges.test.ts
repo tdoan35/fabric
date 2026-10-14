@@ -373,27 +373,34 @@ test("H5 the handoff turn's disposition is team with the team id; the errand tur
 });
 
 test("H6 incognito: both bridge tools are still offered, and the engines receive the user's text verbatim", async () => {
-  const fake = fakeEngines();
-  const env = await boot(
-    [
-      callResult([disposerCall("c1"), handoffCall("c2")]),
-      textResult("Handed off."),
-      callResult([disposerCall("c3"), errandCall("c4")]),
-      textResult("Watching it."),
-    ],
-    { engines: fake.engines, incognito: true },
-  );
+  const handoffFake = fakeEngines();
+  const handoff = await boot([callResult([disposerCall("c1"), handoffCall("c2")]), textResult("Handed off.")], {
+    engines: handoffFake.engines,
+    incognito: true,
+  });
   try {
-    await env.drain();
-
-    const offered = env.model.calls[0]!.tools.map((tool) => tool.name);
+    await handoff.drain();
+    const offered = handoff.model.calls[0]!.tools.map((tool) => tool.name);
     expect(offered).toContain("handoff_to_team");
     expect(offered).toContain("browser_task");
     expect(offered).not.toContain("recall"); // incognito drops only the memory path
-
-    expect(fake.handoffCalls[0]!.input.request).toBe(HANDOFF_REQUEST); // verbatim, no enrichment
-    expect(fake.errandCalls[0]!.input.goal).toBe(ERRAND_GOAL);
+    expect(handoffFake.handoffCalls[0]!.input.request).toBe(HANDOFF_REQUEST); // verbatim, no enrichment
   } finally {
-    await env.close();
+    await handoff.close();
+  }
+
+  const errandFake = fakeEngines();
+  const errand = await boot([callResult([disposerCall("c1"), errandCall("c2")]), textResult("Watching it.")], {
+    engines: errandFake.engines,
+    incognito: true,
+  });
+  try {
+    await errand.drain();
+    const offered = errand.model.calls[0]!.tools.map((tool) => tool.name);
+    expect(offered).toContain("handoff_to_team");
+    expect(offered).toContain("browser_task");
+    expect(errandFake.errandCalls[0]!.input.goal).toBe(ERRAND_GOAL); // verbatim, no enrichment
+  } finally {
+    await errand.close();
   }
 });
