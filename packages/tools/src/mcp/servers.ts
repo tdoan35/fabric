@@ -23,6 +23,9 @@ export type McpAttachment = { server: string; agentId: string; access: McpAccess
 
 export type McpToolCache = { tools: McpTool[]; fetchedAt: Date; stale: boolean };
 
+/** A server's attached agents after attach, detach or remove (none once removed). */
+export type McpAgentsChange = { server: string; agents: string[]; removed: boolean };
+
 export type McpServers = {
   readonly workspaceId: string;
   add(input: { name: string; url: string; auth: McpAuth }): Promise<McpServerRecord>;
@@ -41,6 +44,9 @@ export type McpServers = {
   /** Replaces the cached tools/list result and clears `stale`. */
   writeCache(server: string, tools: readonly McpTool[], fetchedAt: Date): Promise<void>;
   markStale(server: string): Promise<void>;
+  /** Fires after attach, detach and remove (ANY-78: M5 keeps the vault
+   * entry's agents in step). attach/detach/remove wait for the listeners. */
+  onAgentsChanged(cb: (change: McpAgentsChange) => void | Promise<void>): () => void;
 };
 
 export const MCP_SERVER_NAME_PATTERN = /^[a-z][a-z0-9]{0,19}$/;
@@ -132,6 +138,16 @@ const SERVER_COLUMNS = "name, url, auth, status, last_error, created_at";
 export function mcpServers(store: RuntimeStore, workspaceId: string): McpServers {
   const query = (sql: string, params: readonly unknown[]) =>
     store.transaction((tx) => tx.query(sql, params));
+  const listeners = new Set<(change: McpAgentsChange) => void | Promise<void>>();
+  const agentsChanged = async (server: string, removed: boolean): Promise<void> => {
+    if (listeners.size === 0) return;
+    const rows = await query(
+      `select agent_id from mcp_server_agents where workspace_id = $1 and server = $2 order by agent_id`,
+      [workspaceId, server]
+    );
+    const change = { server, agents: rows.map((row) => textOf(row.agent_id, "mcp_server_agents.agent_id")), removed };
+    for (const listener of listeners) await listener(change);
+  };
 
   return {
     workspaceId,
@@ -184,6 +200,7 @@ export function mcpServers(store: RuntimeStore, workspaceId: string): McpServers
         await tx.query(`delete from mcp_server_agents where workspace_id = $1 and server = $2`, [workspaceId, name]);
         await tx.query(`delete from mcp_servers where workspace_id = $1 and name = $2`, [workspaceId, name]);
       });
+      await agentsChanged(name, true);
     },
 
     async attach(server, agentId, access = "allowed") {
@@ -201,6 +218,7 @@ export function mcpServers(store: RuntimeStore, workspaceId: string): McpServers
           [workspaceId, server, agentId, access]
         );
       });
+      await agentsChanged(server, false);
     },
 
     async detach(server, agentId) {
@@ -208,6 +226,7 @@ export function mcpServers(store: RuntimeStore, workspaceId: string): McpServers
         `delete from mcp_server_agents where workspace_id = $1 and server = $2 and agent_id = $3`,
         [workspaceId, server, agentId]
       );
+      await agentsChanged(server, false);
     },
 
     async attachedAgents(server) {
@@ -266,6 +285,11 @@ export function mcpServers(store: RuntimeStore, workspaceId: string): McpServers
         workspaceId,
         server,
       ]);
+    },
+
+    onAgentsChanged(cb) {
+      listeners.add(cb);
+      return () => listeners.delete(cb);
     },
   };
 }
