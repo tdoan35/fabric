@@ -1,6 +1,7 @@
 // web_search (ANY-72, ANY-44 D1 step 0): Exa search inside `tool.exec` on the
 // server — no machine, no broker. The key comes from the vault through
-// `scope.secret("exa")`; the client is injectable for tests.
+// `scope.secret("exa")`; the client is injectable for tests. Failures throw:
+// the registry turns a throw into `{ ok: false, error }`.
 import { z } from "zod";
 import { defineTool } from "../define";
 import type { ToolScope } from "../define";
@@ -33,22 +34,17 @@ export const webSearchTool = () =>
       } catch {
         key = undefined;
       }
-      if (key === undefined) {
-        return { ok: false, error: "web search is not configured (vault: exa)" };
-      }
+      if (key === undefined) throw new Error("web search is not configured (vault: exa)");
 
       const exa = exaFor(ctx.scope, key);
       const { results } = await exa.search(args.query, {
         numResults: args.limit ?? 5,
         contents: { highlights: true },
       });
-      return {
-        ok: true,
-        results: results.map((hit) => ({
-          title: hit.title ?? "",
-          url: hit.url,
-          snippet: hit.highlights?.[0] ?? hit.text ?? "",
-        })),
-      };
+      return results.map((hit) => ({
+        title: hit.title ?? "",
+        url: hit.url,
+        snippet: hit.highlights?.[0] ?? hit.text ?? "",
+      }));
     },
   });

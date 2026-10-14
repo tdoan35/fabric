@@ -1,7 +1,8 @@
 // send (ANY-72, ANY-44 D1 step 0, PRODUCT §8.3): external email through
 // AgentMail. `once` + `always`: a human approves the send, and the provider
 // call carries the idempotency key derived from the call id, so the approval
-// retry cannot duplicate it. The inbox is the factory's `sendFrom`.
+// retry cannot duplicate it. The inbox is the factory's `sendFrom`. Failures
+// throw: the registry turns a throw into `{ ok: false, error }`.
 import { z } from "zod";
 import { defineTool } from "../define";
 import type { ToolScope } from "../define";
@@ -37,7 +38,7 @@ export const sendTool = ({ sendFrom }: SendDeps) =>
     step: 0,
     async execute(args, ctx) {
       if (!EMAIL_PATTERN.test(args.to)) {
-        return { ok: false, error: `not an email address: ${args.to}` };
+        throw new Error(`not an email address: ${args.to}`);
       }
       let key: string | undefined;
       try {
@@ -45,9 +46,7 @@ export const sendTool = ({ sendFrom }: SendDeps) =>
       } catch {
         key = undefined;
       }
-      if (key === undefined) {
-        return { ok: false, error: "email sending is not configured (vault: agentmail)" };
-      }
+      if (key === undefined) throw new Error("email sending is not configured (vault: agentmail)");
 
       // RUNTIME §6: the call id is the stable seed — the same call retried
       // after a crash presents the same key to the provider.
@@ -58,6 +57,6 @@ export const sendTool = ({ sendFrom }: SendDeps) =>
         { to: args.to, subject: args.subject, text: args.text },
         { idempotencyKey }
       );
-      return { ok: true, result: { messageId, idempotencyKey } };
+      return { messageId, idempotencyKey };
     },
   });
