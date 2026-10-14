@@ -180,6 +180,10 @@ describeDrivers("S11 server: incognito sessions, thread list and purge (ANY-61)"
       source: "model",
       turn: 1,
     });
+    // The head invariant: the fixture seeds past the route's appends directly.
+    await rt.store.transaction((tx) =>
+      tx.query(`update streams set head = $2 where id = $1`, [streamId, base + 2])
+    );
   };
 
   test("I4: GET /api/sessions lists normal sessions with title and updatedAt, and omits incognito ones", async () => {
@@ -285,9 +289,11 @@ describeDrivers("S11 server: incognito sessions, thread list and purge (ANY-61)"
     const firstMessage = before.find((event) => event.type === "message.received")!;
     const firstDeadline = Date.parse(firstMessage.ts) + PURGE_MS;
 
-    // Claim the job against the first deadline, then activity lands late.
-    const lease = await rt.queue.claim("purge-test", ["session.purge"], firstDeadline + 1_000);
+    // Claim the job against the first deadline, then activity lands late —
+    // comfortably past the claim instant, so the moved deadline is real.
+    const lease = await rt.queue.claim("purge-test", ["session.purge"], firstDeadline + 1);
     expect(lease).not.toBeNull();
+    await new Promise((resolve) => setTimeout(resolve, 50));
     await postMessage(sessionId, "second");
 
     // The handler runs on the first deadline's clock: newer activity exists, so
@@ -295,7 +301,7 @@ describeDrivers("S11 server: incognito sessions, thread list and purge (ANY-61)"
     await handleSessionPurgeJob(lease!, {
       store: rt.store,
       queue: rt.queue,
-      now: () => firstDeadline + 1_000,
+      now: () => firstDeadline + 1,
     });
 
     const after = await eventsOf(rt, sessionId);
