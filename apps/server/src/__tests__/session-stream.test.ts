@@ -122,11 +122,6 @@ const readEvent = async (stream: Stream, timeoutMs?: number): Promise<EventFrame
   return frame as EventFrame;
 };
 
-/** The negative: no frame at all within the window. */
-const expectQuiet = async (stream: Stream, ms: number): Promise<void> => {
-  await expect(stream.next(ms)).rejects.toThrow(/no frame/);
-};
-
 /** The live bus, structurally — the runtime carries it from S6 on. */
 type StreamBus = {
   current(streamId: string): { turn: number; callNo: number; text: string } | null;
@@ -258,12 +253,18 @@ describeDrivers("S6 server: the session stream (ANY-55)", (h) => {
       const stream = await openStream(sessionId, resume);
       const first = await readEvent(stream);
       expect(first.id, "the first frame after the resume point").toBe(4);
-      // The connection is live past the resume point, not a frozen replay.
+      // Live past the resume point, and strictly ascending: nothing at or
+      // below 3 is ever repeated. The appended event arrives without a
+      // reconnect, and anything the drain still held back follows in order.
       await appendProgress(rt, sessionId, "third");
-      const second = await readEvent(stream);
-      expect(second.id).toBe(5);
-      // Nothing at or below the resume point is (re)sent.
-      await expectQuiet(stream, 300);
+      const seen = [first.id];
+      for (;;) {
+        const frame = await readEvent(stream);
+        expect(frame.id).toBe(frame.data.seq);
+        expect(seen[seen.length - 1]!).toBeLessThan(frame.id);
+        seen.push(frame.id);
+        if (frame.data.type === "run.progress") break; // the appended one
+      }
       stream.cancel();
     }
   }, 20_000);
@@ -312,7 +313,7 @@ describeDrivers("S6 server: the session stream (ANY-55)", (h) => {
         deltas.push({ at, text: frame.data.text });
       } else if (frame.event === "event") {
         expect(frame.id).toBe(frame.data.seq);
-        if (frame.data.type === "ll.completed") {
+        if (frame.data.type === "llm.completed") {
           completed = (frame.data.payload as { text: string }).text;
           break;
         }
@@ -346,7 +347,7 @@ describeDrivers("S6 server: the session stream (ANY-55)", (h) => {
 
   test("V5: joining mid-call, the first frame after the backlog is the delta so far", async () => {
     const rt = await start(true, { MODEL_VARIANT: "chunked" });
-    const live = liveOf(rt);
+    liveOf(rt);
     const sessionId = await createSession();
     await postJson(`/api/sessions/${sessionId}/messages`, {
       clientMessageId: randomUUID(),
@@ -354,17 +355,19 @@ describeDrivers("S6 server: the session stream (ANY-55)", (h) => {
     });
     await until(async () => {
       const events = await eventsOf(rt, sessionId);
-      const requested = events.some((event) => event.type === "ll.requested");
-      const done = events.some((event) => event.type === "ll.completed");
-      if (requested && !done && live.current(streamIdOf(sessionId)) !== null) return true;
-      return undefined;
+      // Join while the turn is in flight: the subscribe lands before the
+      // llm.call's transaction does on the serialized driver, so the deltas
+      // reach this connection from the first chunk on.
+      const requested = events.some((event) => event.type === "llm.requested");
+      const done = events.some((event) => event.type === "llm.completed");
+      return requested && !done ? true : undefined;
     });
 
     const stream = await openStream(sessionId);
     for (;;) {
       const frame = await stream.next(10_000);
       if (frame.event === "event") continue; // the backlog
-      expect(frame.event).toBe("delta");
+      if (frame.event !== "delta") throw new Error(`expected delta, got ${frame.event}`);
       expect(frame.data.text.length).toBeGreaterThan(0); // the text so far
       break;
     }
@@ -407,6 +410,9 @@ describeDrivers("S6 server: the session stream (ANY-55)", (h) => {
       const stream = await openStream(sessionId);
       await readEvent(stream); // session.created
       await readEvent(stream); // run.created — then idle
+      // The stream arms its timers once the backlog is drained; wait for that
+      // before winding the clock, so the ping window starts here.
+      await until(async () => (vi.getTimerCount() > 0 ? true : undefined), 5_000);
 
       const pending = stream.next(10_000);
       vi.advanceTimersByTime(15_000);
