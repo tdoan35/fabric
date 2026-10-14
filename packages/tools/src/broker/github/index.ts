@@ -4,12 +4,25 @@
 export {
   buildAppJwt,
   createAppTokenManager,
+  githubSurface,
+  installationRepoNames,
   isGitHubRule,
   type AppTokenManager,
   type AppTokenOptions,
   type GitHubAppAuth,
   type GitHubRule,
 } from "./app-token";
-export { parsePktLines, type PktCommand, type ParsedPktLines } from "./pktline";
-export { checkPushCommands, repoFromGitPath, type PolicyVerdict, type PushCheckOptions } from "./receive-pack";
+export { parsePktLines, pktLine, FLUSH_PKT, type PktCommand, type ParsedPktLines } from "./pktline";
+export {
+  checkGitRequest,
+  checkPushCommands,
+  COMMAND_SECTION_LIMIT,
+  pushRejection,
+  readPushCommands,
+  repoFromGitPath,
+  type GitRequest,
+  type PolicyVerdict,
+  type PushCommands,
+  type PushVerdict,
+} from "./receive-pack";
 export { checkApiRequest, repoFromApiPath, repoAttached } from "./api-policy";
