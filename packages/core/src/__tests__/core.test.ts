@@ -23,6 +23,7 @@ const ALL_TYPES = [
   "run.started",
   "message.received",
   "disposition.recorded",
+  "session.created",
   "step.started",
   "llm.requested",
   "llm.completed",
@@ -242,7 +243,8 @@ it("R1.11: every type's happy path parses, with a payload variant where the sche
       },
       "run.started": { objective: "o" },
       "message.received": { text: "hi", attachments: [{ url: "https://x" }], surface: "app", sender: "ty", platformMessageId: "p1" },
-      "disposition.recorded": { kind: "agent", target: "sana", reason: "needs hands" },
+      "disposition.recorded": { kind: "agent", target: "sana", reason: "needs hands", considered: ["team:ops"], source: "model", turn: 1 },
+      "session.created": { agentId: "dana", incognito: false, surfaces: ["app"] },
       "step.started": { label: "Plan", stage: "Plan", kind: "work", stepKey: "Plan|elliot|1", pass: 1, childRunId: "run:9" },
       "llm.requested": { turn: 1, callNo: 1, model: "m", params: { temperature: 0.2 }, snapshotId: "snap-1" },
       "llm.completed": {

@@ -34,6 +34,10 @@ export type DecideDef = {
   toolEffects?: Readonly<Record<string, "read" | "idempotent" | "rerunnable" | "once">>;
   /** The agents this run may `delegate` to, keyed by agent id (section 5.2). */
   agents?: Readonly<Record<string, DelegableAgent>>;
+  /** The specialist session's user-chosen agent: the fallback disposition names it (S2, PRODUCT 4). */
+  userChosenAgent?: string;
+  /** Tools whose calls name the disposition kind; the target from `args[targetArg]` or the fixed one (S2). */
+  dispositionKinds?: Readonly<Record<string, { kind: "agent" | "team"; target?: string; targetArg?: string }>>;
 };
 
 /** An event decide appends. The worker supplies the rest of the envelope (seq, ts, causation, ...). */
@@ -66,6 +70,9 @@ export type Decision = { events: DecideEvent[]; jobs: DecideJob[] };
 
 /** Deadline horizon for `ask_user` waits when the definition does not name one. */
 const DEFAULT_ASK_WAIT_MS = 5 * 60_000;
+
+/** The disposition kinds the schema names; a model call outside them records as `direct`. */
+const DISPOSITION_KINDS = ["direct", "agent", "team", "propose", "clarify"] as const;
 
 /** The wait an `ask_user` call opens, derived from the turn and call so a re-decide cannot fork it. */
 function waitIdFor(turn: number, callId: string): string {
@@ -180,13 +187,76 @@ function requestModelCall(
   jobs.push({ type: "llm.call", key: `${def.streamId}:${turn}:llm:${callNo}`, streamId: def.streamId });
 }
 
+/** The disposition kinds' precedence: team-class calls, then agent-class, then propose, then ask (S2). */
+type DerivedCall = { rank: number; kind: "direct" | "agent" | "team" | "propose" | "clarify"; target: string | null };
+
+/** One turn call's disposition contribution; null when the call names no kind. */
+function classifyCall(call: { name: string; args: Record<string, unknown> }, def: DecideDef): DerivedCall | null {
+  const args = call.args;
+  if (call.name === "delegate") {
+    if (typeof args.teamId === "string") return { rank: 0, kind: "team", target: args.teamId };
+    return { rank: 1, kind: "agent", target: typeof args.agentId === "string" ? args.agentId : null };
+  }
+  const mapped = def.dispositionKinds?.[call.name];
+  if (mapped) {
+    const fromArg = typeof mapped.targetArg === "string" ? args[mapped.targetArg] : undefined;
+    const target =
+      typeof fromArg === "string" ? fromArg : typeof mapped.target === "string" ? mapped.target : null;
+    return { rank: mapped.kind === "team" ? 0 : 1, kind: mapped.kind, target };
+  }
+  if (call.name.startsWith("propose_")) return { rank: 2, kind: "propose", target: null };
+  if (call.name === "ask_user") return { rank: 3, kind: "clarify", target: null };
+  return null;
+}
+
+/**
+ * The fallback disposition of a session turn that ended without one (S2): the
+ * user's specialist pick when the definition names one, else the turn's own
+ * calls by precedence, else a plain direct answer.
+ */
+function fallbackDisposition(state: AgentState, def: DecideDef): Record<string, unknown> {
+  if (typeof def.userChosenAgent === "string") {
+    return {
+      kind: "direct",
+      target: def.userChosenAgent,
+      reason: "chosen by the user",
+      considered: [],
+      source: "user",
+      turn: state.turn,
+    };
+  }
+  let best: DerivedCall | null = null;
+  for (const call of state.turnToolCalls) {
+    const found = classifyCall(call, def);
+    if (found !== null && (best === null || found.rank < best.rank)) best = found;
+  }
+  if (best === null)
+    return {
+      kind: "direct",
+      target: null,
+      reason: "derived from the turn's calls",
+      considered: [],
+      source: "derived",
+      turn: state.turn,
+    };
+  return {
+    kind: best.kind,
+    target: best.target,
+    reason: "derived from the turn's calls",
+    considered: [],
+    source: "derived",
+    turn: state.turn,
+  };
+}
+
 /** The turn-ending of rule 4: a session copies the reply out to every surface; a run finishes. */
 function endTurn(
   state: AgentState,
   def: DecideDef,
   reply: string,
   events: DecideEvent[],
-  jobs: DecideJob[]
+  jobs: DecideJob[],
+  dispositionRecorded = false
 ): void {
   if (isRun(def)) {
     events.push({ type: "run.finished", payload: { result: reply, costUsd: state.costUsd } });
@@ -198,6 +268,11 @@ function endTurn(
       });
     }
     return;
+  }
+  // Every session turn names its routing: the fallback fires when the turn has
+  // no disposition yet, model-recorded or derived (S2).
+  if (!state.turnDisposition && !dispositionRecorded) {
+    events.push({ type: "disposition.recorded", payload: fallbackDisposition(state, def) });
   }
   const id = messageId(def.streamId, state.turn);
   events.push({ id, type: "agent.message", payload: { text: reply } });
@@ -268,12 +343,51 @@ function decideRules(state: AgentState, def: DecideDef, now: number): Decision {
   if (lastType === "llm.completed") {
     const toolCalls = Array.isArray(lastPayload.toolCalls) ? lastPayload.toolCalls : [];
     if (toolCalls.length > 0) {
+      // `record_disposition` is a session's virtual tool, like `ask_user`: always
+      // allowed, never `tool.call`/`tool.exec` (S2). On a run it is ordinary.
+      const session = !isRun(def);
+      const onlyDisposition =
+        session &&
+        toolCalls.length === 1 &&
+        (toolCalls[0] as Record<string, unknown>)?.name === "record_disposition";
+      let dispositionDone = state.turnDisposition;
       for (const call of toolCalls) {
         const record = (call ?? {}) as Record<string, unknown>;
         const name = typeof record.name === "string" ? record.name : "";
         const callId = typeof record.id === "string" ? record.id : "";
         const args = (record.args ?? {}) as Record<string, unknown>;
 
+        if (session && name === "record_disposition") {
+          if (dispositionDone) {
+            // One disposition per turn: the second call is answered, none recorded (S2).
+            events.push({
+              type: "tool.completed",
+              payload: { callId, ok: false, error: "disposition already recorded" },
+            });
+          } else {
+            dispositionDone = true;
+            const kindArg = typeof args.kind === "string" ? args.kind : "";
+            events.push({
+              type: "disposition.recorded",
+              payload: {
+                kind: DISPOSITION_KINDS.includes(
+                  kindArg as (typeof DISPOSITION_KINDS)[number]
+                )
+                  ? kindArg
+                  : "direct",
+                target: typeof args.target === "string" ? args.target : null,
+                reason: typeof args.reason === "string" ? args.reason : "",
+                considered: Array.isArray(args.considered)
+                  ? args.considered.filter((item): item is string => typeof item === "string")
+                  : [],
+                source: "model",
+                turn: state.turn,
+              },
+            });
+            events.push({ type: "tool.completed", payload: { callId, ok: true } });
+          }
+          continue;
+        }
         if (!def.tools.includes(name)) {
           events.push({
             type: "tool.denied",
@@ -314,6 +428,15 @@ function decideRules(state: AgentState, def: DecideDef, now: number): Decision {
         });
         jobs.push({ type: "tool.exec", key: `${stream}:${callId}`, streamId: def.streamId });
       }
+      // The disposition alone decides the turn's shape: with text it is the last
+      // word (rule 4 here); without, the next call is requested at once (S2).
+      if (onlyDisposition) {
+        if (typeof lastPayload.text === "string" && lastPayload.text !== "") {
+          endTurn(state, def, lastPayload.text, events, jobs, dispositionDone);
+        } else {
+          requestModelCall(def, state.turn, state.calls + 1, events, jobs);
+        }
+      }
       return { events, jobs };
     }
 
@@ -339,7 +462,9 @@ function decideRules(state: AgentState, def: DecideDef, now: number): Decision {
   // -- Rules 3 and 4 at the limit: every call of the turn has resolved ---------------------------
 
   const resolved = lastType === "tool.completed" || lastType === "tool.interrupted";
-  if (resolved && state.openToolCalls.size === 0 && state.calls > 0) {
+  if (resolved && state.openToolCalls.size === 0 && state.calls > 0 && state.status !== "idle") {
+    // An idle session's turn is over - its disposition ending closed it (S2); rule 3
+    // continues only a turn still running.
     // The per-turn cap ends the turn before another model call is queued (rule 1, session cap):
     // the reply says so and offers delegation (PRODUCT section 4.1).
     const cap = def.turnCostCapUsd;

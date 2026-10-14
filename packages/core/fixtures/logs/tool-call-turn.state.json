@@ -32,5 +32,15 @@
     }
   },
   "callAttempt": 0,
-  "head": 11
+  "head": 11,
+  "session": null,
+  "turnDisposition": false,
+  "turnToolCalls": [
+    {
+      "name": "sprite_exec",
+      "args": {
+        "cmd": "ls"
+      }
+    }
+  ]
 }

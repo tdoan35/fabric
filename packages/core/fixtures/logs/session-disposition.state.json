@@ -1,0 +1,44 @@
+{
+  "status": "idle",
+  "def": {
+    "name": "dana"
+  },
+  "turn": 1,
+  "pendingInputs": [],
+  "calls": 1,
+  "openToolCalls": [],
+  "waits": [],
+  "costUsd": 0.01,
+  "turnCostUsd": 0.01,
+  "reservedUsd": 0,
+  "delegations": [],
+  "compactedUpTo": 0,
+  "cancelRequested": false,
+  "lastFact": {
+    "type": "tool.completed",
+    "payload": {
+      "callId": "c1",
+      "ok": true
+    }
+  },
+  "callAttempt": 0,
+  "head": 6,
+  "session": {
+    "agentId": "dana",
+    "incognito": false
+  },
+  "turnDisposition": true,
+  "turnToolCalls": [
+    {
+      "name": "record_disposition",
+      "args": {
+        "kind": "direct",
+        "target": null,
+        "reason": "answer directly",
+        "considered": [
+          "team:ops"
+        ]
+      }
+    }
+  ]
+}

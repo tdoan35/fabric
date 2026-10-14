@@ -87,6 +87,7 @@ describeDrivers("runtime worker loop, end to end (ANY-40 R9c)", (h) => {
       "tool.completed",
       "llm.requested",
       "llm.completed",
+      "disposition.recorded",
     ]);
 
     // exactly one deliver happened, of the turn's reply

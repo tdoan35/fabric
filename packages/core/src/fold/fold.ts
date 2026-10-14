@@ -13,6 +13,9 @@ export type Definition = Record<string, unknown>;
 /** A `tool.call` payload, keyed by callId while it has no `tool.completed`/`tool.interrupted`. */
 export type ToolCall = (typeof EVENT_PAYLOAD_SCHEMAS)["tool.call"]["_output"];
 
+/** A `tool.call` the turn's completions carried: the derived disposition's scan unit (S2). */
+export type TurnToolCall = { name: string; args: Record<string, unknown> };
+
 /** The last fact of the log: the trigger and payload the agent-loop rules read (RUNTIME section 5.1). */
 export type LastFact = { readonly type: string; readonly payload: unknown };
 
@@ -56,6 +59,12 @@ export type AgentState = {
   /** The seq of the last event the fold saw, any class — the stream head the
    * stall watchdog arms and re-checks against (section 7). */
   head: number;
+  /** The session this stream hosts, from `session.created`; null for runs and logs without one (S2). */
+  session: { agentId: string; incognito: boolean } | null;
+  /** True while a disposition stands for the turn; reset when a turn starts (S2). */
+  turnDisposition: boolean;
+  /** Every tool call the turn's completions carried, in order — the derived disposition's scan set (S2). */
+  turnToolCalls: TurnToolCall[];
 };
 
 /** A starting state; every field falls back to the fresh-session default (section 5.1). */
@@ -78,7 +87,7 @@ const RUN_CLOSED = {
 } as const satisfies Record<string, AgentState["status"]>;
 
 /** Event types the fold parks as pending inputs until a turn's first `llm.requested`. */
-const INPUT_TYPES = ["message.received", "delegation.result", "human.responded"] as const;
+const INPUT_TYPES = ["message.received", "delegation.result", "human.responded", "proposal.decided"] as const;
 
 function seqOf(event: unknown): number {
   const seq = (event as { seq?: unknown } | null | undefined)?.seq;
@@ -120,6 +129,9 @@ export function fold(events: readonly unknown[], init: FoldInit = {}): AgentStat
   let cancelRequested = init.cancelRequested ?? false;
   let lastFact: LastFact | null = init.lastFact ?? null;
   let callAttempt = init.callAttempt ?? 0;
+  let session = init.session ?? null;
+  let turnDisposition = init.turnDisposition ?? false;
+  let turnToolCalls: TurnToolCall[] = (init.turnToolCalls ?? []).map((call) => ({ ...call }));
   let pendingInputs: PendingInput[] = (init.pendingInputs ?? []).map((input) => ({ ...input }));
   const openToolCalls = new Map(init.openToolCalls);
   const waits = new Map(init.waits);
@@ -140,7 +152,11 @@ export function fold(events: readonly unknown[], init: FoldInit = {}): AgentStat
     head = seqOf(raw);
     const event = parseEvent(raw);
 
-    lastFact = { type: event.type, payload: event.payload };
+    // The disposition never becomes the loop's last fact: the rules read the
+    // completion / tool result the turn acted on (S2).
+    if (event.type !== "disposition.recorded") {
+      lastFact = { type: event.type, payload: event.payload };
+    }
     switch (event.type) {
       case "run.created":
         // The definition snapshot freezes the run's shape (section 2); it never changes after.
@@ -149,8 +165,13 @@ export function fold(events: readonly unknown[], init: FoldInit = {}): AgentStat
       case "run.started":
         started = true;
         break;
+      case "session.created":
+        // The session's opening fact: whose agent it hosts, and whether it leaves a trace (S2).
+        session = { agentId: event.payload.agentId, incognito: event.payload.incognito };
+        break;
       case "message.received":
       case "human.responded":
+      case "proposal.decided":
         pendingInputs = [...pendingInputs, { type: event.type, payload: event.payload }];
         if (event.type === "human.responded") waits.delete(event.payload.waitId);
         break;
@@ -175,6 +196,8 @@ export function fold(events: readonly unknown[], init: FoldInit = {}): AgentStat
           turn += 1;
           calls = 0;
           turnCostUsd = 0; // the per-turn meter restarts with the turn (section 5.1 rule 1)
+          turnDisposition = false; // a fresh turn owes its own disposition (S2)
+          turnToolCalls = [];
           pendingInputs = []; // the turn's first call consumes the parked inputs
         }
         inTurn = true;
@@ -185,6 +208,13 @@ export function fold(events: readonly unknown[], init: FoldInit = {}): AgentStat
         costUsd += event.payload.usage.costUsd;
         turnCostUsd += event.payload.usage.costUsd;
         callAttempt = 0; // the call succeeded; its retry budget is spent
+        // The disposition's scan set: every call the completion carried, named (S2).
+        for (const call of event.payload.toolCalls) {
+          const record = (call ?? {}) as Record<string, unknown>;
+          if (typeof record.name === "string") {
+            turnToolCalls = [...turnToolCalls, { name: record.name, args: asRecord(record.args) ?? {} }];
+          }
+        }
         // A reply with no tool calls is the turn's last word: the loop goes quiet (section 5.1 rule 4).
         if (event.payload.toolCalls.length === 0) inTurn = false;
         break;
@@ -198,6 +228,7 @@ export function fold(events: readonly unknown[], init: FoldInit = {}): AgentStat
       case "tool.call": {
         // Legacy rows may lack callId; the event id keys them so they stay visible.
         openToolCalls.set(event.payload.callId ?? event.id, event.payload);
+        inTurn = true; // real work in flight: the turn's tool phase is open again (S2)
         if (event.payload.tool === "delegate") {
           // A delegation reserves its budget from this run (section 7); the ledger carries it until
           // the resolve, and lets cancellation reach the child (section 5.1 rule 1).
@@ -239,6 +270,13 @@ export function fold(events: readonly unknown[], init: FoldInit = {}): AgentStat
       case "run.cancel_requested":
         cancelRequested = true;
         break;
+      case "disposition.recorded":
+        // The disposition stands for the turn; the agent loop's last fact is untouched
+        // (it still reads the completion / tool result), and the tool phase closes
+        // unless later work re-opens it (S2).
+        turnDisposition = true;
+        inTurn = false;
+        break;
       default:
         if (event.type in RUN_CLOSED) {
           terminal = RUN_CLOSED[event.type as keyof typeof RUN_CLOSED];
@@ -273,5 +311,8 @@ export function fold(events: readonly unknown[], init: FoldInit = {}): AgentStat
     lastFact,
     callAttempt,
     head,
+    session,
+    turnDisposition,
+    turnToolCalls,
   };
 }

@@ -31,5 +31,8 @@
     }
   },
   "callAttempt": 0,
-  "head": 7
+  "head": 7,
+  "session": null,
+  "turnDisposition": false,
+  "turnToolCalls": []
 }
