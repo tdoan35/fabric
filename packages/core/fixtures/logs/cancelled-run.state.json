@@ -35,5 +35,15 @@
     }
   },
   "callAttempt": 0,
-  "head": 8
+  "head": 8,
+  "session": null,
+  "turnDisposition": false,
+  "turnToolCalls": [
+    {
+      "name": "shell",
+      "args": {
+        "cmd": "deploy"
+      }
+    }
+  ]
 }

@@ -86,6 +86,12 @@ const USER_MESSAGE = {
   platformMessageId: "pm1",
 };
 
+/** The derived fallback a session turn with no special calls and no disposition ends with (S2). */
+const DERIVED = {
+  type: "disposition.recorded",
+  payload: { kind: "direct", target: null, reason: "derived from the turn's calls", considered: [], source: "derived", turn: 1 },
+};
+
 test("R3.1: rule 1 cancel closes both open calls as cancelled, then run.stopped; no executor jobs", () => {
   const events = [
     evt(1, "run.created", { ...RUN_CREATED }, { streamId: "run:r1" }),
@@ -160,9 +166,10 @@ test("R3.3: the per-turn cap ends the turn with a delegate offer; just under it 
     evt(9, "tool.completed", { callId: "c2", ok: true }),
   ];
   const capped = decide(turn, { ...SESSION_DEF, turnCostCapUsd: 0.05 });
-  expect(capped.events).toHaveLength(1);
-  expect(capped.events[0].type).toBe("agent.message");
-  expect(String((capped.events[0].payload as { text: string }).text)).toMatch(/cap/);
+  expect(capped.events).toHaveLength(2);
+  expect(capped.events[0]).toEqual(DERIVED);
+  expect(capped.events[1].type).toBe("agent.message");
+  expect(String((capped.events[1].payload as { text: string }).text)).toMatch(/cap/);
   expect(capped.events.every((e) => e.type !== "llm.requested")).toBe(true);
   expect(capped.jobs.map((j) => j.key)).toEqual([
     "deliver:agent-message:session:s1:1:app",
@@ -244,7 +251,8 @@ test("R3.5: rule 3 requests call 3 when every call of the turn has resolved", ()
 
 test("R3.6: at MAX_STEPS with all calls resolved the turn ends without another request", () => {
   const decision = decide(twoResolvedCalls(), { ...SESSION_DEF, maxSteps: 2 });
-  expect(decision.events[0].type).toBe("agent.message");
+  expect(decision.events[0]).toEqual(DERIVED);
+  expect(decision.events[1].type).toBe("agent.message");
   expect(decision.events.some((e) => e.type === "llm.requested")).toBe(false);
   expect(decision.jobs.map((j) => j.type)).toEqual(["deliver", "deliver"]);
 });
@@ -257,6 +265,7 @@ test("R3.7: rule 4 on a session copies the reply and delivers to every surface",
   ];
   const decision = decide(events, { ...SESSION_DEF });
   expect(decision.events).toEqual([
+    DERIVED,
     { id: "agent-message:session:s1:1", type: "agent.message", payload: { text: "All done." } },
   ]);
   expect(decision.jobs).toEqual([
@@ -305,9 +314,10 @@ test("R3.9: a retryable failure is retried once; the second one ends the turn wi
     evt(5, "llm.failed", { turn: 1, callNo: 1, error: "rate limited again", retryable: true }),
   ];
   const ended = decide(second, { ...SESSION_DEF });
-  expect(ended.events).toHaveLength(1);
-  expect(ended.events[0].type).toBe("agent.message");
-  expect(String((ended.events[0].payload as { text: string }).text)).toMatch(/rate limited again/);
+  expect(ended.events).toHaveLength(2);
+  expect(ended.events[0]).toEqual(DERIVED);
+  expect(ended.events[1].type).toBe("agent.message");
+  expect(String((ended.events[1].payload as { text: string }).text)).toMatch(/rate limited again/);
   expect(ended.jobs.map((j) => j.type)).toEqual(["deliver", "deliver"]);
 });
 
@@ -318,9 +328,10 @@ test("R3.10: a retryable:false failure ends the turn with a narration and no ret
     evt(3, "llm.failed", { turn: 1, callNo: 1, error: "the key is revoked", retryable: false }),
   ];
   const decision = decide(events, { ...SESSION_DEF });
-  expect(decision.events).toHaveLength(1);
-  expect(decision.events[0].type).toBe("agent.message");
-  expect(String((decision.events[0].payload as { text: string }).text)).toMatch(/the key is revoked/);
+  expect(decision.events).toHaveLength(2);
+  expect(decision.events[0]).toEqual(DERIVED);
+  expect(decision.events[1].type).toBe("agent.message");
+  expect(String((decision.events[1].payload as { text: string }).text)).toMatch(/the key is revoked/);
   expect(decision.events.every((e) => e.type !== "llm.requested")).toBe(true);
   expect(decision.jobs.map((j) => j.type)).toEqual(["deliver", "deliver"]);
 });
