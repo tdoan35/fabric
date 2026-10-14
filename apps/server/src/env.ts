@@ -49,6 +49,15 @@ export const env = z.object({
   SEED_PROFILE: z.enum(["demo", "lived-in"]).default("demo"),
   /** SCH: the 30s routines tick. Tests set off; the server defaults to on. */
   SCHEDULER: z.enum(["on", "off"]).default("on"),
+  // -- S5 runtime (durable sessions) ----------------------------------------
+  /** Direct (unpooled) Postgres for the event log and queue. Unset = PGlite. */
+  RUNTIME_DATABASE_URL: z.string().optional(),
+  /** PGlite data dir when RUNTIME_DATABASE_URL is unset. */
+  RUNTIME_PGLITE_DIR: z.string().optional(),
+  /** Worker job concurrency; the queue's per-workspace cap. */
+  RUNTIME_CONCURRENCY: z.coerce.number().int().min(1).default(4),
+  /** `ai` (the real port) | `test` (the echo double; refused when NODE_ENV=production). */
+  MODEL_PORT: z.enum(["ai", "test"]).default("ai"),
 }).parse(process.env);
 
 export const corsOrigins = env.CORS_ORIGINS

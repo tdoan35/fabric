@@ -11,8 +11,10 @@ import { memory } from "./routes/memory";
 import { registry } from "./routes/registry";
 import { reports } from "./routes/reports";
 import { runs } from "./routes/runs";
+import { sessions } from "./routes/sessions";
 import { schedules } from "./routes/schedules";
 import { startScheduler } from "./services/scheduler";
+import { startRuntime } from "./runtime/bootstrap";
 import { stream } from "./routes/stream";
 import { weave } from "./routes/weave";
 import { work } from "./routes/work";
@@ -27,7 +29,8 @@ const api = new Hono()
   .route("/", memory)
   .route("/", weave)
   .route("/", stream)
-  .route("/", chat);
+  .route("/", chat)
+  .route("/", sessions);
 
 if (process.env.NODE_ENV !== "production") api.route("/", dev);
 
@@ -46,3 +49,11 @@ serve({ fetch: app.fetch, port: env.PORT }, (info) => {
 });
 
 startScheduler();
+
+// The runtime hosts in-process (S5): store, queue and workers come up with the
+// server; SIGTERM drains them. A failure here is fatal — the API is the shell
+// around this runtime.
+const fabricRuntime = await startRuntime(env);
+process.on("SIGTERM", () => {
+  void fabricRuntime.stop().then(() => process.exit(0));
+});

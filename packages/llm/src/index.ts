@@ -215,6 +215,10 @@ function neonModel(id: string): LanguageModelV3 {
 
 export { NEON_PRICES } from "./pricing";
 
+// The production ModelPort (ANY-53 S4) lives in ./model-port; the server's
+// runtime bootstrap (ANY-54 S5) consumes it through this root export.
+export { createModelPort } from "./model-port";
+
 // ---- Metering ----
 
 const runCosts = new Map<string, number>();
