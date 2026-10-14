@@ -13,10 +13,11 @@ import {
   type SessionFrame,
 } from "@fabric/contracts";
 import { append } from "@fabric/runtime";
-import { enqueueDecide, getRuntime, RUNTIME_WORKSPACE } from "../runtime/bootstrap";
+import { enqueueDecide, getRuntime, sessionTurnDefinition, RUNTIME_WORKSPACE } from "../runtime/bootstrap";
 
 /** A new session's opening facts: whose agent it hosts (S2) plus the turn
- * definition snapshot decide reads — the S7 stand-in per the card. */
+ * definition snapshot decide reads — S7's `sessionTurnDefinition` (Dana's for
+ * `dana`, the S5 placeholder for everyone else until S9). */
 const sessionEvents = (agentId: string, incognito: boolean) => [
   {
     type: "session.created",
@@ -27,7 +28,7 @@ const sessionEvents = (agentId: string, incognito: boolean) => [
     type: "run.created",
     actor: "api",
     payload: {
-      definition: { tools: [], maxSteps: 6, surfaces: ["app"], turnCostCapUsd: null },
+      definition: sessionTurnDefinition(agentId, { incognito }),
       engineVersion: "s5",
       brief: "",
       grants: [],

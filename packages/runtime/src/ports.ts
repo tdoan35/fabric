@@ -67,6 +67,9 @@ export type ModelCallRequest = {
   system: string;
   messages: readonly ModelMessage[];
   tools: readonly ModelTool[];
+  /** The session definition's thinking level (ANY-56 S7); the adapter maps it
+   * onto the provider's knobs. Absent = the port's own default. */
+  thinking?: string;
   /** Live deltas during the call; absent when nobody listens. */
   onDelta?: (delta: ModelDelta) => void;
 };

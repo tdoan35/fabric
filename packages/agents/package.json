@@ -7,6 +7,7 @@
   "exports": {
     "./llm": "./src/llm/index.ts",
     "./assistant": "./src/assistant/index.ts",
+    "./session": "./src/assistant/session/index.ts",
     "./team": "./src/team/index.ts",
     "./context": "./src/context/index.ts",
     "./memory": "./src/memory/index.ts"
@@ -18,9 +19,11 @@
   "dependencies": {
     "@ai-sdk/openai-compatible": "^3.0.62",
     "@fabric/contracts": "*",
+    "@fabric/core": "*",
     "@fabric/db": "*",
     "@fabric/integrations": "*",
     "@fabric/llm": "*",
+    "@fabric/runtime": "*",
     "@huggingface/transformers": "^3.7.6",
     "@mastra/core": "^1.74.0",
     "@neon/ai-sdk-provider": "^1.0.0",

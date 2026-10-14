@@ -275,6 +275,43 @@ describeDrivers("runtime ll.call worker (ANY-35 R9a)", (h) => {
     expect(of(await streamEvents(store), "llm.completed")).toHaveLength(1);
     expect(model.calls).toHaveLength(1); // the re-run saw the recorded result and skipped the call
   });
+  test("W8 the session definition's system, toolSchemas and thinking reach the model call (ANY-56 S7)", async () => {
+    const store = await h.openStore();
+    const queue = new MemoryQueue();
+    // A recording double plain enough to work before the hook exists: whatever
+    // the handler passes lands here verbatim.
+    const calls: Record<string, unknown>[] = [];
+    const model = {
+      async call(request: Record<string, unknown>) {
+        calls.push({ ...request });
+        return W2_RESULT;
+      },
+    } as never;
+    await seed(store, [
+      runCreated({
+        system: "SESSION SYS",
+        systemPrompt: "LEGACY SYS",
+        tools: ["lookup"],
+        toolSchemas: [
+          { name: "lookup", description: "Look a thing up.", parameters: { type: "object", properties: { q: { type: "string" } } } },
+        ],
+        thinking: "low",
+        model: "m1",
+      }),
+      messageReceived("what is X?", "pm-9"),
+      requested(1, 1),
+    ]);
+    const lease = await claimedLlmCall(store, queue);
+
+    await handleLlmCallJob(lease, { store, queue, model });
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.system).toBe("SESSION SYS"); // the session definition's prompt, not the legacy key
+    expect(calls[0]!.tools).toEqual([
+      { name: "lookup", description: "Look a thing up.", parameters: { type: "object", properties: { q: { type: "string" } } } },
+    ]);
+    expect(calls[0]!.thinking).toBe("low");
+  });
 });
 
 /** Claim the ll.call job of a later call: the key encodes turn and call. */

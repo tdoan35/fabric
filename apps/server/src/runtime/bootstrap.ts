@@ -15,6 +15,8 @@ import path from "node:path";
 import { openStore, PgQueue, runWorker } from "@fabric/runtime";
 import type { Queue, RuntimeStore, RuntimeTx, WorkerPorts } from "@fabric/runtime";
 import { createModelPort } from "@fabric/llm";
+import { danaSessionDef, sessionTools, withSessionContext } from "@fabric/agents/session";
+import { recallFacts } from "@fabric/agents/assistant";
 import { InProcessLiveBus, type LiveBus } from "./live-bus";
 import { createTestModelPort, type TestModelOptions } from "./test-model";
 
@@ -52,6 +54,28 @@ export const SESSION_TURN_DEF = {
   turnCostCapUsd: null as number | null,
 };
 
+/**
+ * The turn definition a new session's stream is stamped with (S7, ANY-56):
+ * Dana's for `agentId: "dana"` — the loop knobs, the system prompt and the tool
+ * schemas from `danaSessionDef`, the per-turn cap from DANA_TURN_COST_CAP_USD —
+* and the S5 placeholder for every other agent until S9. Incognito sessions
+* carry no recall tool, which is what keeps the memory path shut (PRODUCT
+* §10.7). The env var is read here, at stamp time; the parsed-env object the
+* server builds strips unknown keys, and the definition is not a port.
+ */
+export function sessionTurnDefinition(
+  agentId: string,
+  opts: { incognito?: boolean } = {}
+): Record<string, unknown> {
+  if (agentId !== "dana") return SESSION_TURN_DEF;
+  const raw = process.env.DANA_TURN_COST_CAP_USD;
+  const parsed = raw === undefined ? undefined : Number(raw);
+  return danaSessionDef({
+    incognito: opts.incognito === true,
+    ...(parsed !== undefined && Number.isFinite(parsed) ? { turnCostCapUsd: parsed } : {}),
+  });
+}
+
 /** The append enqueue port: one `decide` per touched stream, keyed on the
  * post-append head so a rerun cannot double-queue (RUNTIME §4). */
 export function enqueueDecide(queue: Queue) {
@@ -66,7 +90,10 @@ export function enqueueDecide(queue: Queue) {
   };
 }
 
-/** The worker ports. Tools arrive with S7/S8; the app surface is a no-op that
+/** The worker ports. S7: the model port wears the session context wrapper (the
+ * turn's recall lands in the system prompt; sessions without the recall tool —
+ * incognito, runs — pass through untouched) and the ToolPort is the session
+ * registry (`recall`, effect `read`). The app surface remains a no-op that
  * succeeds — the client reads the stream, the receipt only closes the job.
  * S6: model deltas ride the live bus, attributed by the enclosing transaction's
  * scan (see `wireLiveBus`) — the port's callback carries text only. */
@@ -75,11 +102,8 @@ function workerPorts(env: RuntimeEnv, live: LiveBus): WorkerPorts {
     env.MODEL_VARIANT === "chunked" ? { chunks: 5, intervalMs: 30 } : undefined;
   const model = env.MODEL_PORT === "test" ? createTestModelPort(variant) : createModelPort();
   return {
-    model,
-    tools: {
-      run: async (name) => ({ ok: false, error: `no tools are wired yet (S7/S8): ${name}` }),
-      describe: () => undefined,
-    },
+    model: withSessionContext(model, recallFacts),
+    tools: sessionTools({ recall: recallFacts }),
     surface: {
       send: async () => ({}),
     },
