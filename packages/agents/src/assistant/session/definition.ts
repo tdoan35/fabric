@@ -13,6 +13,7 @@
 import type { DecideDef } from "@fabric/core";
 import { defaultThinking } from "../../llm";
 import { buildSystemPrompt, fallbackDana, type RegistryBrief } from "../prompt";
+import { PROPOSAL_TOOL_SCHEMAS, PROPOSE_TOOLS } from "./proposals";
 
 /** One tool declaration as the model sees it: the runtime `ModelTool` shape. */
 export type ToolSchema = {
@@ -107,10 +108,18 @@ export function danaSessionDef(config: DanaSessionConfig = {}): DanaSessionDef {
   const incognito = config.incognito === true;
 
   // `record_disposition` and `ask_user` are session-virtual (S2): decide answers
-  // them without a `tool.call`. `recall` is the one real tool, effect `read`.
-  const tools = ["record_disposition", "ask_user"];
-  const toolSchemas: ToolSchema[] = [DISPOSITION_TOOL, ASK_USER_TOOL];
-  const toolEffects: Record<string, "read" | "idempotent" | "rerunnable" | "once"> = {};
+  // them without a `tool.call`. The proposal writers are `idempotent` real tools
+  // (S8a); `recall` is the read one.
+  const tools = ["record_disposition", "ask_user", "propose_team", "propose_specialist"];
+  const toolSchemas: ToolSchema[] = [
+    DISPOSITION_TOOL,
+    ASK_USER_TOOL,
+    ...PROPOSE_TOOLS.map((name) => ({ name, ...PROPOSAL_TOOL_SCHEMAS[name] })),
+  ];
+  const toolEffects: Record<string, "read" | "idempotent" | "rerunnable" | "once"> = {
+    propose_team: "idempotent",
+    propose_specialist: "idempotent",
+  };
   if (!incognito) {
     tools.push("recall");
     toolSchemas.push(RECALL_TOOL);

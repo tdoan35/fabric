@@ -1,21 +1,26 @@
-// The session tools on the ToolPort (ANY-56 S7): the port the worker's
-// `tool.exec` runs behind, seeded with Dana's one executable tool. The
-// `record_disposition` and `ask_user` calls never reach it — decide answers
-// those virtually (S2) — so the registry is the read-shaped tools alone, today
-// `recall`, whose body is the in-process `recallFacts` passed in unchanged.
+// The session tools on the ToolPort (ANY-56 S7, ANY-57 S8a): the port the
+// worker's `tool.exec` runs behind. `record_disposition` and `ask_user` never
+// reach it — decide answers those virtually (S2) — so the registry is the read
+// shape plus the proposal writers: `recall` (effect `read`, the in-process
+// `recallFacts` body unchanged) and, when the deps carry the proposal store, the
+// `propose_*` tools (effect `idempotent`, bodies in ./proposals).
 import type { ToolDescriptor, ToolPort, ToolRunResult } from "@fabric/runtime";
 import type { ToolSchema } from "./definition";
 import { RECALL_TOOL } from "./definition";
+import { PROPOSAL_TOOL_SCHEMAS, PROPOSE_TOOLS, runProposeTool, type ProposalLoopDeps } from "./proposals";
 
 export type SessionToolDeps = {
   /** The recall body, injected: the production adapter is today's
    * `recallFacts`; tests inject the fake memory store. */
   recall: (query: string) => Promise<readonly { key: string; value: string; source: string }[]>;
+  /** The proposal surface (S8a): the store behind the `propose_*` bodies and
+   * the loop seam their facts are announced through. Absent = a read-only port. */
+  proposals?: ProposalLoopDeps;
 };
 
-/** The session ToolPort: `recall` with effect `read`, everything else a loud
- * miss. The descriptor doubles as the effect fallback when a `tool.call` goes
- out without one. */
+/** The session ToolPort: `recall` plus, when wired, the proposal writers; the
+ * descriptor doubles as the effect fallback when a `tool.call` goes out without
+ * one. */
 export function sessionTools(deps: SessionToolDeps): ToolPort {
   const descriptors: Record<string, ToolDescriptor> = {
     recall: {
@@ -25,9 +30,17 @@ export function sessionTools(deps: SessionToolDeps): ToolPort {
       parameters: RECALL_TOOL.parameters,
     },
   };
+  if (deps.proposals !== undefined) {
+    for (const name of PROPOSE_TOOLS) {
+      descriptors[name] = { name, effect: "idempotent", ...PROPOSAL_TOOL_SCHEMAS[name] };
+    }
+  }
 
   return {
-    async run(name, args): Promise<ToolRunResult> {
+    async run(name, args, io = {}): Promise<ToolRunResult> {
+      if (deps.proposals !== undefined && (PROPOSE_TOOLS as readonly string[]).includes(name)) {
+        return runProposeTool(name, args, io, deps.proposals);
+      }
       if (name !== "recall") return { ok: false, error: `unknown session tool: ${name}` };
       const query = typeof args.query === "string" ? args.query : "";
       if (query === "") return { ok: false, error: "recall needs a query" };

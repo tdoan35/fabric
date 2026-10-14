@@ -123,6 +123,17 @@ export function rebuildFrom(rows: readonly EventRow[]): Rebuild {
           message: { role: "tool", toolCallId: textOf(payload, "callId"), text: textOf(payload, "note") },
         });
         break;
+      case "proposal.decided":
+        // ANY-57 S8a: a decided proposal is a user-visible input — the next
+        // turn's model call sees the decision the way it sees an answer.
+        pairs.push({
+          seq,
+          message: {
+            role: "user",
+            text: `proposal ${textOf(payload, "kind")} ${textOf(payload, "decision")} (by ${textOf(payload, "by")})`,
+          },
+        });
+        break;
       default:
         break; // llm.requested / llm.failed / lifecycle facts: not conversation
     }

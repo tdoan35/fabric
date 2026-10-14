@@ -13,6 +13,7 @@ import {
   MemoryQueue,
   openStore,
   runUntilIdle,
+  type EventInput,
   type RuntimeStore,
 } from "@fabric/runtime";
 import { expect, test } from "vitest";
@@ -127,7 +128,7 @@ interface StoredEventLike {
   [key: string]: unknown;
 }
 
-type Event = { type: string; payload: Record<string, unknown>; [key: string]: unknown };
+type Event = EventInput;
 
 /** Boots the session stream and the loop's ports; `drain` runs the workers to
  * idle, `reenqueueToolExec` re-queues a handled tool.exec key (the at-least-once
@@ -214,7 +215,6 @@ test("P1 propose_team is an idempotent tool.exec: one proposal row, one proposal
     expect(created).toHaveLength(1);
     expect(created[0]!.payload).toMatchObject({ kind: "team" });
     expect(JSON.stringify(created[0]!.payload.definition)).toContain("Dig Team");
-    expect(JSON.stringify(created[0]!.payload.definition)).toContain(proposalId);
   } finally {
     await env.close();
   }

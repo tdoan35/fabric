@@ -20,3 +20,13 @@ export {
   type RecallFn,
 } from "./context";
 export { sessionTools, type SessionToolDeps } from "./tools";
+export {
+  PROPOSE_TOOLS,
+  dbProposalStore,
+  runProposeTool,
+  sessionOf,
+  type ProposalActions,
+  type ProposalKind,
+  type ProposalLoopDeps,
+  type ProposalStore,
+} from "./proposals";
