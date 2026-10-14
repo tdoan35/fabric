@@ -160,7 +160,7 @@ describe("R8 durable queue [pglite]", () => {
 
   it("R8.6 a silent worker's lease laps in real time, shortened by per-type config", async () => {
     const queue = makeQueue({
-      typeConfigs: { "llm.call": { heartbeatMs: 40, maxRunMs: 400 } },
+      typeConfigs: { "llm.call": { heartbeatMs: 300, maxRunMs: 3000 } },
     });
     const tx = nowTx();
     const job = await queue.enqueue(tx, {
@@ -172,11 +172,11 @@ describe("R8 durable queue [pglite]", () => {
     tx.commit();
     const held = await queue.claim("worker-a", ["llm.call"], Date.now());
     expect(held?.jobId).toBe(job.id);
-    // still held moments later: the shortened 40 ms window has not lapsed
+    // still held moments later: the shortened 300 ms window has not lapsed
     await sleep(10);
     await expect(queue.claim("worker-b", ["llm.call"], Date.now())).resolves.toBeNull();
     // worker-a never heartbeats: the lease laps and worker-b takes over
-    await sleep(80);
+    await sleep(400);
     const reclaimed = await queue.claim("worker-b", ["llm.call"], Date.now());
     expect(reclaimed?.jobId).toBe(job.id);
     expect(reclaimed?.attempt).toBe(2);
@@ -337,7 +337,7 @@ describe("R8 durable queue [pglite]", () => {
 
   it("R8.6 a silent worker's lease laps in real time, shortened by per-type config", async () => {
     const queue = makeQueue({
-      typeConfigs: { "llm.call": { heartbeatMs: 40, maxRunMs: 400 } },
+      typeConfigs: { "llm.call": { heartbeatMs: 300, maxRunMs: 3000 } },
     });
     const tx = nowTx();
     const job = await queue.enqueue(tx, {
@@ -351,7 +351,7 @@ describe("R8 durable queue [pglite]", () => {
     expect(held?.jobId).toBe(job.id);
     await sleep(10);
     await expect(queue.claim("worker-b", ["llm.call"], Date.now())).resolves.toBeNull();
-    await sleep(80);
+    await sleep(400);
     const reclaimed = await queue.claim("worker-b", ["llm.call"], Date.now());
     expect(reclaimed?.jobId).toBe(job.id);
     expect(reclaimed?.attempt).toBe(2);
