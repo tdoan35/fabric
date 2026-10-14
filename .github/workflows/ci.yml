@@ -159,7 +159,10 @@ jobs:
               | "\(.id) \(.name)"' |
             while read -r id name; do
               echo "::group::$name"
-              gh api "repos/$REPO/actions/jobs/$id/logs" | sed '/Post job cleanup\./q' | tail -n 300 || true
+              # curl, not `gh api`: gh refuses to print the log's terminal colour codes.
+              curl -fsSL -H "Authorization: Bearer $GH_TOKEN" \
+                "https://api.github.com/repos/$REPO/actions/jobs/$id/logs" |
+                sed '/Post job cleanup\./q' | tail -n 300 || true
               echo "::endgroup::"
             done
           echo "Error: a required job did not succeed"
