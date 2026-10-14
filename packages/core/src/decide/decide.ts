@@ -8,6 +8,8 @@
 // child-run cancellation and delegation belong to R4 and are only reserved here.
 import { parseStreamId } from "../streams";
 import type { AgentState } from "../fold/fold";
+import { DEFAULT_APPROVAL_MODE, gateDecision } from "../policy/policy";
+import type { ApprovalMode, Gate, ToolKind } from "../policy/policy";
 import { armTimers } from "./timer";
 
 /** The knobs the agent loop decides with; the caller supplies them from the definition snapshot. */
@@ -38,6 +40,10 @@ export type DecideDef = {
   userChosenAgent?: string;
   /** Tools whose calls name the disposition kind; the target from `args[targetArg]` or the fixed one (S2). */
   dispositionKinds?: Readonly<Record<string, { kind: "agent" | "team"; target?: string; targetArg?: string }>>;
+  /** Per-tool policy (T2's `effectiveAccess` ∩ T1's `meta`), rule 2's gate input; absent keeps today's path. */
+  toolPolicy?: Readonly<Record<string, { access: "allowed" | "approval"; gate: Gate; kind: ToolKind }>>;
+  /** The run's approval mode (T2's `stricterMode`); sessions gate by the folded `state.approvalMode`. */
+  approvalMode?: ApprovalMode;
 };
 
 /** An event decide appends. The worker supplies the rest of the envelope (seq, ts, causation, ...). */
@@ -77,6 +83,11 @@ const DISPOSITION_KINDS = ["direct", "agent", "team", "propose", "clarify"] as c
 /** The wait an `ask_user` call opens, derived from the turn and call so a re-decide cannot fork it. */
 function waitIdFor(turn: number, callId: string): string {
   return `wait:${turn}:${callId}`;
+}
+
+/** The wait an approval-gated call holds on; the callId rides inside for the resume (T3). */
+function approveWaitId(turn: number, callId: string): string {
+  return `approve:${turn}:${callId}`;
 }
 
 /** The id of the agent.message copy of a turn's reply; the deliver keys hang off it. */
@@ -334,6 +345,17 @@ function decideRules(state: AgentState, def: DecideDef, now: number): Decision {
     return { events, jobs };
   }
 
+  // -- Approval expiry (T3): an approve wait past its deadline completes its call -------------
+
+  for (const [waitId, approval] of Object.entries(state.approvals)) {
+    const wait = state.waits.get(waitId);
+    if (wait === undefined || wait.deadline === null || now <= wait.deadline) continue;
+    events.push({
+      type: "tool.completed",
+      payload: { callId: approval.callId, ok: false, error: "approval expired" },
+    });
+  }
+
   const last = state.lastFact;
   const lastType = last?.type;
   const lastPayload = (last?.payload ?? {}) as Record<string, unknown>;
@@ -415,6 +437,36 @@ function decideRules(state: AgentState, def: DecideDef, now: number): Decision {
           delegateCall(state, def, callId, args, events, jobs);
           continue;
         }
+        // Rule 2's policy branch (T3): a tool with a `toolPolicy` entry gates through T2's
+        // `gateDecision` — runs keep today's path, asks hold as `approve` waits.
+        const policy = def.toolPolicy?.[name];
+        if (policy !== undefined) {
+          const mode = isRun(def) ? (def.approvalMode ?? DEFAULT_APPROVAL_MODE) : state.approvalMode;
+          const verdict = gateDecision({ access: policy.access, gate: policy.gate, kind: policy.kind, mode });
+          if (verdict.action === "ask") {
+            const summary = typeof record.summary === "string" ? record.summary : "";
+            const waitId = approveWaitId(state.turn, callId);
+            const deadline = now + (def.askWaitMs ?? DEFAULT_ASK_WAIT_MS);
+            events.push({
+              type: "human.requested",
+              payload: {
+                waitId,
+                kind: "approve",
+                gated: verdict.gated,
+                prompt: `Allow ${name}: ${summary}?`,
+                deadline,
+                approval: { callId, tool: name, args, summary },
+              },
+            });
+            jobs.push({
+              type: "run.timer",
+              key: `${stream}:timer:${waitId}`,
+              streamId: def.streamId,
+              runAt: deadline,
+            });
+            continue;
+          }
+        }
         // `delegate` routes through section 5.2 in R4; until then it is an ordinary call.
         events.push({
           type: "tool.call",
@@ -445,6 +497,33 @@ function decideRules(state: AgentState, def: DecideDef, now: number): Decision {
     return { events, jobs };
   }
 
+  // -- Rule 2b: an approve wait's answer resumes (or declines) the held call (T3) ---------------
+
+  if (lastType === "human.responded" && typeof lastPayload.waitId === "string" && lastPayload.waitId.startsWith("approve:")) {
+    const approval = state.approvals[lastPayload.waitId];
+    if (approval !== undefined) {
+      if (lastPayload.decision === "approve") {
+        events.push({
+          type: "tool.call",
+          payload: {
+            tool: approval.tool,
+            summary: approval.summary,
+            callId: approval.callId,
+            args: approval.args,
+            effect: def.toolEffects?.[approval.tool],
+          },
+        });
+        jobs.push({ type: "tool.exec", key: `${stream}:${approval.callId}`, streamId: def.streamId });
+      } else if (lastPayload.decision === "deny") {
+        events.push({
+          type: "tool.completed",
+          payload: { callId: approval.callId, ok: false, error: "declined by the user" },
+        });
+      }
+    }
+    return { events, jobs };
+  }
+
   // -- Rule 5: the call failed; one retry when retryable, else the turn ends with the news -------
 
   if (lastType === "llm.failed") {
@@ -462,7 +541,8 @@ function decideRules(state: AgentState, def: DecideDef, now: number): Decision {
   // -- Rules 3 and 4 at the limit: every call of the turn has resolved ---------------------------
 
   const resolved = lastType === "tool.completed" || lastType === "tool.interrupted";
-  if (resolved && state.openToolCalls.size === 0 && state.calls > 0 && state.status !== "idle") {
+  const approvalHold = Object.keys(state.approvals).length > 0; // a pending approve wait holds the turn (T3)
+  if (resolved && !approvalHold && state.openToolCalls.size === 0 && state.calls > 0 && state.status !== "idle") {
     // An idle session's turn is over - its disposition ending closed it (S2); rule 3
     // continues only a turn still running.
     // The per-turn cap ends the turn before another model call is queued (rule 1, session cap):

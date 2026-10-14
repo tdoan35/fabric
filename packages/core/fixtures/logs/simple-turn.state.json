@@ -39,5 +39,7 @@
   "head": 5,
   "session": null,
   "turnDisposition": false,
-  "turnToolCalls": []
+  "turnToolCalls": [],
+  "approvalMode": "ask",
+  "approvals": {}
 }

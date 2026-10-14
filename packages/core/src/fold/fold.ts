@@ -6,6 +6,8 @@
 import { isFact } from "../events/schemas";
 import { parseEvent } from "../events/parse";
 import type { EVENT_PAYLOAD_SCHEMAS } from "../events/schemas";
+import { DEFAULT_APPROVAL_MODE } from "../policy/policy";
+import type { ApprovalMode } from "../policy/policy";
 
 /** The agent or team definition snapshot; `run.created` supplies it for runs, the session's agent version for sessions. */
 export type Definition = Record<string, unknown>;
@@ -21,6 +23,9 @@ export type LastFact = { readonly type: string; readonly payload: unknown };
 
 /** A `human.requested` payload, keyed by waitId while it has no `human.responded`. */
 export type Wait = (typeof EVENT_PAYLOAD_SCHEMAS)["human.requested"]["_output"];
+
+/** The gated call an `approve` wait holds, from the request's `approval` payload (T3). */
+export type ApprovalHold = NonNullable<Wait["approval"]>;
 
 /** An input a turn has not consumed yet: `message.received`, `delegation.result` or `human.responded`. */
 export type PendingInput = { readonly type: string; readonly payload: unknown };
@@ -65,6 +70,10 @@ export type AgentState = {
   turnDisposition: boolean;
   /** Every tool call the turn's completions carried, in order — the derived disposition's scan set (S2). */
   turnToolCalls: TurnToolCall[];
+  /** The session's approval mode (PRODUCT §8.3): the latest `session.approval_mode_set`, else `ask` (T3). */
+  approvalMode: ApprovalMode;
+  /** Open approval waits by waitId: the call each holds until it resolves (approve/deny/expiry, T3). */
+  approvals: Record<string, ApprovalHold>;
 };
 
 /** A starting state; every field falls back to the fresh-session default (section 5.1). */
@@ -132,6 +141,8 @@ export function fold(events: readonly unknown[], init: FoldInit = {}): AgentStat
   let session = init.session ?? null;
   let turnDisposition = init.turnDisposition ?? false;
   let turnToolCalls: TurnToolCall[] = (init.turnToolCalls ?? []).map((call) => ({ ...call }));
+  let approvalMode: ApprovalMode = init.approvalMode ?? DEFAULT_APPROVAL_MODE;
+  let approvals: Record<string, ApprovalHold> = { ...(init.approvals ?? {}) };
   let pendingInputs: PendingInput[] = (init.pendingInputs ?? []).map((input) => ({ ...input }));
   const openToolCalls = new Map(init.openToolCalls);
   const waits = new Map(init.waits);
@@ -169,12 +180,22 @@ export function fold(events: readonly unknown[], init: FoldInit = {}): AgentStat
         // The session's opening fact: whose agent it hosts, and whether it leaves a trace (S2).
         session = { agentId: event.payload.agentId, incognito: event.payload.incognito };
         break;
+      case "session.approval_mode_set":
+        // The mode applies from the next decision on; open waits are never retro-approved (T3).
+        approvalMode = event.payload.mode;
+        break;
       case "message.received":
       case "human.responded":
-      case "proposal.decided":
-        pendingInputs = [...pendingInputs, { type: event.type, payload: event.payload }];
+      case "proposal.decided": {
+        // An approval answer is consumed by the approval rules off `lastFact` (T3); only
+        // inputs a later turn must see park here.
+        const wait = event.type === "human.responded" ? waits.get(event.payload.waitId) : undefined;
+        if (wait?.approval === undefined) {
+          pendingInputs = [...pendingInputs, { type: event.type, payload: event.payload }];
+        }
         if (event.type === "human.responded") waits.delete(event.payload.waitId);
         break;
+      }
       case "delegation.result": {
         // A pending input for the parent's loop (section 5.1); the child's spend lands here and
         // the reservation its background ack held is released (section 7).
@@ -245,6 +266,14 @@ export function fold(events: readonly unknown[], init: FoldInit = {}): AgentStat
       case "tool.completed":
       case "tool.interrupted": {
         openToolCalls.delete(event.payload.callId);
+        // A held approval resolves with its call's completion: the record and, when the
+        // expiry swept it, the wait itself go with it (T3).
+        for (const [waitId, approval] of Object.entries(approvals)) {
+          if (approval.callId === event.payload.callId) {
+            delete approvals[waitId];
+            waits.delete(waitId);
+          }
+        }
         const index = delegations.findIndex((record) => record.callId === event.payload.callId);
         if (index !== -1) {
           const record = delegations[index];
@@ -264,9 +293,13 @@ export function fold(events: readonly unknown[], init: FoldInit = {}): AgentStat
         }
         break;
       }
-      case "human.requested":
+      case "human.requested": {
         waits.set(event.payload.waitId, event.payload);
+        if (event.payload.approval !== undefined) {
+          approvals[event.payload.waitId] = event.payload.approval;
+        }
         break;
+      }
       case "run.cancel_requested":
         cancelRequested = true;
         break;
@@ -314,5 +347,7 @@ export function fold(events: readonly unknown[], init: FoldInit = {}): AgentStat
     session,
     turnDisposition,
     turnToolCalls,
+    approvalMode,
+    approvals,
   };
 }

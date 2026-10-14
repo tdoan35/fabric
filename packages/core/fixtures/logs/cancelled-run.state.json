@@ -45,5 +45,7 @@
         "cmd": "deploy"
       }
     }
-  ]
+  ],
+  "approvalMode": "ask",
+  "approvals": {}
 }
