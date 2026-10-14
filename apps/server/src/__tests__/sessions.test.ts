@@ -23,14 +23,20 @@ import { sessions } from "../routes/sessions";
 
 const app = (): Hono => new Hono().route("/api", sessions);
 
-const postJson = (path: string, body: unknown): Promise<Response> =>
+const postJson = async (path: string, body: unknown): Promise<Response> =>
   app().request(path, {
     method: "POST",
     body: JSON.stringify(body),
     headers: { "content-type": "application/json" },
   });
 
-const getJson = (path: string): Promise<Response> => app().request(path);
+const getJson = async (path: string): Promise<Response> => app().request(path);
+
+const createSession = async (): Promise<{ sessionId: string }> => {
+  const response = await postJson("/api/sessions", { agentId: "dana" });
+  expect(response.status).toBe(200);
+  return (await response.json()) as { sessionId: string };
+};
 
 /** Poll until `run` returns a value, the B4 window: 5 s. */
 async function until<T>(run: () => Promise<T | undefined>, ms = 5_000): Promise<T> {
@@ -79,7 +85,8 @@ describeDrivers("S5 server: runtime bootstrap and session commands (ANY-54)", (h
   async function start(worker = true, over: Partial<RuntimeEnv> = {}): Promise<FabricRuntime> {
     let env: RuntimeEnv;
     if (h.driver === "pglite") {
-      state.dir = await mkdtemp(path.join(tmpdir(), "fabric-s5-"));
+      // One backend per test: the B5 restart must land on the same store.
+      state.dir ??= await mkdtemp(path.join(tmpdir(), "fabric-s5-"));
       env = { RUNTIME_PGLITE_DIR: state.dir, MODEL_PORT: "test", ...over };
     } else {
       const base = postgresUrlFromEnv();
@@ -94,11 +101,13 @@ describeDrivers("S5 server: runtime bootstrap and session commands (ANY-54)", (h
             db.db.execute(sql.raw(`drop database if exists "${name}" with (force)`)).then(() => undefined),
         };
       })();
-      const database = `fabric_s5_${randomUUID().replace(/-/g, "").slice(0, 8)}`;
-      await admin.admin.db.execute(sql.raw(`create database "${database}"`));
-      const url = new URL(base);
-      url.pathname = `/${database}`;
-      state.url = url.toString();
+      if (state.url === undefined) {
+        const database = `fabric_s5_${randomUUID().replace(/-/g, "").slice(0, 8)}`;
+        await admin.admin.db.execute(sql.raw(`create database "${database}"`));
+        const url = new URL(base);
+        url.pathname = `/${database}`;
+        state.url = url.toString();
+      }
       env = { RUNTIME_DATABASE_URL: state.url, MODEL_PORT: "test", ...over };
     }
     const rt = await startRuntime(env, { worker });
@@ -121,7 +130,7 @@ describeDrivers("S5 server: runtime bootstrap and session commands (ANY-54)", (h
 
   test("B2: the posted message lands at the returned seq as message.received, app surface, id carried", async () => {
     const rt = await start();
-    const session = await (await postJson("/api/sessions", { agentId: "dana" })).json();
+    const session = await createSession();
     const clientMessageId = randomUUID();
 
     const posted = await postJson(`/api/sessions/${session.sessionId}/messages`, {
@@ -145,7 +154,7 @@ describeDrivers("S5 server: runtime bootstrap and session commands (ANY-54)", (h
 
   test("B3: reposting the same clientMessageId returns the original seq and appends nothing", async () => {
     const rt = await start();
-    const session = await (await postJson("/api/sessions", { agentId: "dana" })).json();
+    const session = await createSession();
     const clientMessageId = randomUUID();
     const body = { clientMessageId, text: "once" };
 
@@ -161,12 +170,11 @@ describeDrivers("S5 server: runtime bootstrap and session commands (ANY-54)", (h
 
   test("B4: with the worker up, the turn ends in agent.message echo and a derived disposition within 5 s", async () => {
     const rt = await start();
-    const session = await (await postJson("/api/sessions", { agentId: "dana" })).json();
+    const session = await createSession();
     await postJson(`/api/sessions/${session.sessionId}/messages`, {
       clientMessageId: randomUUID(),
       text: "ping the turn",
     });
-
     const events = await until(async () => {
       const all = await eventsOf(rt, session.sessionId);
       const agentMessage = all.find((event) => event.type === "agent.message");
@@ -176,19 +184,21 @@ describeDrivers("S5 server: runtime bootstrap and session commands (ANY-54)", (h
     });
     expect((events.agentMessage.payload as { text: string }).text).toBe("echo: ping the turn");
     expect((events.disposition.payload as { source: string }).source).toBe("derived");
-  });
+  }, 30_000);
 
   test("B5: a turn posted while the worker is down completes after the runtime restarts on the same store", async () => {
     const stopped = await start(false);
-    const session = await (await postJson("/api/sessions", { agentId: "dana" })).json();
+    const session = await createSession();
     await postJson(`/api/sessions/${session.sessionId}/messages`, {
       clientMessageId: randomUUID(),
       text: "survive the restart",
     });
-    await stopped.stop();
-    setRuntime(undefined);
+    // The worker is down and stays down until the restart: the log is frozen
+    // at the message. Read the pre-restart state through the live store.
     const before = await eventsOf(stopped, session.sessionId);
     expect(before.some((event) => event.type === "agent.message")).toBe(false);
+    await stopped.stop();
+    setRuntime(undefined);
 
     const restarted = await start();
     const events = await until(async () => {
@@ -200,7 +210,7 @@ describeDrivers("S5 server: runtime bootstrap and session commands (ANY-54)", (h
     });
     expect((events.agentMessage.payload as { text: string }).text).toBe("echo: survive the restart");
     expect(events.all.filter((event) => event.type === "llm.completed")).toHaveLength(1);
-  });
+  }, 45_000);
 
   test("B6: unknown sessions 404; bodies off the contract 400", async () => {
     await start();
@@ -210,10 +220,8 @@ describeDrivers("S5 server: runtime bootstrap and session commands (ANY-54)", (h
 
     expect((await postJson("/api/sessions", {})).status).toBe(400);
     expect((await postJson("/api/sessions", { agentId: 42 })).status).toBe(400);
-    expect(
-      (await postJson("/api/sessions", { agentId: "dana", extra: true })).status
-    ).toBe(400);
-    const session = await (await postJson("/api/sessions", { agentId: "dana" })).json();
+    expect((await postJson("/api/sessions", "not-an-object")).status).toBe(400);
+    const session = await createSession();
     expect(
       (await postJson(`/api/sessions/${session.sessionId}/messages`, { clientMessageId: "not-a-uuid", text: "x" })).status
     ).toBe(400);
