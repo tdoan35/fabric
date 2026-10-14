@@ -1,0 +1,24 @@
+{
+  "name": "@fabric/memory",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Memory (LEARNING \u00a75, ARCH \u00a712): the skills store \u2014 Agent Skills folders imported per agent, immutable versions on the runtime store, and the read API. The lifecycle (states, strength, search) comes later.",
+  "exports": {
+    ".": "./src/index.ts",
+    "./*": "./src/*/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "vitest run",
+    "skills:import": "tsx scripts/import-skills.ts"
+  },
+  "dependencies": {
+    "@fabric/core": "*",
+    "@fabric/runtime": "*",
+    "yaml": "^2.8.0"
+  },
+  "devDependencies": {
+    "vitest": "^5.0.3"
+  }
+}
