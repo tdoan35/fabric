@@ -1,11 +1,15 @@
-// Postgres: the server driver. Every transaction gets its own pooled connection, so
-// concurrent appends interleave and the head lock serializes just the sequence.
+// Postgres: the server driver. Every top-level transaction gets its own pooled
+// connection, so concurrent appends interleave and the head lock serializes just
+// the sequence. One opened inside another's callback joins it as a savepoint on
+// the same connection (R13), seeing its uncommitted writes.
 import { Pool, type PoolClient } from "pg";
 import type { Adapter } from "./adapter";
+import { TransactionNesting } from "./nesting";
 import type { Row, RuntimeTx } from "./types";
 
 export class PostgresAdapter implements Adapter {
   private readonly pool: Pool;
+  private readonly nesting = new TransactionNesting();
 
   constructor(url: string) {
     this.pool = new Pool({ connectionString: url });
@@ -27,20 +31,19 @@ export class PostgresAdapter implements Adapter {
   }
 
   async transaction<T>(run: (tx: RuntimeTx) => Promise<T>): Promise<T> {
+    const nested = this.nesting.join(run);
+    if (nested !== undefined) return nested;
     const client: PoolClient = await this.pool.connect();
     try {
       await client.query("begin");
       const hooks: Array<() => unknown> = [];
-      const tx: RuntimeTx = {
-        query: async (sql, params) => {
-          const result = await client.query(sql, (params ?? []) as unknown[]);
-          return result.rows as Row[];
-        },
-        onCommit: (hook) => hooks.push(hook),
+      const query = async (sql: string, params?: readonly unknown[]): Promise<Row[]> => {
+        const result = await client.query(sql, (params ?? []) as unknown[]);
+        return result.rows as Row[];
       };
       let value: T;
       try {
-        value = await run(tx);
+        value = await this.nesting.top(query, hooks, run);
         await client.query("commit");
       } catch (error) {
         await client.query("rollback").catch(() => undefined);
