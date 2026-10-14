@@ -81,7 +81,8 @@ const DISPOSITION_TOOL: ToolSchema = {
   },
 };
 
-const ASK_USER_TOOL: ToolSchema = {
+/** The ask_user declaration, shared with the specialist definition (S9). */
+export const ASK_USER_TOOL: ToolSchema = {
   name: "ask_user",
   description: "Ask the user exactly one question and end the turn; the answer arrives as the tool result.",
   parameters: {
