@@ -70,3 +70,12 @@ export { handleToolExecJob, type ToolExecJobDeps } from "./workers/index";
 export { handleDelegateResolveJob, type DelegateResolveJobDeps } from "./workers/index";
 export { handleDeliverJob, type DeliverJobDeps } from "./workers/index";
 export { runWorker, runUntilIdle, WORKER_JOB_TYPES, type WorkerOptions, type WorkerPorts } from "./workers/loop";
+
+// The timer worker, the wait/cancel API and the append guard (ANY-36 R10).
+// The timer handler is exported from its own module: the workers barrel lists
+// the loop-dispatched handlers, and `run.timer` is claimed explicitly until
+// the loop learns the type.
+export { handleTimerJob, type TimerJobDeps } from "./workers/timer";
+export { appendGuarded, cancel, type AppendGuardResult, type CancelOptions } from "./api/cancel";
+export { respond } from "./api/respond";
+export type { RespondOptions, RespondResult, RefusalReason } from "./api/respond";
