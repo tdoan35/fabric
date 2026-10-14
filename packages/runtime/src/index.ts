@@ -2,6 +2,8 @@
 // and Postgres behind one driver seam, with transactional append and scoped reads —
 // plus the job queue contracts and conformance suite (RUNTIME §4, ANY-32).
 export { openStore, append } from "./store/store";
+export { listStreams, type ListedStream, type ListStreamsOptions } from "./store/list";
+export { redactStream, ERASED, type RedactOptions } from "./store/redact";
 export type {
   AppendBatch,
   AppendOptions,

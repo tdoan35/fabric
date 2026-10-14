@@ -32,6 +32,7 @@ import type { ProposalActions, SpecialistAgent } from "@fabric/agents/session";
 import { recallFacts } from "@fabric/agents/assistant";
 import { InProcessLiveBus, type LiveBus } from "./live-bus";
 import { createTestModelPort, type TestModelOptions } from "./test-model";
+import { enqueuePurgeOnActivity, runPurgeLoop } from "./purge";
 import { hub } from "../services/hub";
 import { runtime as appRuntime } from "../services/runtime";
 
@@ -128,7 +129,9 @@ export function setSessionAgents(records: readonly SpecialistAgent[]): void {
 }
 
 /** The append enqueue port: one `decide` per touched stream, keyed on the
- * post-append head so a rerun cannot double-queue (RUNTIME §4). */
+ * post-append head so a rerun cannot double-queue (RUNTIME §4) — plus, on
+ incognito session streams, the S11 purge job whose deadline shadows the
+ * activity this append carries (ANY-61). */
 export function enqueueDecide(queue: Queue) {
   return async (tx: RuntimeTx, job: { type: string; streamId: string }): Promise<void> => {
     const head = await tx.query("select head from streams where id = $1", [job.streamId]);
@@ -138,6 +141,7 @@ export function enqueueDecide(queue: Queue) {
       streamId: job.streamId,
       workspaceId: RUNTIME_WORKSPACE,
     });
+    await enqueuePurgeOnActivity(tx, queue, RUNTIME_WORKSPACE, job.streamId);
   };
 }
 
@@ -453,6 +457,13 @@ export async function startRuntime(env: RuntimeEnv, opts: { worker?: boolean } =
             pollIntervalMs: 200,
           }),
         );
+  // S11: the incognito purge rides its own claim loop — `session.purge` is a
+  // server-side job type the runtime worker loop does not dispatch.
+  if (opts.worker !== false) {
+    loops.push(
+      runPurgeLoop(store, queue, signal.signal, `fabric-purge-${process.pid}-${randomUUID().slice(0, 8)}`),
+    );
+  }
 
   let stopped = false;
   const runtime: FabricRuntime = {
