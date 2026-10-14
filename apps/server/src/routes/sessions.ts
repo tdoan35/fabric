@@ -251,6 +251,64 @@ export const sessions = new Hono()
     });
   })
 
+  // S8a (ANY-57): the proposal decision. The endpoint is the app's half of
+  // PRODUCT §4: the transition runs once against the read model (the same
+  // side effects the in-process decision applies — on approve, the team), and
+  // the `proposal.decided` fact lands on the session stream in the same
+  // transaction as its re-decide, so Dana's next turn consumes it. A decided
+  // proposal answers 409 and appends nothing.
+  .post("/sessions/:id/proposals/:proposalId/decision", async (c) => {
+    const runtime = getRuntime();
+    if (runtime === undefined) return c.json({ error: "runtime not started" }, 503);
+    const proposals = runtime.proposals;
+    if (proposals === undefined) return c.json({ error: "app database not configured" }, 503);
+
+    const body = await c.req.json().catch(() => null);
+    const decision = (body as { decision?: unknown } | null)?.decision;
+    if (decision !== "approve" && decision !== "decline" && decision !== "discuss") {
+      return c.json({ error: "invalid decision" }, 400);
+    }
+    const transition: "approved" | "declined" | "discuss" =
+      decision === "approve" ? "approved" : decision === "decline" ? "declined" : "discuss";
+
+    const sessionId = c.req.param("id");
+    const proposalId = c.req.param("proposalId");
+    const streamId = `session:${sessionId}`;
+
+    const known = await runtime.store.transaction((tx) =>
+      tx.query("select 1 from streams where id = $1 and workspace_id = $2", [streamId, RUNTIME_WORKSPACE]),
+    );
+    if (known.length === 0) return c.json({ error: "session not found" }, 404);
+
+    const row = await proposals.byId(proposalId);
+    if (row === undefined || row.sessionId !== sessionId) return c.json({ error: "proposal not found" }, 404);
+
+    // the transition, once: a decided row moves nothing and touches nothing
+    const applied = await proposals.decide(proposalId, transition);
+    if (!applied) return c.json({ error: "proposal already decided" }, 409);
+
+    await runtime.store.transaction((tx) =>
+      append(
+        tx,
+        RUNTIME_WORKSPACE,
+        [
+          {
+            streamId,
+            events: [
+              {
+                type: "proposal.decided",
+                actor: "api",
+                payload: { kind: row.kind, decision, by: "user" },
+              },
+            ],
+          },
+        ],
+        { enqueue: enqueueDecide(runtime.queue) },
+      ),
+    );
+    return c.json({ proposalId, decision }, 200);
+  })
+
   .get("/sessions/:id/events", async (c) => {
     const runtime = getRuntime();
     if (runtime === undefined) return c.json({ error: "runtime not started" }, 503);
