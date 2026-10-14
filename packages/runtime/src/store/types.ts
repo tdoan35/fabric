@@ -71,7 +71,10 @@ export type StoreConfig =
   | { driver: "postgres"; url: string };
 
 export interface RuntimeStore {
-  /** Runs `fn` inside one transaction; a throw rolls everything back. */
+  /** Runs `fn` inside one transaction; a throw rolls everything back. Called
+   * while another transaction's callback is running (in its async context), it
+   * joins that transaction as a savepoint: a throw undoes only its own writes,
+   * and its onCommit hooks wait for the outermost commit (R13). */
   transaction<T>(fn: (tx: RuntimeTx) => Promise<T>): Promise<T>;
   /** The stream's events in `seq` order, scoped to the workspace. */
   readStream(streamId: string, options: ReadStreamOptions): Promise<StoredEvent[]>;
