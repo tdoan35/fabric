@@ -11,7 +11,7 @@
   "scripts": {
     "typecheck": "tsc -p tsconfig.json",
     "test": "vitest run",
-    "bench:queue": "tsx bench/bench.ts"
+    "test:crash": "tsx crash/run.ts"
   },
   "dependencies": {
     "@fabric/core": "*",
