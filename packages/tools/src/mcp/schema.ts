@@ -31,5 +31,17 @@ export async function ensureMcpSchema(store: RuntimeStore): Promise<void> {
       stale boolean not null,
       primary key (workspace_id, server)
     )`);
+    // ANY-78: a started OAuth sign-in, single use, 10 minutes. `client` is
+    // the client and authorization-server details finish needs, as JSON.
+    await tx.query(`create table if not exists mcp_oauth_pending (
+      workspace_id text not null,
+      state text not null,
+      server text not null,
+      code_verifier text not null,
+      redirect_uri text not null,
+      client text not null,
+      expires_at timestamptz not null,
+      primary key (workspace_id, state)
+    )`);
   });
 }

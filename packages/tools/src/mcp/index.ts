@@ -9,6 +9,7 @@ export {
   MCP_SERVER_NAME_PATTERN,
   mcpServers,
   type McpAccess,
+  type McpAgentsChange,
   type McpAttachment,
   type McpAuth,
   type McpServerRecord,
@@ -36,3 +37,10 @@ export {
   type McpToolSource,
 } from "./tools";
 export { MCP_TOOL_NAME_MAX, mcpToolName, sanitizeMcpToolName, serverOfToolName } from "./names";
+export { MCP_OAUTH_PENDING_MS, mcpOAuth, type McpOAuth } from "./oauth";
+export {
+  McpNeedsSignIn,
+  MCP_REFRESH_SKEW_MS,
+  mcpOAuthVaultName,
+  type McpOAuthTokens,
+} from "./tokens";
