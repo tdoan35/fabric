@@ -15,7 +15,8 @@ import path from "node:path";
 import { openStore, PgQueue, runWorker } from "@fabric/runtime";
 import type { Queue, RuntimeStore, RuntimeTx, WorkerPorts } from "@fabric/runtime";
 import { createModelPort } from "@fabric/llm";
-import { createTestModelPort } from "./test-model";
+import { InProcessLiveBus, type LiveBus } from "./live-bus";
+import { createTestModelPort, type TestModelOptions } from "./test-model";
 
 /** One workspace until tenancy (ANY-46). */
 export const RUNTIME_WORKSPACE = "local";
@@ -30,11 +31,15 @@ export type RuntimeEnv = {
   RUNTIME_CONCURRENCY?: number;
   /** `ai` (the real port, default) or `test` (the echo double). */
   MODEL_PORT?: "ai" | "test";
+  /** Test-model variant: `chunked` streams the reply in 5 chunks 30 ms apart (S6). */
+  MODEL_VARIANT?: "chunked";
 };
 
 export type FabricRuntime = {
   store: RuntimeStore;
   queue: Queue;
+  /** The session live bus (S6): append notifies and model deltas, in-process. */
+  live: LiveBus;
   /** Drains the workers, then closes queue and store. Idempotent. */
   stop: () => Promise<void>;
 };
@@ -62,9 +67,13 @@ export function enqueueDecide(queue: Queue) {
 }
 
 /** The worker ports. Tools arrive with S7/S8; the app surface is a no-op that
- * succeeds — the client reads the stream, the receipt only closes the job. */
-function workerPorts(env: RuntimeEnv): WorkerPorts {
-  const model = env.MODEL_PORT === "test" ? createTestModelPort() : createModelPort();
+ * succeeds — the client reads the stream, the receipt only closes the job.
+ * S6: model deltas ride the live bus, attributed by the enclosing transaction's
+ * scan (see `wireLiveBus`) — the port's callback carries text only. */
+function workerPorts(env: RuntimeEnv, live: LiveBus): WorkerPorts {
+  const variant: TestModelOptions | undefined =
+    env.MODEL_VARIANT === "chunked" ? { chunks: 5, intervalMs: 30 } : undefined;
+  const model = env.MODEL_PORT === "test" ? createTestModelPort(variant) : createModelPort();
   return {
     model,
     tools: {
@@ -73,6 +82,12 @@ function workerPorts(env: RuntimeEnv): WorkerPorts {
     },
     surface: {
       send: async () => ({}),
+    },
+    onDelta: (delta) => {
+      const scan = liveScan.getStore();
+      if (scan?.stream !== undefined && scan.call !== undefined) {
+        live.delta(scan.stream, { turn: scan.call.turn, callNo: scan.call.callNo, text: delta.text });
+      }
     },
   };
 }
@@ -112,8 +127,122 @@ function pgliteQueueBackend(store: RuntimeStore) {
   };
 }
 
-let active: FabricRuntime | undefined;
+// -- the live bus wiring (S6) -------------------------------------------------
 
+/** One transaction's observed session traffic, for the two S6 seams: the
+ * post-commit `appended` notify, and the stream/call attribution the model's
+ * `onDelta` needs (the port's callback carries the text only). */
+interface LiveScan {
+  /** Session streams touched, to the head this transaction leaves them at. */
+  heads: Map<string, number>;
+  /** Streams whose `ll.completed`/`ll.failed` landed here — end the call. */
+  ended: Set<string>;
+  /** The in-flight call: the latest `ll.requested` the transaction read. */
+  call?: { turn: number; callNo: number };
+  /** The session stream the transaction last touched. */
+  stream?: string;
+}
+
+const liveScan = new AsyncLocalStorage<LiveScan>();
+
+const isSession = (value: unknown): value is string =>
+  typeof value === "string" && value.startsWith("session:");
+
+function callOf(payload: unknown): { turn: number; callNo: number } | undefined {
+  let value = payload;
+  if (typeof value === "string") {
+    try {
+      value = JSON.parse(value);
+    } catch {
+      return undefined;
+    }
+  }
+  if (value === null || typeof value !== "object") return undefined;
+  const record = value as Record<string, unknown>;
+  const turn = record["turn"];
+  const callNo = record["callNo"];
+  if (typeof turn === "number" && typeof callNo === "number") return { turn, callNo };
+  return undefined;
+}
+
+/** The traffic shapes of one append (store.ts), read off the transaction: the
+ * head bump names the stream and its new seq; the event inserts carry the
+ * completion that ends a call. Event rows read back in the same transaction
+ * carry the `ll.requested` whose turn/callNo the live deltas inherit. */
+function scanForLive(
+  sql: string,
+  params: readonly unknown[] | undefined,
+  rows: unknown[],
+  scan: LiveScan,
+): void {
+  if (sql.startsWith("update streams set head")) {
+    const [streamId, head] = params ?? [];
+    if (isSession(streamId)) {
+      const seq = Number(head);
+      if (Number.isInteger(seq)) {
+        scan.heads.set(streamId, Math.max(seq, scan.heads.get(streamId) ?? 0));
+        scan.stream = streamId;
+      }
+    }
+    return;
+  }
+  if (sql.startsWith("insert into events") && params !== undefined) {
+    const streamId = params[2];
+    const type = params[4];
+    if (isSession(streamId) && (type === "llm.completed" || type === "llm.failed")) {
+      scan.ended.add(streamId);
+    }
+  }
+  for (const row of rows) {
+    if (row === null || typeof row !== "object") continue;
+    const record = row as Record<string, unknown>;
+    if (record["type"] !== "llm.requested" || !isSession(record["stream_id"])) continue;
+    const call = callOf(record["payload"]);
+    if (call !== undefined) {
+      scan.call = call;
+      scan.stream = record["stream_id"];
+    }
+  }
+}
+
+/** S6's notify seam: every transaction's session appends end with a head bump,
+ * so the wrapper watches for it, and fires `live.appended` once on commit —
+ * the in-process leg of RUNTIME §8's "every append notifies its streams",
+ * covering the route appends and the worker's fact appends alike. The same
+ * scan attributes the model port's deltas (see `workerPorts`). */
+function wireLiveBus(store: RuntimeStore, live: InProcessLiveBus): void {
+  const previous = store.transaction.bind(store) as (
+    run: (tx: RuntimeTx) => Promise<unknown>,
+  ) => Promise<unknown>;
+  (store as unknown as { transaction: unknown }).transaction = (
+    run: (tx: RuntimeTx) => Promise<unknown>,
+  ) =>
+    previous((tx) => {
+      const scan: LiveScan = { heads: new Map(), ended: new Set() };
+      let armed = false;
+      const wrapped: RuntimeTx = {
+        query: async (sql, params) => {
+          const rows = await tx.query(sql, params);
+          scanForLive(sql, params, rows, scan);
+          // One hook per transaction: it reads the scan's final state at commit.
+          if (!armed && scan.stream !== undefined) {
+            armed = true;
+            tx.onCommit(() => {
+              for (const [streamId, head] of scan.heads) {
+                live.appended(streamId, head);
+                if (scan.ended.has(streamId)) live.endCall(streamId);
+              }
+            });
+          }
+          return rows;
+        },
+        onCommit: (hook) => tx.onCommit(hook),
+      };
+      return liveScan.run(scan, () => run(wrapped));
+    });
+}
+
+let active: FabricRuntime | undefined;
 /** The runtime the session routes talk to; `startRuntime` installs it. */
 export function getRuntime(): FabricRuntime | undefined {
   return active;
@@ -156,6 +285,11 @@ export async function startRuntime(env: RuntimeEnv, opts: { worker?: boolean } =
   // connection). An empty claim is the cheapest ready-barrier.
   await queue.claim("fabric-runtime-boot", [], Date.now());
 
+  // S6: the session live bus. Wired after the queue's own transaction wrapper
+  // so the notify scan sits outermost and sees every append's head bump.
+  const live = new InProcessLiveBus();
+  wireLiveBus(store, live);
+
   const signal = new AbortController();
   const loops =
     opts.worker === false
@@ -164,7 +298,7 @@ export async function startRuntime(env: RuntimeEnv, opts: { worker?: boolean } =
           runWorker({
             store,
             queue,
-            ports: workerPorts(env),
+            ports: workerPorts(env, live),
             workerId: `fabric-runtime-${process.pid}-${index}-${randomUUID().slice(0, 8)}`,
             signal: signal.signal,
             pollIntervalMs: 200,
@@ -175,6 +309,7 @@ export async function startRuntime(env: RuntimeEnv, opts: { worker?: boolean } =
   const runtime: FabricRuntime = {
     store,
     queue,
+    live,
     stop: async () => {
       if (stopped) return;
       stopped = true;

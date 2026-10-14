@@ -5,7 +5,13 @@
 // workspace constant until tenancy (ANY-46).
 import { randomUUID } from "node:crypto";
 import { Hono } from "hono";
-import { CreateSessionRequestSchema, PostMessageRequestSchema } from "@fabric/contracts";
+import {
+  CreateSessionRequestSchema,
+  encodeFrame,
+  PostMessageRequestSchema,
+  type SessionDelta,
+  type SessionFrame,
+} from "@fabric/contracts";
 import { append } from "@fabric/runtime";
 import { enqueueDecide, getRuntime, RUNTIME_WORKSPACE } from "../runtime/bootstrap";
 
@@ -108,6 +114,140 @@ export const sessions = new Hono()
 
     if (outcome.kind === "missing") return c.json({ error: "session not found" }, 404);
     return c.json({ seq: outcome.seq }, 200);
+  })
+
+  // S6 (ANY-55): the SSE session stream. The subscription is taken BEFORE the
+  // backlog is read, and every drain pass re-reads the store from the last
+  // sent seq, so a commit during the backlog is delivered exactly once, by
+  // whichever pass reaches it — no gap, no duplicate on one connection. The
+  // backlog is facts and telemetry; deltas and pings are live-only.
+  .get("/sessions/:id/stream", async (c) => {
+    const runtime = getRuntime();
+    if (runtime === undefined) return c.json({ error: "runtime not started" }, 503);
+
+    // Resume point: the header wins, then the query, then the stream start.
+    const raw = c.req.header("Last-Event-ID") ?? c.req.query("after");
+    let resume = 0;
+    if (raw !== undefined && raw !== "") {
+      resume = Number(raw);
+      if (!Number.isInteger(resume) || resume < 0) {
+        return c.json({ error: "invalid resume point" }, 400);
+      }
+    }
+
+    const streamId = `session:${c.req.param("id")}`;
+    // Existence via a bare read, never a check-transaction: a session stream
+    // always carries its creation facts, so an empty read is an unknown id —
+    // and a bare read cannot queue behind a worker's in-flight transaction the
+    // way a check transaction would on the serialized (PGlite) driver, which
+    // would delay the whole stream until the turn's transaction commits.
+    const known = await runtime.store.readStream(streamId, {
+      workspaceId: RUNTIME_WORKSPACE,
+      fromSeq: 1,
+    });
+    if (known.length === 0) return c.json({ error: "session not found" }, 404);
+
+    const { live } = runtime;
+    const encoder = new TextEncoder();
+    let lastSent = resume;
+    let closed = false;
+    const pending = new Map<string, SessionDelta>();
+    let flushTimer: ReturnType<typeof setInterval> | undefined;
+    let pingTimer: ReturnType<typeof setInterval> | undefined;
+    let activeClose: (() => void) | undefined;
+
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        const send = (frame: SessionFrame): void => {
+          if (closed) return;
+          controller.enqueue(encoder.encode(encodeFrame(frame)));
+        };
+        const fail = (error: unknown): void => {
+          if (closed) return;
+          closed = true;
+          activeClose = undefined;
+          controller.error(error);
+        };
+
+        // Subscribe first: anything appended from here on is ours to deliver.
+        const unsubscribe = live.subscribe(streamId, {
+          onAppend: (seq) => {
+            if (seq > lastSent) kick();
+          },
+          onDelta: (delta) => pending.set(`${delta.turn}:${delta.callNo}`, delta),
+        });
+
+        // Serialized drains; each runs until the store yields nothing new.
+        let tail: Promise<void> = Promise.resolve();
+        const drain = async (): Promise<void> => {
+          for (;;) {
+            const events = await runtime.store.readStream(streamId, {
+              workspaceId: RUNTIME_WORKSPACE,
+              fromSeq: lastSent + 1,
+            });
+            if (events.length === 0) return;
+            for (const event of events) {
+              send({
+                event: "event",
+                id: event.seq,
+                data: {
+                  seq: event.seq,
+                  type: event.type,
+                  class: event.class as "fact" | "telemetry",
+                  payload: event.payload,
+                  ts: event.ts,
+                },
+              });
+              lastSent = event.seq;
+            }
+          }
+        };
+        const kick = (): void => {
+          tail = tail.then(drain).catch(fail);
+        };
+
+        activeClose = () => {
+          if (closed) return;
+          closed = true;
+          unsubscribe();
+          if (flushTimer !== undefined) clearInterval(flushTimer);
+          if (pingTimer !== undefined) clearInterval(pingTimer);
+          try {
+            controller.close();
+          } catch {
+            // the client got there first
+          }
+        };
+
+        void (async () => {
+          kick();
+          await tail;
+          if (closed) return;
+          // Mid-call join: the newest known text, at once; the rest batches.
+          pending.clear();
+          const inFlight = live.current(streamId);
+          if (inFlight !== null) send({ event: "delta", data: inFlight });
+
+          flushTimer = setInterval(() => {
+            if (pending.size === 0) return;
+            for (const delta of pending.values()) send({ event: "delta", data: delta });
+            pending.clear();
+          }, 100);
+          (flushTimer as unknown as { unref?: () => void }).unref?.();
+
+          pingTimer = setInterval(() => send({ event: "ping" }), 15_000);
+          (pingTimer as unknown as { unref?: () => void }).unref?.();
+        })();
+      },
+      cancel: () => {
+        activeClose?.();
+      },
+    });
+
+    return c.body(body, 200, {
+      "content-type": "text/event-stream; charset=utf-8",
+      "cache-control": "no-cache",
+    });
   })
 
   .get("/sessions/:id/events", async (c) => {
