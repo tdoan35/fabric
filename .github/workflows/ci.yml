@@ -2,7 +2,7 @@
 # Jobs:
 #   checks, mutation, storybook — run in parallel; together they are the gate.
 #   verify — REQUIRED for merge (branch protection context: "verify"). Passes only
-#            when all three pass, and prints the failed steps' logs so the factory's
+#            when all three pass, and prints the failed jobs' logs so the factory's
 #            CI readback (which excerpts the "verify" job log) still sees the error.
 #   lint   — report-only until the 6 pre-existing errors in apps/web are fixed
 #            (5x react-hooks setState-in-effect, 1x unused import). Then move
@@ -144,14 +144,24 @@ jobs:
           CHECKS: ${{ needs.checks.result }}
           MUTATION: ${{ needs.mutation.result }}
           STORYBOOK: ${{ needs.storybook.result }}
+          REPO: ${{ github.repository }}
+          RUN_ID: ${{ github.run_id }}
         run: |
           echo "checks=$CHECKS mutation=$MUTATION storybook=$STORYBOOK"
           if [ "$CHECKS" = success ] && [ "$MUTATION" = success ] && [ "$STORYBOOK" = success ]; then
             exit 0
           fi
-          echo "::group::Failed step logs"
-          gh run view "${{ github.run_id }}" --repo "${{ github.repository }}" --log-failed | tail -n 400 || true
-          echo "::endgroup::"
+          # Per-job logs: `gh run view --log-failed` waits for the whole run, and this
+          # job is part of it. Cut at the runner teardown, as the readback does.
+          gh api "repos/$REPO/actions/runs/$RUN_ID/jobs" --jq '.jobs[]
+              | select(.name != "verify")
+              | select(.conclusion == "failure" or .conclusion == "cancelled" or .conclusion == "timed_out")
+              | "\(.id) \(.name)"' |
+            while read -r id name; do
+              echo "::group::$name"
+              gh api "repos/$REPO/actions/jobs/$id/logs" | sed '/Post job cleanup\./q' | tail -n 300 || true
+              echo "::endgroup::"
+            done
           echo "Error: a required job did not succeed"
           exit 1
 
