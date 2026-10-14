@@ -4,13 +4,29 @@
 // headers, the credential attached per the rule's auth, body streamed,
 // redirects unfollowed (cross-host Location stripped). Every request is
 // audited through `onUse` — identity, rule, method, host, path, status —
-// never the secret value.
+// never the secret value. `github-app` rules (T11) add the git and API
+// policies of ./github; their git refusals are plain text, and a refused
+// push is a receive-pack report, so git shows the agent the reason.
 import type { IncomingHttpHeaders, IncomingMessage, ServerResponse } from "node:http";
 import { Readable } from "node:stream";
+import type { ReadableStream as NodeWebReadableStream } from "node:stream/web";
 import { pipeline } from "node:stream/promises";
 import type { Vault } from "../vault";
 import { normalizePath, pathAllowed, type CredentialAuth, type CredentialRule } from "./rules";
 import type { TokenStore } from "./tokens";
+import {
+  checkApiRequest,
+  checkGitRequest,
+  checkPushCommands,
+  createAppTokenManager,
+  githubSurface,
+  isGitHubRule,
+  pushRejection,
+  readPushCommands,
+  repoAttached,
+  type AppTokenManager,
+  type GitHubRule,
+} from "./github";
 
 export type BrokerUseRecord = {
   workspaceId: string | null;
@@ -25,9 +41,13 @@ export type BrokerUseRecord = {
   reason?: string;
 };
 
+/** A credential rule, or a GitHub App rule (T11) whose credential is an
+ * installation token and whose traffic passes the git/API policies. */
+export type BrokerRule = CredentialRule | GitHubRule;
+
 export type BrokerDeps = {
   vault: Vault;
-  rules: readonly CredentialRule[];
+  rules: readonly BrokerRule[];
   tokens: TokenStore;
   onUse: (record: BrokerUseRecord) => void;
 };
@@ -104,15 +124,58 @@ function tokenFromAuth(header: unknown): string | null {
   return null;
 }
 
+// -- github-app rules (T11) -------------------------------------------------------
+
+/** One token manager per rule object: the installation token is cached
+ * across requests for the rule's lifetime. */
+const appTokenManagers = new WeakMap<GitHubRule, AppTokenManager>();
+
+/** The installation credential: basic `x-access-token` over git HTTP
+ * (git's native form), Bearer on the API. */
+function gitHubCredential(surface: "git" | "api", token: string): Record<string, string> {
+  if (surface === "api") return { authorization: `Bearer ${token}` };
+  return {
+    authorization: `Basic ${Buffer.from(`x-access-token:${token}`, "utf8").toString("base64")}`,
+  };
+}
+
+/** The bytes already read, then the rest of the request as it arrives —
+ * the pack streams through, never buffered. */
+function prefixedBody(head: Buffer, rest: AsyncIterator<unknown>): ReadableStream<Uint8Array> {
+  let headSent = head.length === 0;
+  return new ReadableStream<Uint8Array>({
+    async pull(controller) {
+      if (!headSent) {
+        headSent = true;
+        controller.enqueue(head);
+        return;
+      }
+      const next = await rest.next();
+      if (next.done === true) controller.close();
+      else controller.enqueue(Buffer.from(next.value as Uint8Array));
+    },
+    async cancel() {
+      await rest.return?.();
+    },
+  });
+}
+
 // -- the pipeline ----------------------------------------------------------------
 
 function refuse(
   deps: BrokerDeps,
   res: ServerResponse,
   base: Omit<BrokerUseRecord, "status" | "allowed" | "reason">,
-  reason: string
+  reason: string,
+  format: "json" | "text" = "json"
 ): void {
   deps.onUse({ ...base, status: 403, allowed: false, reason });
+  if (format === "text") {
+    // git prints a text/plain error body to the user ("remote: …")
+    res.writeHead(403, { "content-type": "text/plain; charset=utf-8" });
+    res.end(`${reason}\n`);
+    return;
+  }
   res.writeHead(403, { "content-type": "application/json" });
   res.end(JSON.stringify({ error: reason }));
 }
@@ -184,23 +247,96 @@ export async function handleBrokerRequest(
     return refuse(deps, res, identified, "path not allowed");
   }
 
-  // 6. credential — fail-closed: nothing is sent without it
-  let secret: string;
-  try {
-    secret = await deps.vault.get(rule.secret, { agentId: identity.agentId });
-  } catch {
-    return refuse(deps, res, identified, "credential unavailable");
+  // 6. credential + (github-app) policy — fail-closed: nothing is sent
+  // without a credential, and GitHub rules enforce their repo/push/API
+  // policy before a token is minted or anything leaves.
+  const hasBody = method !== "GET" && method !== "HEAD";
+  let credential: Record<string, string>;
+  let body: ReadableStream<Uint8Array> | undefined;
+
+  if (isGitHubRule(rule)) {
+    const surface = githubSurface(rule);
+    if (surface === null) {
+      return refuse(deps, res, identified, "github-app rule needs a surface (git or api) for this upstream");
+    }
+    const format = surface === "git" ? "text" : "json";
+
+    let manager = appTokenManagers.get(rule);
+    if (manager === undefined) {
+      try {
+        manager = createAppTokenManager({ auth: rule.auth, vault: deps.vault });
+      } catch (error) {
+        // configuration errors only: the manager touches no secret until a mint
+        return refuse(deps, res, identified, (error as Error).message, format);
+      }
+      appTokenManagers.set(rule, manager);
+    }
+
+    // policy first: a refusal never mints a token
+    if (surface === "git") {
+      const gitRequest = checkGitRequest(method, decodedPath, query);
+      if (!gitRequest.ok) return refuse(deps, res, identified, gitRequest.reason, format);
+      if (!repoAttached(rule.auth.repos, gitRequest.owner, gitRequest.repo)) {
+        return refuse(deps, res, identified, `repo not attached to this installation: ${gitRequest.owner}/${gitRequest.repo}`, format);
+      }
+      if (gitRequest.kind === "receive-pack") {
+        // read the ref commands off the front of the body, never the pack
+        const source = req[Symbol.asyncIterator]();
+        const read = await readPushCommands(source);
+        if (read.outcome !== "complete") {
+          return refuse(deps, res, identified, `push refused: ref-update commands ${read.outcome}`, format);
+        }
+        const verdict = checkPushCommands(read.commands);
+        if (!verdict.ok) {
+          const report = pushRejection(read.commands, verdict);
+          if (report === null) return refuse(deps, res, identified, verdict.reason, format);
+          // answered as GitHub answers a declined push: 200 with each ref
+          // rejected and its reason, which git shows as `! [remote rejected]`
+          deps.onUse({ ...identified, status: 200, allowed: false, reason: verdict.reason });
+          res.writeHead(200, {
+            "content-type": "application/x-git-receive-pack-result",
+            "cache-control": "no-cache",
+          });
+          res.end(report);
+          return;
+        }
+        body = prefixedBody(read.head, source);
+      } else if (hasBody) {
+        body = Readable.toWeb(req) as unknown as ReadableStream<Uint8Array>;
+      }
+    } else {
+      const verdict = checkApiRequest(method, decodedPath, rule.auth.repos);
+      if (!verdict.ok) return refuse(deps, res, identified, verdict.reason, format);
+      if (hasBody) body = Readable.toWeb(req) as unknown as ReadableStream<Uint8Array>;
+    }
+
+    let token: string;
+    try {
+      token = await manager.getToken();
+    } catch {
+      return refuse(deps, res, identified, "credential unavailable", format);
+    }
+    credential = gitHubCredential(surface, token);
+  } else {
+    let secret: string;
+    try {
+      secret = await deps.vault.get(rule.secret, { agentId: identity.agentId });
+    } catch {
+      return refuse(deps, res, identified, "credential unavailable");
+    }
+    if (hasBody) {
+      body = Readable.toWeb(req) as unknown as ReadableStream<Uint8Array>;
+    }
+    credential = credentialHeader(rule.auth, secret);
   }
 
   // forward
   const target = `${rule.upstream.replace(/\/+$/, "")}${rawPath}${query}`;
-  const hasBody = method !== "GET" && method !== "HEAD";
   // Readable.toWeb returns a web stream structurally identical to undici's
   // body type; the DOM-less typings cannot unify them.
-  const body = hasBody ? (Readable.toWeb(req) as unknown as ReadableStream<Uint8Array>) : undefined;
   const init: RequestInit = {
     method,
-    headers: forwardHeaders(req.headers, credentialHeader(rule.auth, secret)),
+    headers: forwardHeaders(req.headers, credential),
     redirect: "manual",
     ...(body === undefined ? {} : { body, duplex: "half" }),
   };
@@ -250,7 +386,7 @@ export async function handleBrokerRequest(
     return;
   }
   await pipeline(
-    Readable.fromWeb(upstream.body as unknown as import("node:stream/web").ReadableStream<Uint8Array>),
+    Readable.fromWeb(upstream.body as unknown as NodeWebReadableStream<Uint8Array>),
     res
   );
 }
