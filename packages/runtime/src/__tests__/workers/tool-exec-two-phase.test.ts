@@ -99,16 +99,24 @@ async function within<T>(promise: Promise<T>, what: string): Promise<T> {
 }
 
 /** The store, with every transaction crashing after its work ran — the
- * at-least-once state: the work happened, nothing was recorded. */
-const crashAfterRun = (store: RuntimeStore): RuntimeStore => ({
-  transaction: (fn) =>
-    store.transaction(async (tx) => {
-      await fn(tx);
-      throw new Error(CRASH);
-    }),
-  readStream: (streamId, options) => store.readStream(streamId, options),
-  close: () => store.close(),
-});
+ * at-least-once state: the work happened, nothing was recorded. Two-phase
+ * (R14) attempt shape: the first `skip` transactions (the read) pass, the
+ * record crashes after its work — the tool ran, nothing durable. */
+const crashAfterRun = (store: RuntimeStore, skip = 1): RuntimeStore => {
+  let seen = 0;
+  return {
+    transaction: (fn) =>
+      store.transaction(async (tx) => {
+        const index = seen;
+        seen += 1;
+        const value = await fn(tx);
+        if (index >= skip) throw new Error(CRASH);
+        return value;
+      }),
+    readStream: (streamId, options) => store.readStream(streamId, options),
+    close: () => store.close(),
+  };
+};
 
 interface ProbeRun {
   ok: boolean;
@@ -454,11 +462,12 @@ describeDrivers("runtime tool.exec two-phase (ANY-80 R14)", (h) => {
     expect(tools.count("sh")).toBe(1);
 
     // Attempt two is the recovery: interruption facts, no second run, one
-    // transaction — proven by crashing it too and finding nothing recorded.
+    // transaction — proven by crashing that single transaction and finding
+    // nothing recorded.
     const second = await queue.claim("worker-2", ["tool.exec"], 30_000);
     expect(second?.attempt).toBe(2);
     await expect(
-      handleToolExecJob(second!, { store: crashAfterRun(store), queue, tools, now: () => 0 })
+      handleToolExecJob(second!, { store: crashAfterRun(store, 0), queue, tools, now: () => 0 })
     ).rejects.toThrow(CRASH);
     expect(
       of(await store.readStream(STREAM, { workspaceId: WORKSPACE }), "tool.interrupted")

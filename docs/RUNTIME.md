@@ -123,7 +123,7 @@ Model token deltas never enter the log: they are pushed live (§8) and the final
 |---|---|---|---|
 | `decide` | 30 s | — | 3, then `run.blocked` with the error |
 | `llm.call` | 10 min | stream activity every 60 s | 429 and 5xx with backoff, honouring `retry-after`; one retry for other retryable errors (§5.1) |
-| `tool.exec` | per tool (default 5 min; sandbox commands up to 60 min) | 30 s for long tools | by effect class (§6) |
+| `tool.exec` | 61 min — the 60 min sandbox cap plus grace (§6) | 30 s | by effect class (§6) |
 | `delegate.resolve`, `run.finalize` | 30 s | — | until done (idempotent) |
 | `deliver` | 30 s | — | backoff up to 24 h, then a failed-delivery fact the UI shows |
 
@@ -206,7 +206,7 @@ interface LaneState {
 
 ## 6. Side effects
 
-Every tool declares its effect class. `tool.call` (with the class) is appended **before** `tool.exec` runs, so after a crash the runtime knows what was attempted.
+Every tool declares its effect class. `tool.call` (with the class) is appended **before** `tool.exec` runs, so after a crash the runtime knows what was attempted. The tool itself runs **between two transactions** — the read and the record — so a long call never holds the store's connection; a result that arrives after another runner's is discarded.
 
 | Effect | Tools | A retried `tool.exec` finds no result |
 |---|---|---|

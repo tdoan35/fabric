@@ -5,21 +5,29 @@
 // <stream>:<callId>`, the job key, so R5's unique index and the recorded-
 // result guard make a re-run append nothing twice (W11b).
 //
+// The attempt is two-phase (R14): the read (done-guard, the call, the
+// recovery) and the record (telemetry, completion facts, the re-decide, the
+// lease) are each one transaction, and the tool itself runs BETWEEN them,
+// outside any store transaction — a long call must not hold the store's
+// connection (PGlite's one connection is serialized; Postgres would pin a
+// pool client for the whole run). The record phase re-checks the done-guard:
+// a result that arrives after another runner's is discarded and the lease is
+// completed tolerantly, exactly like the recorded path.
+//
 // Recovery is by effect class (§6): a retry — the lease's attempt > 1 — that
 // finds no recorded result reruns `read`/`idempotent` tools, and records
 // `tool.interrupted` instead of running `rerunnable` and `once` a second
 // time; `once` additionally asks a human whether the first attempt landed,
 // passing the provider's idempotency key through in the prompt when the call
-// carried one. The port is the run-scoped adapter: whoever assembles the deps
-// binds it to the run's effective access; the handler passes the call through.
-//
-// The whole attempt is one transaction (the telemetry, the facts and the
-// lease's completion commit together), so a crash leaves the retry the
-// no-result state the effect classes are for.
+// carried one. Recovery stays in the read transaction — its facts, the
+// re-decide and the lease completion commit together, with no tool run. The
+// port is the run-scoped adapter: whoever assembles the deps binds it to the
+// run's effective access; the handler passes the call through, with the
+// lease's workspace and the stream's session agent (S2) in the io.
 import type { Queue, QueueLease } from "../queue/types";
 import type { ToolEffect, ToolPort, ToolRunResult } from "../ports";
 import { append } from "../store/store";
-import type { EventInput, RuntimeStore } from "../store/types";
+import type { EventInput, RuntimeStore, RuntimeTx } from "../store/types";
 import { enqueueReDecides, readEventRows, type EventRow } from "./decide";
 
 export type ToolExecJobDeps = {
@@ -62,6 +70,18 @@ function findToolCall(rows: readonly EventRow[], callId: string): Record<string,
     if (payload.callId === callId) return payload;
   }
   return null;
+}
+
+/** The folded `session.agentId` (S2): the last `session.created`'s agent —
+ * undefined when the stream hosts no session (a run). */
+function sessionAgentId(rows: readonly EventRow[]): string | undefined {
+  for (let index = rows.length - 1; index >= 0; index -= 1) {
+    const row = rows[index]!;
+    if (row.type !== "session.created") continue;
+    const payload = isRecord(row.payload) ? row.payload : {};
+    if (typeof payload.agentId === "string") return payload.agentId;
+  }
+  return undefined;
 }
 
 /** The effect class: the `tool.call`'s declaration, else the registry's, else
@@ -171,30 +191,66 @@ function recoveryFacts(
   return events;
 }
 
+/** The done-guard: a fact already caused by this key on this stream (W11b). */
+async function recordedAlready(
+  tx: RuntimeTx,
+  streamId: string,
+  workspaceId: string,
+  key: string
+): Promise<unknown[]> {
+  return tx.query(
+    `select 1 from events where stream_id = $1 and workspace_id = $2 and causation = $3 and class = 'fact' limit 1`,
+    [streamId, workspaceId, key]
+  );
+}
+
+/** The result is durable; complete the lease, tolerating the runner that got
+ * there first — its completion is the proof the guard saw. */
+async function completeTolerantly(store: RuntimeStore, queue: Queue, lease: QueueLease): Promise<void> {
+  try {
+    await store.transaction((tx) => queue.complete(tx, lease));
+  } catch (error) {
+    const job = await queue.get(lease.jobId);
+    if (job?.status !== "completed") throw error;
+  }
+}
+
+/** The job-failure path: the lease fails retryably per the type's config and
+ * the error rethrows, so the runner sees the failure too. */
+async function failRetryably(lease: QueueLease, deps: ToolExecJobDeps, error: unknown): Promise<never> {
+  await deps.queue.fail(
+    lease,
+    error instanceof Error ? error : new Error(String(error)),
+    { retryable: true },
+    (deps.now ?? (() => Date.now()))()
+  );
+  throw error;
+}
+
 /**
- * Run one claimed `tool.exec` job. A tool failure is a result
- * (`tool.completed { ok: false }`), not a job failure; job-level errors fail
- * the lease per the type's retry config and rethrow, so the runner sees the
- * failure too — the retry re-enters through the effect-class recovery.
+ * Run one claimed `tool.exec` job, in two phases around the tool run. A tool
+ * failure is a result (`tool.completed { ok: false }`), not a job failure;
+ * job-level errors fail the lease per the type's retry config and rethrow, so
+ * the runner sees the failure too — the retry re-enters through the
+ * effect-class recovery.
  */
 export async function handleToolExecJob(lease: QueueLease, deps: ToolExecJobDeps): Promise<void> {
   const { store, queue, tools } = deps;
-  const now = deps.now ?? (() => Date.now());
   const streamId = lease.streamId;
   if (streamId === null) throw new Error("tool.exec job without a stream");
   const key = lease.key;
   const callId = callIdFromKey(key, streamId);
   if (callId === null) throw new Error(`tool.exec key ${key} does not parse as <stream>:<callId>`);
 
+  // -- phase 1: read — the done-guard, the recovery, or the call to run ------
   let recorded = false;
+  let staged: { tool: string; args: Record<string, unknown>; agentId: string | undefined } | null =
+    null;
   try {
     await store.transaction(async (tx) => {
       // W11b: the result already recorded — an at-least-once re-run. Skip the
       // run and the append; the tail completes the lease tolerantly.
-      const done = await tx.query(
-        `select 1 from events where stream_id = $1 and workspace_id = $2 and causation = $3 and class = 'fact' limit 1`,
-        [streamId, lease.workspaceId, key]
-      );
+      const done = await recordedAlready(tx, streamId, lease.workspaceId, key);
       if (done.length > 0) {
         recorded = true;
         return;
@@ -207,43 +263,66 @@ export async function handleToolExecJob(lease: QueueLease, deps: ToolExecJobDeps
       const args = isRecord(call.args) ? call.args : {};
       const effect = effectOf(call, tools, tool);
 
-      // §6: a retry with no recorded result. read/idempotent run again;
-      // rerunnable/once record the interruption instead of a second run.
+      // §6: a retry with no recorded result. read/idempotent run again (in
+      // phase 2, below); rerunnable/once record the interruption instead of a
+      // second run — here, in this same transaction: facts, re-decide, lease.
       const recover = lease.attempt > 1 && (effect === "rerunnable" || effect === "once");
 
       if (recover) {
         await append(tx, lease.workspaceId, [{ streamId, events: recoveryFacts(key, callId, effect, args) }]);
-      } else {
-        const lines: string[] = [];
-        const result: ToolRunResult = await tools.run(tool, args, {
-          onLine: (line) => lines.push(line),
-          callId, // ANY-72: the id a `once` tool derives its idempotency key from
-          streamId, // ANY-57: the stream the body acts on (session tools)
-        });
-        const batches: { streamId: string; events: EventInput[] }[] = [];
-        if (lines.length > 0) batches.push({ streamId, events: telemetryBatch(key, lines) });
-        batches.push({ streamId, events: completionFacts(key, callId, result) });
-        await append(tx, lease.workspaceId, batches);
+        // §2: the stream gained facts — the decide loop continues from them.
+        await enqueueReDecides(tx, queue, lease.workspaceId, [streamId]);
+        await queue.complete(tx, lease);
+        return;
       }
+
+      staged = { tool, args, agentId: sessionAgentId(rows) };
+    });
+  } catch (error) {
+    await failRetryably(lease, deps, error);
+  }
+
+  if (recorded) {
+    await completeTolerantly(store, queue, lease);
+    return;
+  }
+  if (staged === null) return; // the recovery branch completed the lease in phase 1
+
+  // -- phase 2: the run, outside any store transaction ------------------------
+  const { tool, args, agentId } = staged;
+  const lines: string[] = [];
+  let result: ToolRunResult;
+  let doneByOther = false;
+  try {
+    result = await tools.run(tool, args, {
+      onLine: (line) => lines.push(line),
+      callId, // ANY-72: the id a `once` tool derives its idempotency key from
+      streamId, // ANY-57: the stream the body acts on (session tools)
+      workspaceId: lease.workspaceId, // R14: the lease's workspace, no store read needed
+      ...(agentId !== undefined ? { agentId } : {}), // S2: the session's agent; absent for runs
+    });
+
+    // -- phase 3: record — the guard, then appends, re-decide and lease --------
+    await store.transaction(async (tx) => {
+      const done = await recordedAlready(tx, streamId, lease.workspaceId, key);
+      if (done.length > 0) {
+        // Another runner recorded while this one ran: append nothing, discard
+        // this result, complete tolerantly like the recorded path.
+        doneByOther = true;
+        return;
+      }
+      const batches: { streamId: string; events: EventInput[] }[] = [];
+      if (lines.length > 0) batches.push({ streamId, events: telemetryBatch(key, lines) });
+      batches.push({ streamId, events: completionFacts(key, callId, result) });
+      await append(tx, lease.workspaceId, batches);
 
       // §2: the stream gained facts — the decide loop continues from them.
       await enqueueReDecides(tx, queue, lease.workspaceId, [streamId]);
       await queue.complete(tx, lease);
     });
   } catch (error) {
-    await queue.fail(lease, error instanceof Error ? error : new Error(String(error)), {
-      retryable: true,
-    }, now());
-    throw error;
+    await failRetryably(lease, deps, error);
   }
-  if (recorded) {
-    // The result is durable; complete the lease, tolerating the runner that
-    // got there first — its completion is the proof the guard saw.
-    try {
-      await store.transaction((tx) => queue.complete(tx, lease));
-    } catch (error) {
-      const job = await queue.get(lease.jobId);
-      if (job?.status !== "completed") throw error;
-    }
-  }
+
+  if (doneByOther) await completeTolerantly(store, queue, lease);
 }
