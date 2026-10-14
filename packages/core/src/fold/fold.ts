@@ -53,6 +53,9 @@ export type AgentState = {
   lastFact: LastFact | null;
   /** Attempts made on the current call: bumped by `ll.failed`, reset by `ll.requested` (section 5.1 rule 5). */
   callAttempt: number;
+  /** The seq of the last event the fold saw, any class — the stream head the
+   * stall watchdog arms and re-checks against (section 7). */
+  head: number;
 };
 
 /** A starting state; every field falls back to the fresh-session default (section 5.1). */
@@ -127,11 +130,14 @@ export function fold(events: readonly unknown[], init: FoldInit = {}): AgentStat
 
   let inTurn = false;
   let started = false;
+  let head = init.head ?? 0; // the watchdog's progress token: the last seq seen, any class
   let prevFactType: string | null = null; // the fact before this one: tells a retry from a turn start
 
-  for (const raw of inSeqOrder(events)) {
+  const ordered = inSeqOrder(events);
+  for (const raw of ordered) {
     const type = (raw as { type?: unknown }).type;
     if (typeof type !== "string" || !isFact(type)) continue; // telemetry: only the UI reads it
+    head = seqOf(raw);
     const event = parseEvent(raw);
 
     lastFact = { type: event.type, payload: event.payload };
@@ -266,5 +272,6 @@ export function fold(events: readonly unknown[], init: FoldInit = {}): AgentStat
     cancelRequested,
     lastFact,
     callAttempt,
+    head,
   };
 }
