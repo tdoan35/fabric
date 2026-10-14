@@ -25,3 +25,12 @@ export {
   type SkillWriteResult,
 } from "./store";
 export { importSkills, type SkillImportResult } from "./import";
+// ANY-76 M2: the read tools and the index renderer.
+export { MAX_SKILL_READ_BYTES, skillTools } from "./tools";
+export {
+  renderSkillIndex,
+  SKILL_INDEX_CAPS,
+  SKILL_INDEX_HEADER,
+  type SkillIndex,
+  type SkillIndexRole,
+} from "./skill-index";
