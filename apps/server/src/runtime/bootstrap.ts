@@ -17,11 +17,21 @@ import type { Queue, RuntimeStore, RuntimeTx, WorkerPorts } from "@fabric/runtim
 import { createModelPort } from "@fabric/llm";
 import { createDb } from "@fabric/db";
 import type { Db } from "@fabric/db";
-import { dbProposalStore, danaSessionDef, sessionTools, withSessionContext } from "@fabric/agents/session";
+import {
+  dbProposalStore,
+  danaSessionDef,
+  legacyBridges,
+  sessionTools,
+  withBridges,
+  withSessionContext,
+  type SessionBridgeEngines,
+} from "@fabric/agents/session";
 import type { ProposalActions } from "@fabric/agents/session";
 import { recallFacts } from "@fabric/agents/assistant";
 import { InProcessLiveBus, type LiveBus } from "./live-bus";
 import { createTestModelPort, type TestModelOptions } from "./test-model";
+import { hub } from "../services/hub";
+import { runtime as appRuntime } from "../services/runtime";
 
 /** One workspace until tenancy (ANY-46). */
 export const RUNTIME_WORKSPACE = "local";
@@ -41,6 +51,8 @@ export type RuntimeEnv = {
   /** The app database (the proposal read model and the transition's side
    * effects, S8a); absent = the session surface runs without proposals. */
   DATABASE_URL?: string;
+  /** DEMO_RECORDING_KEY: what a Fast-forward splices into after a bridge handoff (S8b). */
+  DEMO_RECORDING_KEY?: string;
 };
 
 export type FabricRuntime = {
@@ -79,10 +91,14 @@ export function sessionTurnDefinition(
   if (agentId !== "dana") return SESSION_TURN_DEF;
   const raw = process.env.DANA_TURN_COST_CAP_USD;
   const parsed = raw === undefined ? undefined : Number(raw);
-  return danaSessionDef({
-    incognito: opts.incognito === true,
-    ...(parsed !== undefined && Number.isFinite(parsed) ? { turnCostCapUsd: parsed } : {}),
-  });
+  // S8b: the legacy-engine bridges ride Dana's definition — the `once` effects
+  // and the S2 disposition kinds (handoff → team/its id, errand → agent/browser).
+  return withBridges(
+    danaSessionDef({
+      incognito: opts.incognito === true,
+      ...(parsed !== undefined && Number.isFinite(parsed) ? { turnCostCapUsd: parsed } : {}),
+    }),
+  );
 }
 
 /** The append enqueue port: one `decide` per touched stream, keyed on the
@@ -99,14 +115,26 @@ export function enqueueDecide(queue: Queue) {
   };
 }
 
+/** The bridge engines bound to the app runtime (`services/runtime.ts`): the
+ * legacy handoff/errand path, resolved lazily — nothing opens until a bridge
+ * actually runs, so a deployment without an app database only fails at call
+ * time, inside the tool result. */
+const appBridges = (): SessionBridgeEngines =>
+  legacyBridges({
+    app: () => appRuntime(),
+    publish: (e) => hub.publishApp(e),
+    recordingKey: process.env.DEMO_RECORDING_KEY,
+  });
+
 /** The worker ports. S7: the model port wears the session context wrapper (the
  * turn's recall lands in the system prompt; sessions without the recall tool —
  * incognito, runs — pass through untouched) and the ToolPort is the session
- * registry (`recall`, effect `read`). The app surface remains a no-op that
+ * registry (`recall`, effect `read`; the S8a proposal writers and the S8b
+ * legacy-engine bridges when wired). The app surface remains a no-op that
  * succeeds — the client reads the stream, the receipt only closes the job.
  * S6: model deltas ride the live bus, attributed by the enclosing transaction's
  * scan (see `wireLiveBus`) — the port's callback carries text only. */
-function workerPorts(
+export function workerPorts(
   env: RuntimeEnv,
   live: LiveBus,
   proposals: ProposalActions | undefined,
@@ -119,6 +147,7 @@ function workerPorts(
     model: withSessionContext(model, recallFacts),
     tools: sessionTools({
       recall: recallFacts,
+      bridges: appBridges(),
       ...(proposals !== undefined
         ? { proposals: { store: proposals, loop: { store, workspace: RUNTIME_WORKSPACE } } }
         : {}),

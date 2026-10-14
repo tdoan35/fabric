@@ -114,6 +114,7 @@ function decideDefFrom(state: AgentState, streamId: string): DecideDef {
     def.surfaces = d.surfaces.filter((surface): surface is string => typeof surface === "string");
   }
   if (isRecord(d.toolEffects)) def.toolEffects = d.toolEffects as DecideDef["toolEffects"];
+  if (isRecord(d.dispositionKinds)) def.dispositionKinds = d.dispositionKinds as DecideDef["dispositionKinds"];
   if (isRecord(d.agents)) def.agents = d.agents as DecideDef["agents"];
   return def;
 }
