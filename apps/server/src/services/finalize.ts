@@ -12,6 +12,8 @@ import type { Db, RunRowLike } from "@fabric/db";
 import { env } from "../env";
 import { hub } from "./hub";
 import { runtime } from "./runtime";
+import { getRuntime } from "../runtime/bootstrap";
+import { postSystemMessage } from "../runtime/session-messages";
 
 /** A stop or a block isn't a finish: nothing to attach, nothing to announce. */
 const FINISHED_STATUSES = new Set(["accepted", "running"]); // running = finalize-splice on a live loop
@@ -151,22 +153,34 @@ export async function finalizeRun(runId: string): Promise<{ reportId: string } |
   }
 
   // ---- Dana's results message (CHAT-14): the real message id, so session.message points at it ----
+  // S10: a session on the log gets the result as stream telemetry instead — no
+  // chat row, no ping. Legacy threads keep the path below verbatim.
   const sessionId = task?.sessionId;
   if (sessionId && report) {
-    const assistant = runtime().assistant();
-    let messageId = `results-${reportId}`;
-    if (assistant) {
-      try {
-        ({ messageId } = await assistant.postResultsMessage(sessionId, {
-          reportId, runId, taskId: task!.id, title: report.title, summary: report.summary, rows: report.results,
-        }));
-      } catch (err) {
-        console.log(`[finalize] postResultsMessage unavailable: ${err instanceof NotImplementedError ? err.message : String(err)}`);
+    const fabric = getRuntime();
+    const posted = fabric !== undefined
+      ? await postSystemMessage(fabric, sessionId, {
+          id: `results:${runId}`,
+          text: `${report.title}\n\n${report.summary}`,
+          origin: { runId },
+        })
+      : false;
+    if (!posted) {
+      const assistant = runtime().assistant();
+      let messageId = `results-${reportId}`;
+      if (assistant) {
+        try {
+          ({ messageId } = await assistant.postResultsMessage(sessionId, {
+            reportId, runId, taskId: task!.id, title: report.title, summary: report.summary, rows: report.results,
+          }));
+        } catch (err) {
+          console.log(`[finalize] postResultsMessage unavailable: ${err instanceof NotImplementedError ? err.message : String(err)}`);
+        }
+      } else {
+        console.log("[finalize] DANA not implemented yet; skipping postResultsMessage");
       }
-    } else {
-      console.log("[finalize] DANA not implemented yet; skipping postResultsMessage");
+      hub.publishApp({ type: "session.message", sessionId, messageId });
     }
-    hub.publishApp({ type: "session.message", sessionId, messageId });
   }
 
   // ---- the report email (P1-1): only when AgentMail is explicitly on ----
