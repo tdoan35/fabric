@@ -368,8 +368,17 @@ test("Q11: one gated call of two holds the turn: the ungated runs, no model call
   expect(decision.events.map((event) => event.type)).toEqual(["tool.call", "human.requested"]);
   expect(decision.jobs.map((job) => job.key)).toEqual(["session:s1:c2", "session:s1:timer:approve:1:c3"]);
 
-  // The ungated call resolves: the held approval still blocks rule 3.
-  const partial = fold([...events, evt(4, "tool.completed", { callId: "c2", ok: true, result: "listed" })], {});
+  // The ungated call resolves: the held approval still blocks rule 3. The decision's own
+  // events land first, as the runtime's append does.
+  const asked = decision.events[1]!.payload;
+  const partial = fold(
+    [
+      ...events,
+      evt(4, "human.requested", asked),
+      evt(5, "tool.completed", { callId: "c2", ok: true, result: "listed" }),
+    ],
+    {}
+  );
   const waiting = decideAgent(partial, def as never, NOW);
   expect(waiting.events).toEqual([]);
   expect(waiting.jobs).toEqual([]);
