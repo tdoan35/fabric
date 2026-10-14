@@ -8,6 +8,7 @@
 // child-run cancellation and delegation belong to R4 and are only reserved here.
 import { parseStreamId } from "../streams";
 import type { AgentState } from "../fold/fold";
+import { armTimers } from "./timer";
 
 /** The knobs the agent loop decides with; the caller supplies them from the definition snapshot. */
 export type DecideDef = {
@@ -220,7 +221,7 @@ function lastTextOf(state: AgentState): string {
  * The agent loop (RUNTIME section 5.1, rules 1-6, in order).
  * Rule 7 (compaction) belongs to `llm.call`; child cancellation and delegation arrive in R4.
  */
-export function decideAgent(state: AgentState, def: DecideDef, now: number): Decision {
+function decideRules(state: AgentState, def: DecideDef, now: number): Decision {
   const events: DecideEvent[] = [];
   const jobs: DecideJob[] = [];
   const stream = def.streamId;
@@ -369,6 +370,16 @@ export function decideAgent(state: AgentState, def: DecideDef, now: number): Dec
 
   // Rules 1-6 leave nothing to do: an open wait, tools in flight, a bare `llm.requested`...
   return { events, jobs };
+}
+
+/**
+ * The agent loop plus the section 7 timer arms: the rules above, then the
+ * wait reminders, stall watchdog and time budget the definition asks for
+ * (see decide/timer.ts). The arms are additive — a definition without the
+ * knobs decides exactly as before.
+ */
+export function decideAgent(state: AgentState, def: DecideDef, now: number): Decision {
+  return armTimers(state, def.streamId, decideRules(state, def, now), now);
 }
 
 /** The run id behind a run stream (`run:<id>`), for keys that name the run itself. */

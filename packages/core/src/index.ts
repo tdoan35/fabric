@@ -28,3 +28,5 @@ export type {
   DelegableAgent,
   ChildOutcome,
 } from "./decide/decide";
+export { armTimers, decideTimer, parseTimerTrigger, timerKnobs } from "./decide/timer";
+export type { TimerTrigger } from "./decide/timer";
