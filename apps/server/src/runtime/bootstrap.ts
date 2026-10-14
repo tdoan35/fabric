@@ -15,7 +15,10 @@ import path from "node:path";
 import { openStore, PgQueue, runWorker } from "@fabric/runtime";
 import type { Queue, RuntimeStore, RuntimeTx, WorkerPorts } from "@fabric/runtime";
 import { createModelPort } from "@fabric/llm";
-import { danaSessionDef, sessionTools, withSessionContext } from "@fabric/agents/session";
+import { createDb } from "@fabric/db";
+import type { Db } from "@fabric/db";
+import { dbProposalStore, danaSessionDef, sessionTools, withSessionContext } from "@fabric/agents/session";
+import type { ProposalActions } from "@fabric/agents/session";
 import { recallFacts } from "@fabric/agents/assistant";
 import { InProcessLiveBus, type LiveBus } from "./live-bus";
 import { createTestModelPort, type TestModelOptions } from "./test-model";
@@ -35,6 +38,9 @@ export type RuntimeEnv = {
   MODEL_PORT?: "ai" | "test";
   /** Test-model variant: `chunked` streams the reply in 5 chunks 30 ms apart (S6). */
   MODEL_VARIANT?: "chunked";
+  /** The app database (the proposal read model and the transition's side
+   * effects, S8a); absent = the session surface runs without proposals. */
+  DATABASE_URL?: string;
 };
 
 export type FabricRuntime = {
@@ -42,6 +48,9 @@ export type FabricRuntime = {
   queue: Queue;
   /** The session live bus (S6): append notifies and model deltas, in-process. */
   live: LiveBus;
+  /** The proposal store behind the loop's `propose_*` tools and the decision
+   * endpoint (S8a); undefined without an app database. */
+  proposals?: ProposalActions;
   /** Drains the workers, then closes queue and store. Idempotent. */
   stop: () => Promise<void>;
 };
@@ -97,13 +106,23 @@ export function enqueueDecide(queue: Queue) {
  * succeeds — the client reads the stream, the receipt only closes the job.
  * S6: model deltas ride the live bus, attributed by the enclosing transaction's
  * scan (see `wireLiveBus`) — the port's callback carries text only. */
-function workerPorts(env: RuntimeEnv, live: LiveBus): WorkerPorts {
+function workerPorts(
+  env: RuntimeEnv,
+  live: LiveBus,
+  proposals: ProposalActions | undefined,
+  store: RuntimeStore,
+): WorkerPorts {
   const variant: TestModelOptions | undefined =
     env.MODEL_VARIANT === "chunked" ? { chunks: 5, intervalMs: 30 } : undefined;
   const model = env.MODEL_PORT === "test" ? createTestModelPort(variant) : createModelPort();
   return {
     model: withSessionContext(model, recallFacts),
-    tools: sessionTools({ recall: recallFacts }),
+    tools: sessionTools({
+      recall: recallFacts,
+      ...(proposals !== undefined
+        ? { proposals: { store: proposals, loop: { store, workspace: RUNTIME_WORKSPACE } } }
+        : {}),
+    }),
     surface: {
       send: async () => ({}),
     },
@@ -314,6 +333,15 @@ export async function startRuntime(env: RuntimeEnv, opts: { worker?: boolean } =
   const live = new InProcessLiveBus();
   wireLiveBus(store, live);
 
+  // S8a: the proposal store over the app database — the loop's `propose_*`
+  // bodies write through it and the decision endpoint decides through it.
+  let appDb: Db | undefined;
+  let proposals: ProposalActions | undefined;
+  if (env.DATABASE_URL !== undefined && env.DATABASE_URL !== "") {
+    appDb = createDb(env.DATABASE_URL);
+    proposals = dbProposalStore(appDb);
+  }
+
   const signal = new AbortController();
   const loops =
     opts.worker === false
@@ -322,7 +350,7 @@ export async function startRuntime(env: RuntimeEnv, opts: { worker?: boolean } =
           runWorker({
             store,
             queue,
-            ports: workerPorts(env, live),
+            ports: workerPorts(env, live, proposals, store),
             workerId: `fabric-runtime-${process.pid}-${index}-${randomUUID().slice(0, 8)}`,
             signal: signal.signal,
             pollIntervalMs: 200,
@@ -334,6 +362,7 @@ export async function startRuntime(env: RuntimeEnv, opts: { worker?: boolean } =
     store,
     queue,
     live,
+    ...(proposals !== undefined ? { proposals } : {}),
     stop: async () => {
       if (stopped) return;
       stopped = true;
@@ -341,6 +370,7 @@ export async function startRuntime(env: RuntimeEnv, opts: { worker?: boolean } =
       await Promise.allSettled(loops); // the pass in flight drains; no new claim starts
       await queue.close();
       await store.close();
+      await appDb?.close();
     },
   };
   setRuntime(runtime);

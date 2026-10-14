@@ -187,7 +187,7 @@ async function runTurn(opts: {
 
 // -- the cases ------------------------------------------------------------------
 
-test("A1 a plain question: the model gets Dana's system prompt and the three tools; the turn ends with agent.message", async () => {
+test("A1 a plain question: the model gets Dana's system prompt and the turn's tools; the turn ends with agent.message", async () => {
   const definition = danaSessionDef() as unknown as Record<string, unknown>;
   const recall = recallSpy([]);
   const { model, events } = await runTurn({
@@ -203,6 +203,8 @@ test("A1 a plain question: the model gets Dana's system prompt and the three too
   expect(model.calls[0]!.tools.map((tool) => tool.name)).toEqual([
     "record_disposition",
     "ask_user",
+    "propose_team",
+    "propose_specialist",
     "recall",
   ]);
 
@@ -274,7 +276,12 @@ test("A4 an incognito session: no recall tool, the memory store is never queried
     recall: recall.recall,
   });
 
-  expect(model.calls[0]!.tools.map((tool) => tool.name)).toEqual(["record_disposition", "ask_user"]);
+  expect(model.calls[0]!.tools.map((tool) => tool.name)).toEqual([
+    "record_disposition",
+    "ask_user",
+    "propose_team",
+    "propose_specialist",
+  ]);
   expect(recall.queries).toHaveLength(0);
   expect(model.calls[0]!.system).toBe(definition.system);
   expect(model.calls[0]!.system).not.toContain("What you remember");

@@ -107,11 +107,13 @@ export type ToolRunResult = {
 export type ToolPort = {
   /** Run one tool. `onLine` streams terminal lines (telemetry, §3) while it
    * runs; `callId` is the `tool.call`'s id (ANY-72), the seed for a `once`
-   * tool's idempotency key (RUNTIME §6). */
+   * tool's idempotency key (RUNTIME §6); `streamId` is the stream the call
+   * belongs to (ANY-57 S8a) — the loop-scoped identity a session tool's body
+   * needs to act on its own stream. */
   run(
     name: string,
     args: Record<string, unknown>,
-    io: { onLine?: (line: string) => void; callId?: string }
+    io: { onLine?: (line: string) => void; callId?: string; streamId?: string }
   ): Promise<ToolRunResult>;
   /** The tool's declaration; undefined for a name outside the registry. */
   describe(name: string): ToolDescriptor | undefined;
