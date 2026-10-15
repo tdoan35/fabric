@@ -1,19 +1,29 @@
 // The `ll.call` job handler (RUNTIME §4, §5.1): rebuild the conversation from
 // facts — the definition snapshot's system prompt, the latest
 // `context.compacted` summary, then each later input, completion and tool
-// result — append `context.snapshot`, call the model ONCE with execute-less
-// tools, and append `llm.completed` or `llm.failed`. Compaction (rule 7)
+// result — and append `llm.completed` or `llm.failed`. Compaction (rule 7)
 // precedes the call when the rebuilt context exceeds the configured limit;
-// 429/5xx retry through the queue's backoff without a `llm.failed` (W5); other
+// 429/5xx retry through the queue's backoff without a `ll.failed` (W5); other
 // retryable failures record `llm.failed { retryable: true }` for the decide
 // loop's single retry (rule 5); everything else records
 // `llm.failed { retryable: false }` (W6). The result fact carries
 // `causation = <job key>` exactly, so R5's unique index — and this handler's
 // recorded-result guard — make a re-run append nothing twice (W7).
 //
-// The model call runs inside the append transaction: the compaction, the
-// snapshot, the completion and the lease's completion commit together, and a
-// failed call rolls the attempt back entirely for the retry to redo.
+// The attempt is three-phase (R15): the read (the done-guard, the rebuild, the
+// compaction rule, the assembled request — nothing appended) and the record
+// (the done-guard again, then `context.compacted` / `context.snapshot` /
+// `llm.completed` in one batch, the re-decide and the lease) are each one
+// transaction, and the model call runs BETWEEN them, outside any store
+// transaction — a long call must not hold the store's connection (PGlite's
+// one connection is serialized; Postgres would pin a pool client and the
+// stream's row locks for the whole call). The snapshot and the compaction are
+// recorded with the result, as today's single transaction did: a retry after a
+// crash in the call rebuilds the same context from the same log. The record
+// phase re-checks the done-guard: a result that arrives after another runner's
+// is discarded and the lease is completed tolerantly, exactly like the
+// recorded path. Because no transaction encloses the call, the delta sink is
+// handed the call's attribution (`streamId`, `turn`, `callNo`) directly.
 import { parseEvent } from "@fabric/core";
 import type { Queue, QueueLease } from "../queue/types";
 import type { ModelMessage, ModelPort, ModelResult, ModelTool } from "../ports";
@@ -27,8 +37,10 @@ export type LlmCallJobDeps = {
   model: ModelPort;
   /** Injected clock, handed to the queue's retry bookkeeping. */
   now?: () => number;
-  /** Live-delta sink, handed straight to the port; never logged (§8). */
-  onDelta?: (delta: { text: string }) => void;
+  /** Live-delta sink, handed straight to the port; never logged (§8). The
+   * second argument is the call the delta belongs to (R15) — the worker knows
+   * it from the read phase, no enclosing transaction to read it from. */
+  onDelta?: (delta: { text: string }, call: { streamId: string; turn: number; callNo: number }) => void;
   /** Rule 7: when set, a rebuilt context over `tokenLimit` compacts first. */
   compaction?: { tokenLimit: number; countTokens: (text: string) => number };
 };
@@ -217,19 +229,27 @@ export async function handleLlmCallJob(lease: QueueLease, deps: LlmCallJobDeps):
   const streamId: string = lease.streamId;
   const key = lease.key;
 
+  // The call, staged by the read phase: everything the record phase needs to
+  // append the result exactly as the single-transaction shape did.
+  interface Staged {
+    call: { streamId: string; turn: number; callNo: number };
+    model: string;
+    request: { system: string; messages: ModelMessage[]; tools: ModelTool[]; thinking?: string };
+    compaction: { upToSeq: number; summary: string } | null;
+  }
   let recorded = false;
+  let doneByOther = false;
   try {
-    await store.transaction(async (tx) => {
+    // -- phase 1: read — the done-guard, the rebuild, the compaction rule, the
+    //    request. Nothing is appended: a crash here leaves the log untouched.
+    const read: { recorded: boolean; staged: Staged | null } = await store.transaction(async (tx) => {
       // W7: the result already recorded — an at-least-once re-run. Skip the
       // call and the append; the tail completes the lease tolerantly.
       const done = await tx.query(
         `select 1 from events where stream_id = $1 and workspace_id = $2 and causation = $3 and class = 'fact' limit 1`,
         [streamId, lease.workspaceId, key]
       );
-      if (done.length > 0) {
-        recorded = true;
-        return;
-      }
+      if (done.length > 0) return { recorded: true, staged: null };
 
       const rows = await readEventRows(tx, streamId, lease.workspaceId);
       const rebuilt = rebuildFrom(rows);
@@ -244,7 +264,8 @@ export async function handleLlmCallJob(lease: QueueLease, deps: LlmCallJobDeps):
         conversation = [{ seq: 0, message: { role: "user", text: rebuilt.summary } }, ...conversation];
       }
 
-      // rule 7: over the limit, compact before anything else (W4)
+      // rule 7: over the limit, compact before anything else (W4) — the rule
+      // only decides; the fact itself is recorded with the result, below.
       let compaction: { upToSeq: number; summary: string } | null = null;
       if (deps.compaction !== undefined) {
         const result = compact(conversation, deps.compaction.tokenLimit, deps.compaction.countTokens);
@@ -255,63 +276,89 @@ export async function handleLlmCallJob(lease: QueueLease, deps: LlmCallJobDeps):
         }
       }
 
-      // the compaction and the snapshot precede the call, in the same tx
-      const preEvents: EventInput[] = [];
-      if (compaction !== null) {
-        preEvents.push({
-          type: "context.compacted",
-          actor: "llm.call",
-          payload: { upToSeq: compaction.upToSeq, summary: compaction.summary },
-          causation: `${key}:context.compacted`,
-        });
-      }
-      preEvents.push({
-        type: "context.snapshot",
-        actor: "llm.call",
-        payload: { snapshotId: `snap:${streamId}:${call.turn}:${call.callNo}` },
-        causation: `${key}:context.snapshot`,
-      });
-      await append(tx, lease.workspaceId, [{ streamId, events: preEvents }]);
-
       const definition = definitionOf(rows);
       const tools = toolDeclarationsOf(definition);
       const thinking = typeof definition.thinking === "string" ? definition.thinking : undefined;
+      const staged: Staged = {
+        call: { streamId, turn: call.turn, callNo: call.callNo },
+        model: rebuilt.call?.model ?? "default",
+        request: {
+          system: rebuilt.system,
+          messages: conversation.map(({ message }) => message),
+          tools,
+          ...(thinking !== undefined ? { thinking } : {}),
+        },
+        compaction,
+      };
+      return { recorded: false, staged };
+    });
+    recorded = read.recorded;
+    const plan = read.staged;
+
+    if (plan !== null) {
+      // -- phase 2: the call, outside any store transaction. The delta sink
+      //    gets the call's attribution here — no enclosing scan survives.
+      const sink = deps.onDelta;
+      const onDelta =
+        sink !== undefined ? (delta: { text: string }) => sink(delta, plan.call) : undefined;
       const result: ModelResult = await model.call({
-        system: rebuilt.system,
-        messages: conversation.map(({ message }) => message),
-        tools,
-        ...(thinking !== undefined ? { thinking } : {}),
-        ...(deps.onDelta !== undefined ? { onDelta: deps.onDelta } : {}),
+        ...plan.request,
+        ...(onDelta !== undefined ? { onDelta } : {}),
       });
 
-      await append(tx, lease.workspaceId, [
-        {
-          streamId,
-          events: [
-            {
-              type: "llm.completed",
-              actor: "llm.call",
-              payload: {
-                turn: call.turn,
-                callNo: call.callNo,
-                text: result.text,
-                toolCalls: [...result.toolCalls],
-                usage: { ...result.usage },
-                finishReason: result.finishReason,
-                model: rebuilt.call?.model ?? "default",
-              },
-              causation: key,
+      // -- phase 3: record — the guard again, then one batch: the compaction
+      //    (when it ran), the snapshot, the completion; then re-decide, lease.
+      await store.transaction(async (tx) => {
+        const done = await tx.query(
+          `select 1 from events where stream_id = $1 and workspace_id = $2 and causation = $3 and class = 'fact' limit 1`,
+          [streamId, lease.workspaceId, key]
+        );
+        if (done.length > 0) {
+          // Another runner recorded while the call ran: append nothing,
+          // discard this result, complete tolerantly like the recorded path.
+          doneByOther = true;
+          return;
+        }
+        const events: EventInput[] = [];
+        if (plan.compaction !== null) {
+          events.push({
+            type: "context.compacted",
+            actor: "llm.call",
+            payload: { upToSeq: plan.compaction.upToSeq, summary: plan.compaction.summary },
+            causation: `${key}:context.compacted`,
+          });
+        }
+        events.push(
+          {
+            type: "context.snapshot",
+            actor: "llm.call",
+            payload: { snapshotId: `snap:${streamId}:${plan.call.turn}:${plan.call.callNo}` },
+            causation: `${key}:context.snapshot`,
+          },
+          {
+            type: "llm.completed",
+            actor: "llm.call",
+            payload: {
+              turn: plan.call.turn,
+              callNo: plan.call.callNo,
+              text: result.text,
+              toolCalls: [...result.toolCalls],
+              usage: { ...result.usage },
+              finishReason: result.finishReason,
+              model: plan.model,
             },
-          ],
-        },
-      ]);
-      await enqueueReDecides(tx, queue, lease.workspaceId, [streamId]);
-      await queue.complete(tx, lease);
-    });
+            causation: key,
+          },
+        );
+        await append(tx, lease.workspaceId, [{ streamId, events }]);
+        await enqueueReDecides(tx, queue, lease.workspaceId, [streamId]);
+        await queue.complete(tx, lease);
+      });
+    }
   } catch (error) {
     await settleFailure(error);
   }
-  if (recorded) {
+  if (recorded || doneByOther) {
     // The result is durable; complete the lease, tolerating the runner that
     // got there first — its completion is the proof the guard saw.
     try {
