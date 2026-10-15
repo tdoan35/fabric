@@ -117,6 +117,20 @@ async function deltasUntilCompleted(stream: Stream) {
   return { deltas, completed: completed ?? "" };
 }
 
+/** Keeps reading for a quiet window, collecting straggler deltas — the final
+ * flush can land after the `llm.completed` frame. */
+async function collectQuiet(stream: Stream, into: { at: number; text: string }[], ms = 800): Promise<void> {
+  const deadline = Date.now() + ms;
+  while (Date.now() < deadline) {
+    try {
+      const frame = await stream.next(deadline - Date.now());
+      if (isDelta(frame)) into.push({ at: Date.now(), text: frame.data.text });
+    } catch {
+      break;
+    }
+  }
+}
+
 // -- per-test backends (the S6 harness: fresh PGlite dir or fresh database) ----
 
 const state: { dir?: string; url?: string } = {};
@@ -171,7 +185,7 @@ describeDrivers("R16 server: live deltas on the session stream (ANY-94)", (h) =>
       }
       env = { RUNTIME_DATABASE_URL: state.url, MODEL_PORT: "test" };
     }
-    resetTestModelEmits();
+    resetTestModelEmits?.();
     return startRuntime({ ...env, MODEL_VARIANT: "slow" }, { worker: true });
   }
 
@@ -185,9 +199,12 @@ describeDrivers("R16 server: live deltas on the session stream (ANY-94)", (h) =>
     const stream = await openStream(sessionId);
 
     const { deltas, completed } = await deltasUntilCompleted(stream);
+    const beforeCompleted = deltas.length;
+    // the final flush may land after the completed frame; let it
+    await collectQuiet(stream, deltas);
     expect(completed).toBe(`echo: stream slowly`);
     // the reply streamed while the call ran: a batch of frames, not one
-    expect(deltas.length, "delta frames before llm.completed").toBeGreaterThanOrEqual(5);
+    expect(beforeCompleted, "delta frames before llm.completed").toBeGreaterThanOrEqual(5);
     for (let index = 1; index < deltas.length; index += 1) {
       const previous = deltas[index - 1]!;
       const current = deltas[index]!;
@@ -209,8 +226,11 @@ describeDrivers("R16 server: live deltas on the session stream (ANY-94)", (h) =>
     });
 
     const { deltas, completed } = await deltasUntilCompleted(stream);
+    const beforeCompleted = deltas.length;
+    // the final flush may land after the completed frame; let it
+    await collectQuiet(stream, deltas);
     expect(completed).toBe(`echo: stream slowly`);
-    expect(deltas.length, "delta frames before llm.completed").toBeGreaterThanOrEqual(5);
+    expect(beforeCompleted, "delta frames before llm.completed").toBeGreaterThanOrEqual(5);
     for (let index = 1; index < deltas.length; index += 1) {
       const previous = deltas[index - 1]!;
       const current = deltas[index]!;
@@ -245,7 +265,7 @@ describeDrivers("R16 server: live deltas on the session stream (ANY-94)", (h) =>
       }
     }
 
-    const emits = testModelEmits();
+    const emits = testModelEmits?.() ?? [];
     expect(emits.length, "the model recorded its emits").toBeGreaterThan(0);
     const firstEmit = emits[0]!.at;
     const latency = firstDeltaAt - firstEmit;
@@ -283,7 +303,7 @@ describeDrivers("R16 server: live deltas on the session stream (ANY-94)", (h) =>
     };
     const first = await readFirstDelta();
 
-    const emits = testModelEmits();
+    const emits = testModelEmits?.() ?? [];
     const echo = "echo: join me";
     // the join text is exactly some prefix of whole increments — at least five
     const five = emits.slice(0, 5).map((emit) => emit.text).join("");
@@ -301,6 +321,13 @@ describeDrivers("R16 server: live deltas on the session stream (ANY-94)", (h) =>
       } else if (frame.event === "event" && (frame as EventFrame).data.type === "llm.completed") {
         break;
       }
+    }
+    // the final flush may land after the completed frame; let it, still growing
+    const extras: { at: number; text: string }[] = [];
+    await collectQuiet(stream, extras);
+    for (const extra of extras) {
+      expect(extra.text.startsWith(previous), "still cumulative").toBe(true);
+      previous = extra.text.length > previous.length ? extra.text : previous;
     }
     expect(previous).toBe(echo);
     stream.cancel();

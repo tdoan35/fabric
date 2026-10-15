@@ -226,7 +226,7 @@ Outbound messages that are part of a reply (not a `send` tool call) go through `
 
 ## 8. Live updates
 
-Every append notifies its streams. API servers read the new events and push them over SSE; clients resume with `Last-Event-ID = seq`. Model token deltas from `llm.call` go out on the same channel, batched about every 100 ms, and never enter the log. This replaces the in-process hub and the 400 ms database poll per stream.
+Every append notifies its streams. API servers read the new events and push them over SSE; clients resume with `Last-Event-ID = seq`. Model token deltas from `llm.call` go out on the same channel, batched about every 100 ms, and never enter the log: the model port emits raw text **increments** — the provider stream's shape — and the `llm.call` worker accumulates them per call attempt, so the frames carry the **cumulative** text of the call (R16). This replaces the in-process hub and the 400 ms database poll per stream.
 
 | | Notify | Token deltas |
 |---|---|---|

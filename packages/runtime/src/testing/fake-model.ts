@@ -87,11 +87,11 @@ export class FakeModel {
 
     const result = entry as FakeModelResult;
     if (request.onDelta !== undefined && result.text.length > 0) {
-      // Two cumulative halves: enough to prove the callback is the live channel.
+      // Two raw increments (R16): the port's shape — the worker accumulates.
       const half = Math.ceil(result.text.length / 2);
       request.onDelta({ text: result.text.slice(0, half) });
-      request.onDelta({ text: result.text });
-      this.deltas.push(result.text.slice(0, half), result.text);
+      request.onDelta({ text: result.text.slice(half) });
+      this.deltas.push(result.text.slice(0, half), result.text.slice(half));
     }
     return { ...result, toolCalls: [...result.toolCalls] };
   }

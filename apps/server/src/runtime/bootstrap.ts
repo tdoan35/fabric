@@ -62,8 +62,9 @@ export type RuntimeEnv = {
   RUNTIME_CONCURRENCY?: number;
   /** `ai` (the real port, default) or `test` (the echo double). */
   MODEL_PORT?: "ai" | "test";
-  /** Test-model variant: `chunked` streams the reply in 5 chunks 30 ms apart (S6). */
-  MODEL_VARIANT?: "chunked";
+  /** Test-model variant: `chunked` streams the reply in 5 increments 30 ms
+   * apart (S6); `slow` in 20 increments 50 ms apart, ~1 s per call (R16). */
+  MODEL_VARIANT?: "chunked" | "slow";
   /** The app database (the proposal read model and the transition's side
    * effects, S8a); absent = the session surface runs without proposals. */
   DATABASE_URL?: string;
@@ -245,7 +246,11 @@ export function workerPorts(
   vault?: Vault,
 ): WorkerPorts {
   const variant: TestModelOptions | undefined =
-    env.MODEL_VARIANT === "chunked" ? { chunks: 5, intervalMs: 30 } : undefined;
+    env.MODEL_VARIANT === "chunked"
+      ? { chunks: 5, intervalMs: 30 }
+      : env.MODEL_VARIANT === "slow"
+        ? { chunks: 20, intervalMs: 50 }
+        : undefined;
   const model = env.MODEL_PORT === "test" ? createTestModelPort(variant) : createModelPort();
   return {
     model: withSessionContext(model, recallFacts),
