@@ -47,6 +47,10 @@ const broker: {
   bodies: { url?: string; body: string; token?: string }[];
 } = { server: undefined as unknown as Server, port: 0, hits: [], bodies: [] };
 
+/** The egress token header, as the node client keys it. */
+const tokenOf = (headers: Record<string, unknown>): string | undefined =>
+  headers["fabric_egress_token"] as string | undefined;
+
 /** GET (or POST) against the gateway's proxy port by absolute URI. */
 const viaProxy = (
   path: string,
@@ -56,6 +60,28 @@ const viaProxy = (
     const req = request({
       host: "127.0.0.1",
       port: proxyPort,
+      path,
+      method: options.method,
+      headers: options.headers,
+    });
+    req.on("error", reject);
+    req.end(options.body);
+    req.on("response", (res) => {
+      let body = "";
+      res.on("data", (chunk: Buffer) => (body += chunk.toString("utf8")));
+      res.on("end", () => resolve({ status: res.statusCode, body: body.trim() }));
+    });
+  });
+
+/** GET (or POST) the gateway's broker route by origin-form path. */
+const viaGateway = (
+  path: string,
+  options: { method?: string; headers?: Record<string, string>; body?: string } = {}
+): Promise<{ status?: number; body: string }> =>
+  new Promise((resolve, reject) => {
+    const req = request({
+      host: "127.0.0.1",
+      port: httpPort,
       path,
       method: options.method,
       headers: options.headers,
@@ -94,12 +120,9 @@ beforeAll(async () => {
     let body = "";
     req.on("data", (chunk: Buffer) => (body += chunk.toString("utf8")));
     req.on("end", () => {
-      broker.hits.push({
-        method: req.method,
-        url: req.url,
-        token: req.headers["fabric-egress-token"] as string | undefined,
-      });
-      broker.bodies.push({ url: req.url, body, token: req.headers["fabric-egress-token"] as string | undefined });
+      const token = tokenOf(req.headers as Record<string, unknown>);
+      broker.hits.push({ method: req.method, url: req.url, token });
+      broker.bodies.push({ url: req.url, body, token });
       res.end("broker-pong");
     });
   });
@@ -182,15 +205,16 @@ test("P3 CONNECT to a private destination answers 403 with the refusal body", as
 });
 
 test("P4 the broker route forwards method, path and headers, and the response returns", async () => {
-  const result = await viaProxy(`http://egress:${httpPort}/ping`, {
+  const result = await viaGateway("/ping", {
     headers: { FABRIC_EGRESS_TOKEN: "tok-xyz" },
   });
   expect(result.body).toBe("broker-pong");
-  expect(broker.hits).toContainEqual({ method: "GET", url: "/ping", token: "tok-xyz" });
+  // The gateway forwards headers untouched; node keys them lower-cased.
+  expect(broker.hits[0]).toEqual({ method: "GET", url: "/ping", token: "tok-xyz" });
 });
 
 test("P5 a request body travels through the gateway intact", async () => {
-  const result = await viaProxy(`http://egress:${httpPort}/submit`, {
+  const result = await viaGateway("/submit", {
     method: "POST",
     headers: { "content-type": "text/plain", FABRIC_EGRESS_TOKEN: "tok-body" },
     body: "payload-123",

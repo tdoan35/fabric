@@ -184,12 +184,12 @@ docker("E6 the broker route forwards method, path and the egress token to the br
   const { brokerBindHost } = await import("../sandbox/network");
   const seen: { method?: string; url?: string; token?: string }[] = [];
   const broker = createServer((req, res) => {
-    seen.push({
-      method: req.method,
-      url: req.url,
-      token: req.headers["fabric-egress-token"] as string | undefined,
-    });
-    res.end("broker-pong");
+  seen.push({
+    method: req.method,
+    url: req.url,
+    token: req.headers["fabric_egress_token"] as string | undefined,
+  });
+  res.end("broker-pong");
   });
   const brokerHost = await brokerBindHost();
   await new Promise<void>((resolve) => broker.listen(0, brokerHost, resolve));

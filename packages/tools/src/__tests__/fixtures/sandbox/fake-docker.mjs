@@ -17,8 +17,8 @@ if (statePath === undefined || statePath === "") {
 }
 
 const load = () => {
-  if (!existsSync(statePath)) return { seq: 0, images: [], containers: [] };
-  return JSON.parse(readFileSync(statePath, "utf8"));
+  if (!existsSync(statePath)) return { seq: 0, images: [], containers: [], networks: [] };
+  return { networks: [], ...JSON.parse(readFileSync(statePath, "utf8")) };
 };
 const save = (state) => {
   mkdirSync(dirname(statePath), { recursive: true });
@@ -81,17 +81,72 @@ switch (command) {
   case "run": {
     const { flags, positionals } = parse(rest);
     const labels = {};
+    let name;
     for (const [flag, value] of flags) {
       if ((flag === "--label") && value !== undefined) {
         const at = value.indexOf("=");
         labels[value.slice(0, at)] = value.slice(at + 1);
       }
+      if ((flag === "--name") && value !== undefined) name = value;
     }
     const id = `c${String(state.seq + 1).padStart(3, "0")}`;
     state.seq += 1;
-    state.containers.push({ id, labels, argv: ["run", ...rest] });
+    state.containers.push({ id, name: name ?? id, labels, argv: ["run", ...rest] });
     save(state);
     console.log(id);
+    break;
+  }
+
+  case "inspect": {
+    // inspect -f <fmt> <ref>: enough of the real one for the provider's
+    // liveness checks (T18) — a known container is running.
+    const at = rest.indexOf("-f");
+    const ref = rest.at(-1);
+    const container = state.containers.find((c) => c.id === ref || c.name === ref);
+    if (container === undefined) {
+      console.error(`fake-docker: no such container ${ref}`);
+      process.exit(1);
+    }
+    const format = rest[at + 1] ?? "";
+    if (format.includes(".Id")) console.log(container.id);
+    else console.log("true"); // {{.State.Running}} and friends: up.
+    break;
+  }
+
+  case "network": {
+    const sub = rest[0];
+    if (sub === "create") {
+      const name = rest.at(-1);
+      if (!state.networks.includes(name)) state.networks.push(name);
+      save(state);
+    } else if (sub === "inspect") {
+      const name = rest.at(-1);
+      if (!state.networks.includes(name)) {
+        console.error(`fake-docker: no such network ${name}`);
+        process.exit(1);
+      }
+      console.log("true"); // {{.Internal}}: created internal, stays internal.
+    } else if (sub === "connect" || sub === "rm") {
+      if (sub === "rm") {
+        const name = rest.at(-1);
+        state.networks = state.networks.filter((network) => network !== name);
+        save(state);
+      }
+    } else {
+      console.error(`fake-docker: network ${sub} unsupported`);
+      process.exit(2);
+    }
+    break;
+  }
+
+  case "logs": {
+    const name = rest.at(-1);
+    const container = state.containers.find((c) => c.id === name || c.name === name);
+    if (container === undefined) {
+      console.error(`fake-docker: no such container ${name}`);
+      process.exit(1);
+    }
+    console.log("[egress] listening proxy=:3128 http=:80");
     break;
   }
 
@@ -116,9 +171,9 @@ switch (command) {
   }
 
   case "rm": {
-    const ids = rest.filter((id) => !id.startsWith("-"));
-    const gone = new Set(ids);
-    state.containers = state.containers.filter((c) => !gone.has(c.id));
+    const refs = rest.filter((id) => !id.startsWith("-"));
+    const gone = new Set(refs);
+    state.containers = state.containers.filter((c) => !gone.has(c.id) && !gone.has(c.name));
     save(state);
     break;
   }

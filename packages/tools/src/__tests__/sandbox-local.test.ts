@@ -75,7 +75,7 @@ test("one live sandbox per workspace and agent, labelled a fabric sandbox", asyn
   expect(researcherB.id).toBe(researcherA.id);
   expect(writer.id).not.toBe(researcherA.id);
 
-  const runs = (await fakeState()).containers;
+  const runs = (await fakeState()).containers.filter((run) => run.labels["fabric.sandbox"] === "1");
   expect(runs).toHaveLength(2);
   for (const run of runs) {
     expect(run.labels["fabric.sandbox"]).toBe("1");
@@ -99,18 +99,45 @@ test("the docker run argv carries the isolation flags, mounts and env", async ()
     ],
   });
 
-  const [run] = (await fakeState()).containers;
-  expect(run.argv).toEqual([
-    "run", "-d", "--init", "--network", "none",
+  // T18: the sandbox runs on the internal network with the proxy env; the
+  // egress gateway container is recorded separately (see its own test).
+  const run = (await fakeState()).containers.find((candidate) => candidate.labels["fabric.sandbox"] === "1");
+  expect(run?.argv).toEqual([
+    "run", "-d", "--init", "--network", "fabric-sbx",
     "--label", "fabric.sandbox=1", "--label", "fabric.agent=researcher", "--label", "fabric.workspace=ws1",
     "--cap-drop", "ALL", "--security-opt", "no-new-privileges", "--pids-limit", "512",
     "--memory", "4g", "--cpus", "2",
+    "-e", "HTTP_PROXY=http://egress:3128",
+    "-e", "HTTPS_PROXY=http://egress:3128",
+    "-e", "http_proxy=http://egress:3128",
+    "-e", "https_proxy=http://egress:3128",
+    "-e", "ALL_PROXY=http://egress:3128",
+    "-e", "NO_PROXY=egress",
+    "-e", "FABRIC_EGRESS_URL=http://egress",
     "-v", "/host/agent:/workspace",
     "-v", "/host/proj:/projects/proj:ro",
     "-e", "FOO=bar",
     "-w", "/workspace",
     IMAGE, "sleep", "infinity",
   ]);
+});
+
+test("the egress gateway container is ensured once per provider and removed by stopAll", async () => {
+  const provider = fakeProvider();
+  await provider.acquire({ workspaceId: "w", agentId: "a", mounts: [] });
+  await provider.acquire({ workspaceId: "w", agentId: "b", mounts: [] });
+
+  const gateways = (await fakeState()).containers.filter((container) => container.labels["fabric.egress"] === "1");
+  expect(gateways).toHaveLength(1);
+  expect(gateways[0]?.labels["fabric.egress.instance"]).toBeTruthy();
+  expect(gateways[0]?.argv).toContain("node");
+  expect(gateways[0]?.argv).toContain("/opt/fabric/egress.mjs");
+  expect(gateways[0]?.argv).toContain("fabric-sbx");
+  expect(gateways[0]?.argv).toContain("--cap-drop");
+  expect(gateways[0]?.argv).toContain("NET_BIND_SERVICE");
+
+  await provider.stopAll();
+  expect((await fakeState()).containers).toEqual([]);
 });
 
 test("exec streams lines as they arrive and reports them in the tail", async () => {
@@ -237,7 +264,8 @@ test("reap keeps sandboxes idle under the threshold", async () => {
   const provider = fakeProvider();
   const sandbox = await provider.acquire({ workspaceId: "w", agentId: "a", mounts: [] });
   await provider.reap({ idleMs: 60_000 });
-  expect((await fakeState()).containers.map((container) => container.id)).toEqual([sandbox.id]);
+  const kept = (await fakeState()).containers.filter((container) => container.labels["fabric.sandbox"] === "1");
+  expect(kept.map((container) => container.id)).toEqual([sandbox.id]);
 });
 
 test("stopAll removes every sandbox the provider started", async () => {
@@ -258,7 +286,9 @@ test("a starting provider clears stale sandboxes left by a dead run", async () =
   const provider = fakeProvider();
   const probe = await provider.acquire({ workspaceId: "w", agentId: "probe", mounts: [] });
 
-  const ids = (await fakeState()).containers.map((container) => container.id);
+  const ids = (await fakeState()).containers
+    .filter((container) => container.labels["fabric.sandbox"] === "1")
+    .map((container) => container.id);
   expect(ids).not.toContain("stale-one");
   expect(ids).toEqual([probe.id]);
 });

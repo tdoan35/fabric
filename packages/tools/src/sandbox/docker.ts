@@ -19,9 +19,22 @@ import type {
   SandboxProvider,
 } from "./provider";
 import { SANDBOX_IMAGE } from "./image";
+import { SANDBOX_NETWORK, ensureSandboxNetwork } from "./network";
+import { ensureEgressGateway, stopEgressGateway, type EgressGatewayOptions } from "./egress-gateway";
 
 /** Where a live sandbox records its process-group id for the timeout kill. */
 const PIDFILE_DIR = "/tmp/.fabric-exec";
+
+/** The proxy environment of T18: the open web only through the gateway. */
+const EgressProxyEnv: Record<string, string> = {
+  HTTP_PROXY: "http://egress:3128",
+  HTTPS_PROXY: "http://egress:3128",
+  http_proxy: "http://egress:3128",
+  https_proxy: "http://egress:3128",
+  ALL_PROXY: "http://egress:3128",
+  NO_PROXY: "egress",
+  FABRIC_EGRESS_URL: "http://egress",
+};
 
 /** Single-quotes for bash; the value is data, never re-read as syntax. */
 const shquote = (value: string): string => `'${value.replaceAll("'", `'\\''`)}'`;
@@ -31,6 +44,9 @@ export interface DockerSandboxOptions {
   image?: string;
   /** Path to the docker CLI; default `docker` on PATH. */
   docker?: string;
+  /** Egress gateway configuration (T18). The egress token itself is the
+   * caller's env (FABRIC_EGRESS_TOKEN), never the provider's. */
+  egress?: EgressGatewayOptions;
 }
 
 /** Emits one completed line: streamed live, kept in the bounded tail. */
@@ -228,6 +244,7 @@ class DockerSandbox implements Sandbox {
 export function dockerSandboxes(options: DockerSandboxOptions = {}): SandboxProvider {
   const docker = options.docker ?? "docker";
   const image = options.image ?? SANDBOX_IMAGE;
+  const egressInstance = options.egress?.instance ?? randomUUID().slice(0, 12);
   /** (workspace, agent) → its sandbox. Never shared across agents. */
   const live = new Map<string, DockerSandbox>();
   /** Acquires racing for the same key share one container. */
@@ -291,14 +308,23 @@ export function dockerSandboxes(options: DockerSandboxOptions = {}): SandboxProv
           );
         }
 
+        // T18: the internal network first, then the gateway (a dead one is
+        // replaced here), then the sandbox on that network — the open web
+        // only through egress:3128, the broker route on egress:80.
+        await ensureSandboxNetwork(docker);
+        await ensureEgressGateway({ image, docker, ...options.egress, instance: options.egress?.instance ?? egressInstance });
+
         const argv = [
-          "run", "-d", "--init", "--network", "none",
+          "run", "-d", "--init", "--network", SANDBOX_NETWORK,
           "--label", "fabric.sandbox=1",
           "--label", `fabric.agent=${request.agentId}`,
           "--label", `fabric.workspace=${request.workspaceId}`,
           "--cap-drop", "ALL", "--security-opt", "no-new-privileges",
           "--pids-limit", "512", "--memory", "4g", "--cpus", "2",
         ];
+        for (const [name, value] of Object.entries(EgressProxyEnv)) {
+          argv.push("-e", `${name}=${value}`);
+        }
         for (const mount of request.mounts ?? []) {
           argv.push("-v", `${mount.hostPath}:${mount.containerPath}${mount.readOnly === true ? ":ro" : ""}`);
         }
@@ -336,6 +362,7 @@ export function dockerSandboxes(options: DockerSandboxOptions = {}): SandboxProv
       const ids = [...live.values()].map((sandbox) => sandbox.id);
       live.clear();
       await Promise.all(ids.map((id) => remove(id).catch(() => {})));
+      await stopEgressGateway(egressInstance, docker).catch(() => {});
     },
 
     async available(): Promise<SandboxAvailability> {
