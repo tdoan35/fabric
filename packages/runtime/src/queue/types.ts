@@ -81,7 +81,7 @@ export const DEFAULT_TYPE_CONFIGS: Record<string, QueueTypeConfig> = {
     serialPerStream: true,
   },
   "llm.call": { maxRunMs: 600_000, heartbeatMs: 60_000, maxRetries: 2, retryBackoffMs: 60_000 },
-  "tool.exec": { maxRunMs: 300_000, heartbeatMs: 30_000, maxRetries: 3, retryBackoffMs: 30_000 },
+  "tool.exec": { maxRunMs: 3_660_000, heartbeatMs: 30_000, maxRetries: 3, retryBackoffMs: 30_000 },
   "delegate.resolve": {
     maxRunMs: 30_000,
     heartbeatMs: null,

@@ -66,16 +66,25 @@ async function claimToolExec(
   return lease;
 }
 
-/** The store, crashing after the transaction's work ran: side effects done, nothing recorded. */
-const crashingAfterRun = (store: RuntimeStore): RuntimeStore => ({
-  transaction: (fn) =>
-    store.transaction(async (tx) => {
-      await fn(tx);
-      throw new Error(CRASH);
-    }),
-  readStream: (streamId, options) => store.readStream(streamId, options),
-  close: () => store.close(),
-});
+/** The store, crashing after the transaction's work ran: side effects done, nothing
+ * recorded. Two-phase tool.exec (ANY-80 R14) runs the tool between the read and the
+ * record, so the first transaction (the read) passes and the record crashes: the
+ * tool ran, the appends and the lease completion rolled back. */
+const crashingAfterRun = (store: RuntimeStore): RuntimeStore => {
+  let seen = 0;
+  return {
+    transaction: (fn) =>
+      store.transaction(async (tx) => {
+        const index = seen;
+        seen += 1;
+        const value = await fn(tx);
+        if (index >= 1) throw new Error(CRASH);
+        return value;
+      }),
+    readStream: (streamId, options) => store.readStream(streamId, options),
+    close: () => store.close(),
+  };
+};
 
 const of = (events: readonly StoredEvent[], type: string) =>
   events.filter((event) => event.type === type);
