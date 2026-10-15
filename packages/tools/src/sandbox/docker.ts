@@ -19,9 +19,22 @@ import type {
   SandboxProvider,
 } from "./provider";
 import { SANDBOX_IMAGE } from "./image";
+import { SANDBOX_NETWORK, ensureSandboxNetwork } from "./network";
+import { ensureEgressGateway, stopEgressGateway, type EgressGatewayOptions } from "./egress-gateway";
 
 /** Where a live sandbox records its process-group id for the timeout kill. */
 const PIDFILE_DIR = "/tmp/.fabric-exec";
+
+/** The proxy environment of T18: the open web only through the gateway. */
+const EgressProxyEnv: Record<string, string> = {
+  HTTP_PROXY: "http://egress:3128",
+  HTTPS_PROXY: "http://egress:3128",
+  http_proxy: "http://egress:3128",
+  https_proxy: "http://egress:3128",
+  ALL_PROXY: "http://egress:3128",
+  NO_PROXY: "egress",
+  FABRIC_EGRESS_URL: "http://egress",
+};
 
 /** Single-quotes for bash; the value is data, never re-read as syntax. */
 const shquote = (value: string): string => `'${value.replaceAll("'", `'\\''`)}'`;
@@ -31,6 +44,9 @@ export interface DockerSandboxOptions {
   image?: string;
   /** Path to the docker CLI; default `docker` on PATH. */
   docker?: string;
+  /** Egress gateway configuration (T18). The egress token itself is the
+   * caller's env (FABRIC_EGRESS_TOKEN), never the provider's. */
+  egress?: EgressGatewayOptions;
 }
 
 /** Emits one completed line: streamed live, kept in the bounded tail. */
@@ -115,6 +131,8 @@ class DockerSandbox implements Sandbox {
       let settled = false;
       let failsafe: NodeJS.Timeout | undefined;
       let timeout: NodeJS.Timeout | undefined;
+      /** Resolves when the container-side kill has run (or given up). */
+      let killed = Promise.resolve();
       const settle = (fn: () => void): void => {
         if (settled) return;
         settled = true;
@@ -149,11 +167,15 @@ class DockerSandbox implements Sandbox {
             this.id,
             "bash",
             "-c",
-            `P=\$(cat ${pidfile} 2>/dev/null); [ -n "\$P" ] && kill -KILL -- "-\$P"\ntrue`,
+            `for i in 1 2 3 4 5 6 7 8 9 10; do P=\$(cat ${pidfile} 2>/dev/null); [ -n "\$P" ] && kill -KILL -- "-\$P" && break; sleep 0.1; done; true`,
           ],
           { stdio: "ignore" }
         );
-        killer.on("error", () => {}); // the failsafe below still closes the stream
+        killed = new Promise<void>((done) => {
+          const fin = (): void => done();
+          killer.on("exit", fin);
+          killer.on("error", fin);
+        });
       };
 
       if (options.timeoutMs !== undefined) {
@@ -173,7 +195,16 @@ class DockerSandbox implements Sandbox {
       });
       // close (not exit): the pipes have drained, so the tail is complete.
       child.on("close", (code) => {
-        settle(() => resolve({ exitCode: code, timedOut, tail }));
+        const finish = (): void => settle(() => resolve({ exitCode: code, timedOut, tail }));
+        if (!timedOut) return finish();
+        // A timed-out result implies the kill landed: an immediate follow-up
+        // exec (or the no-survivor assertions) races a fire-and-forget killer
+        // otherwise. Bounded — the failsafe below is the real wedged-daemon cap.
+        const bail = setTimeout(finish, 1_500);
+        void killed.then(() => {
+          clearTimeout(bail);
+          finish();
+        });
       });
     });
   }
@@ -228,6 +259,7 @@ class DockerSandbox implements Sandbox {
 export function dockerSandboxes(options: DockerSandboxOptions = {}): SandboxProvider {
   const docker = options.docker ?? "docker";
   const image = options.image ?? SANDBOX_IMAGE;
+  const egressInstance = options.egress?.instance ?? randomUUID().slice(0, 12);
   /** (workspace, agent) → its sandbox. Never shared across agents. */
   const live = new Map<string, DockerSandbox>();
   /** Acquires racing for the same key share one container. */
@@ -271,12 +303,15 @@ export function dockerSandboxes(options: DockerSandboxOptions = {}): SandboxProv
   };
 
   return {
-    acquire(request: SandboxAcquireRequest): Promise<Sandbox> {
+    async acquire(request: SandboxAcquireRequest): Promise<Sandbox> {
       const key = `${request.workspaceId}/${request.agentId}`;
       const existing = live.get(key);
       if (existing !== undefined) {
         existing.touch();
-        return Promise.resolve(existing);
+        // The gateway can die while the sandbox lives (E8): every acquire,
+        // cache hit included, replaces a dead gateway before returning.
+        await ensureEgressGateway({ image, docker, ...options.egress, instance: options.egress?.instance ?? egressInstance }).catch(() => {});
+        return existing;
       }
       const inflight = pending.get(key);
       if (inflight !== undefined) return inflight;
@@ -291,14 +326,23 @@ export function dockerSandboxes(options: DockerSandboxOptions = {}): SandboxProv
           );
         }
 
+        // T18: the internal network first, then the gateway (a dead one is
+        // replaced here), then the sandbox on that network — the open web
+        // only through egress:3128, the broker route on egress:80.
+        await ensureSandboxNetwork(docker);
+        await ensureEgressGateway({ image, docker, ...options.egress, instance: options.egress?.instance ?? egressInstance });
+
         const argv = [
-          "run", "-d", "--init", "--network", "none",
+          "run", "-d", "--init", "--network", SANDBOX_NETWORK,
           "--label", "fabric.sandbox=1",
           "--label", `fabric.agent=${request.agentId}`,
           "--label", `fabric.workspace=${request.workspaceId}`,
           "--cap-drop", "ALL", "--security-opt", "no-new-privileges",
           "--pids-limit", "512", "--memory", "4g", "--cpus", "2",
         ];
+        for (const [name, value] of Object.entries(EgressProxyEnv)) {
+          argv.push("-e", `${name}=${value}`);
+        }
         for (const mount of request.mounts ?? []) {
           argv.push("-v", `${mount.hostPath}:${mount.containerPath}${mount.readOnly === true ? ":ro" : ""}`);
         }
@@ -336,6 +380,7 @@ export function dockerSandboxes(options: DockerSandboxOptions = {}): SandboxProv
       const ids = [...live.values()].map((sandbox) => sandbox.id);
       live.clear();
       await Promise.all(ids.map((id) => remove(id).catch(() => {})));
+      await stopEgressGateway(egressInstance, docker).catch(() => {});
     },
 
     async available(): Promise<SandboxAvailability> {

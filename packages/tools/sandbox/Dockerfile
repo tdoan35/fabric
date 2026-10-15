@@ -20,6 +20,9 @@ RUN apt-get update \
       ripgrep \
  && rm -rf /var/lib/apt/lists/*
 
+# The egress gateway's script (T18); the gateway container runs it directly.
+COPY egress.mjs /opt/fabric/egress.mjs
+
 RUN useradd --create-home --shell /bin/bash --uid 1000 fabric \
  && mkdir -p /workspace \
  && chown fabric:fabric /workspace
