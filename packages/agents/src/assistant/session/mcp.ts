@@ -22,13 +22,26 @@ import {
   McpNeedsSignIn,
   mcpDefinitionAccess,
   serverOfToolName,
+  type McpAuth,
   type McpClient,
   type McpServers,
+  type McpServerRecord,
 } from "@fabric/tools/mcp";
+import { VaultDenied, VaultMissing } from "@fabric/tools/vault";
 import { withToolset } from "./toolset";
 
 /** A discovery at stamp gives up after this long (the card's 10 s). */
 export const MCP_STAMP_TIMEOUT_MS = 10_000;
+
+/** The status a failure leaves: a sign-in need — McpNeedsSignIn, or a
+ * missing/unreadable OAuth token entry — is `needs_auth`; everything else
+ * `error`. Both the stamp and the run resolve failures through this. */
+function needsAuth(auth: McpAuth | undefined, error: unknown): boolean {
+  return (
+    error instanceof McpNeedsSignIn ||
+    (auth === "oauth" && (error instanceof VaultMissing || error instanceof VaultDenied))
+  );
+}
 
 /** The I/O the server supplies: the workspace's server records, the client
  * factory (OAuth's fetchFor for `auth: "oauth"` servers), the scope factory
@@ -38,6 +51,9 @@ export type McpSessionDeps = {
   servers: McpServers;
   clientFor(server: string, agentId: string): Promise<McpClient>;
   scope(io: { workspaceId: string; streamId: string; agentId: string; callId?: string }): Promise<ToolScope>;
+  /** Fires after this module sets a server's status, so the client cache
+   * behind clientFor can drop the server's clients (M6 rework). */
+  onStatusChange?(server: string, status: "error" | "needs_auth"): void;
   log?(line: string): void;
 };
 
@@ -94,7 +110,11 @@ export async function withMcpTools<D extends ToolsetDef>(
       defs.push(...tools);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      await deps.servers.setStatus(attachment.server, "error", message);
+      const status = needsAuth(record?.auth, error) ? "needs_auth" : "error";
+      await deps.servers.setStatus(attachment.server, status, message).catch(() => {
+        // The server may be gone (removed mid-stamp); the stamp still succeeds.
+      });
+      deps.onStatusChange?.(attachment.server, status);
       deps.log?.(`[mcp] ${attachment.server}: discovery failed, skipped (${message})`);
     }
   }
@@ -109,17 +129,19 @@ export async function withMcpTools<D extends ToolsetDef>(
  * and M4's cache (no network within 24 h) supply the def, and a one-def
  * registry port runs it behind the call's scope — validated arguments, the
  * attachment re-check, M4's truncation. An unknown server or tool is
- * `unknown tool: <name>`; `McpNeedsSignIn` returns the sign-in message with
- * the server's status set to needs_auth; every other failure is a result,
- * not a job failure.
+ * `unknown tool: <name>`; a sign-in need — McpNeedsSignIn, or a missing or
+ * unreadable OAuth token entry — returns its message with the server's
+ * status set to needs_auth; every other failure is a result, not a job
+ * failure.
  */
 export function mcpToolRunner(deps: McpSessionDeps): SessionMcpRunner {
   return async (name, args, io) => {
     const server = serverOfToolName(name);
     if (server === undefined) return undefined;
 
+    let record: McpServerRecord | undefined;
     try {
-      const record = await deps.servers.get(server);
+      record = await deps.servers.get(server);
       if (record === undefined) return { ok: false, error: `unknown tool: ${name}` };
       if (io.agentId === undefined || io.agentId === "") {
         return { ok: false, error: "session tools need the session's agent" };
@@ -142,10 +164,11 @@ export function mcpToolRunner(deps: McpSessionDeps): SessionMcpRunner {
       });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      if (error instanceof McpNeedsSignIn) {
+      if (needsAuth(record?.auth, error)) {
         await deps.servers.setStatus(server, "needs_auth", message).catch(() => {
           // The status is best effort here; the result already says it.
         });
+        deps.onStatusChange?.(server, "needs_auth");
       }
       return { ok: false, error: message };
     }

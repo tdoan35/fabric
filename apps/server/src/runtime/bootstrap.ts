@@ -20,6 +20,7 @@ import { createRegistry } from "@fabric/tools";
 import { builtinTools } from "@fabric/tools/builtin";
 import { hostTools } from "@fabric/tools/host";
 import {
+  type McpClient,
   ensureMcpSchema,
   mcpClient,
   mcpOAuth,
@@ -554,20 +555,44 @@ export async function startRuntime(env: RuntimeEnv, opts: { worker?: boolean } =
   // M6: the workspace's MCP servers — connect once per workspace, attach per
   // agent. ensureMcpSchema is M4's idempotent DDL; the deps the stamp's
   // withMcpTools and the port's mcpToolRunner read go through the seam, and
-  // M7's routes take over from `runtime.mcp`.
+  // M7's routes take over from `runtime.mcp`. One client per (server,
+  // agentId) is cached, so the connection and discover's list_changed watch
+  // survive instead of a new MCP session per call; the cache is dropped (and
+  // closed) when a status changes, an agent detaches or the server goes away.
   await ensureMcpSchema(store);
   const servers = mcpServers(store, RUNTIME_WORKSPACE);
   const oauth = mcpOAuth({ servers, vault, store, workspaceId: RUNTIME_WORKSPACE });
+  const mcpClients = new Map<string, McpClient>();
+  const closeMcpClients = (server: string, keep: readonly string[] = []) => {
+    for (const [key, client] of mcpClients) {
+      const separator = key.indexOf("\u0000");
+      if (key.slice(0, separator) !== server) continue;
+      if (keep.includes(key.slice(separator + 1))) continue;
+      mcpClients.delete(key);
+      void client.close().catch(() => {
+        // Best effort: the entry is dropped either way.
+      });
+    }
+  };
+  const unwatchMcpAgents = servers.onAgentsChanged(({ server, agents, removed }) => {
+    closeMcpClients(server, removed ? [] : agents);
+  });
   setSessionMcp({
     servers,
     clientFor: async (server, agentId) => {
+      const key = `${server}\u0000${agentId}`;
+      const cached = mcpClients.get(key);
+      if (cached !== undefined) return cached;
       const record = await servers.get(server);
       if (record === undefined) throw new Error(`unknown mcp server ${server}`);
-      return mcpClient({
+      const client = mcpClient({
         url: record.url,
         ...(record.auth === "oauth" ? { fetch: oauth.fetchFor(server, agentId) } : {}),
       });
+      mcpClients.set(key, client);
+      return client;
     },
+    onStatusChange: (server) => closeMcpClients(server),
     scope: sessionToolScopeOf(env, vault),
     log: (line) => console.log(line),
   });
@@ -688,6 +713,10 @@ export async function startRuntime(env: RuntimeEnv, opts: { worker?: boolean } =
       await queue.close();
       await store.close();
       await appDb?.close();
+      // M6: drop the cached MCP clients (and their agent-list listener)
+      // before the store they read closes.
+      unwatchMcpAgents();
+      await Promise.allSettled([...mcpClients.values()].map((client) => client.close()));
       // M6: the seam's servers sit on this store; a closed store must not
       // serve another boot's stamps.
       setSessionMcp(undefined);

@@ -9,9 +9,8 @@ import type { ToolRegistry, ToolScope } from "@fabric/tools";
 import type { ToolSchema } from "./definition";
 import { RECALL_TOOL } from "./definition";
 import { PROPOSAL_TOOL_SCHEMAS, PROPOSE_TOOLS, runProposeTool, type ProposalLoopDeps } from "./proposals";
-import type { SessionMcpRunner } from "./mcp";
 import { BRIDGE_TOOLS, BRIDGE_TOOL_SCHEMAS, runBridgeTool, type SessionBridgeEngines } from "./bridges";
-
+import type { SessionMcpRunner } from "./mcp";
 
 /** The registry seam (T14): the server's tool registry plus the scope factory
  * a session call is bound through. Absent = no registry tools on the port. */
