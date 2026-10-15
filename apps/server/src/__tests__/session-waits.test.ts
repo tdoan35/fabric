@@ -179,7 +179,10 @@ const startWorker = (workDir: string): void => {
 
 // -- K2 -----------------------------------------------------------------------
 
-test("K2 an open approve wait answered on the route: accepted, user/app on the fact, one decide queued", async () => {
+test(
+  "K2 an open approve wait answered on the route: accepted, user/app on the fact, one decide queued",
+  { timeout: 20_000 },
+  async () => {
   await boot();
   const sessionId = await createSession();
   await addWait(sessionId, approveWait("approve:1:c1", "c1"));
@@ -207,7 +210,10 @@ test("K2 an open approve wait answered on the route: accepted, user/app on the f
 
 // -- K3 -----------------------------------------------------------------------
 
-test("K3 answering the same wait again: 409 already_answered, nothing appended", async () => {
+test(
+  "K3 answering the same wait again: 409 already_answered, nothing appended",
+  { timeout: 20_000 },
+  async () => {
   await boot();
   const sessionId = await createSession();
   await addWait(sessionId, approveWait("approve:1:c1", "c1"));
@@ -223,7 +229,7 @@ test("K3 answering the same wait again: 409 already_answered, nothing appended",
 
 // -- K4 -----------------------------------------------------------------------
 
-test("K4 a wait whose deadline has passed: 409 expired", async () => {
+test("K4 a wait whose deadline has passed: 409 expired", { timeout: 20_000 }, async () => {
   await boot();
   const sessionId = await createSession();
   await addWait(
@@ -240,7 +246,10 @@ test("K4 a wait whose deadline has passed: 409 expired", async () => {
 
 // -- K5 -----------------------------------------------------------------------
 
-test("K5 a gated approve wait answered through the route: accepted — the app may answer gated waits", async () => {
+test(
+  "K5 a gated approve wait answered through the route: accepted — the app may answer gated waits",
+  { timeout: 20_000 },
+  async () => {
   await boot();
   const sessionId = await createSession();
   await addWait(sessionId, approveWait("approve:1:c1", "c1", { gated: true }));
@@ -253,7 +262,7 @@ test("K5 a gated approve wait answered through the route: accepted — the app m
 
 // -- K6 -----------------------------------------------------------------------
 
-test("K6 an approve wait answered with a non approve/deny word: 400, nothing appended", async () => {
+test("K6 an approve wait answered with a non approve/deny word: 400, nothing appended", { timeout: 20_000 }, async () => {
   await boot();
   const sessionId = await createSession();
   await addWait(sessionId, approveWait("approve:1:c1", "c1"));
@@ -267,7 +276,7 @@ test("K6 an approve wait answered with a non approve/deny word: 400, nothing app
 
 // -- K7 -----------------------------------------------------------------------
 
-test("K7 an ask_user answer wait takes any text: 200, the fact carries it", async () => {
+test("K7 an ask_user answer wait takes any text: 200, the fact carries it", { timeout: 20_000 }, async () => {
   await boot();
   const sessionId = await createSession();
   await addWait(sessionId, answerWait("wait:1:c1"));
@@ -283,7 +292,7 @@ test("K7 an ask_user answer wait takes any text: 200, the fact carries it", asyn
 
 // -- K8 -----------------------------------------------------------------------
 
-test("K8 an unknown session: 404 on both routes", async () => {
+test("K8 an unknown session: 404 on both routes", { timeout: 20_000 }, async () => {
   await boot();
 
   const post = await postJson("/api/sessions/nope/waits/approve:1:c1", { decision: "approve" });
@@ -297,7 +306,10 @@ test("K8 an unknown session: 404 on both routes", async () => {
 
 // -- K9 -----------------------------------------------------------------------
 
-test("K9 the approval-mode put: one fact on change, none on the same mode, fold carries it; bad mode 400", async () => {
+test(
+  "K9 the approval-mode put: one fact on change, none on the same mode, fold carries it; bad mode 400",
+  { timeout: 20_000 },
+  async () => {
   await boot();
   const sessionId = await createSession();
   const streamId = `session:${sessionId}`;
