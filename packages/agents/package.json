@@ -23,6 +23,7 @@
     "@fabric/db": "*",
     "@fabric/integrations": "*",
     "@fabric/llm": "*",
+    "@fabric/memory": "*",
     "@fabric/runtime": "*",
     "@fabric/tools": "*",
     "@huggingface/transformers": "^3.7.6",

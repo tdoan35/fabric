@@ -100,7 +100,9 @@ test("G5b a known specialist stamps the specialist definition; dana keeps hers",
   const definition = (run!.payload.definition ?? {}) as Record<string, unknown>;
   expect(definition.userChosenAgent).toBe("researcher");
   expect(definition.system).toBe(RESEARCHER.instructions);
-  expect(definition.tools).toEqual(["ask_user"]);
+  // M3: the booted registry carries the skills read tools; the toolset's
+  // defaults allow them for every agent, in registry order after ask_user
+  expect(definition.tools).toEqual(["ask_user", "skills_list", "skills_read"]);
 
   // dana's stamp is untouched by the specialist path
   const dana = await sessionTurnDefinition("dana") as Record<string, unknown>;
