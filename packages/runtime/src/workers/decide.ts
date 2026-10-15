@@ -157,6 +157,7 @@ export async function handleDecideJob(lease: QueueLease, deps: DecideJobDeps): P
       // the reply — the re-decide the disposition fact queues, or a stale one
       // racing it. A reply already sitting past the stream's last fact means the
       // trigger was answered: this decide stands down (reply and its delivers).
+      // A stream always opens with a fact, so 0 means "no facts read yet".
       const lastFactSeq = rows.reduce((seq, row) => (row.class === "fact" ? row.seq : seq), 0);
       const replyAlreadyLanded = rows.some(
         (row) => row.type === "agent.message" && row.seq > lastFactSeq
@@ -164,10 +165,10 @@ export async function handleDecideJob(lease: QueueLease, deps: DecideJobDeps): P
       const events = replyAlreadyLanded
         ? decision.events.filter((event) => event.type !== "agent.message")
         : decision.events;
+      // endTurn is core's only deliver emitter, so its receipts are exactly the
+      // duplicate reply's — no key-format coupling to guard instead.
       const jobs = replyAlreadyLanded
-        ? decision.jobs.filter(
-            (job) => !(job.type === "deliver" && job.key.startsWith("deliver:agent-message:"))
-          )
+        ? decision.jobs.filter((job) => job.type !== "deliver")
         : decision.jobs;
 
       // -- one transaction: the decision's events, then its jobs ------------------

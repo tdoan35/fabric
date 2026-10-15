@@ -93,10 +93,10 @@ describeDrivers("runtime worker loop, end to end (ANY-40 R9c)", (h) => {
     // exactly one deliver happened, of the turn's reply
     expect(surface.sent).toHaveLength(1);
     expect(surface.sent[0]!.text).toBe("done");
-    const delivered = (await store.readStream(stream, { workspaceId: WORKSPACE })).filter(
-      (event) => event.type === "message.delivered"
-    );
-    expect(delivered).toHaveLength(1);
+    const all = await store.readStream(stream, { workspaceId: WORKSPACE });
+    expect(all.filter((event) => event.type === "message.delivered")).toHaveLength(1);
+    // the reply itself landed exactly once — the count ANY-98 ran away with
+    expect(all.filter((event) => event.type === "agent.message")).toHaveLength(1);
   });
   test("W14b a dispositioned turn's reply lands once — a telemetry-only append never re-decides (ANY-98)", async () => {
     const store = await h.openStore();
