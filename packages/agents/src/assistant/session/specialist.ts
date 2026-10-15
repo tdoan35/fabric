@@ -34,6 +34,9 @@ export type SpecialistAgent = {
   summary?: string;
   /** The display model recorded on `llm.requested`; absent = the runtime default. */
   model?: string;
+  /** The agent's registry rows (T14): legacy names map through LEGACY_TOOL_MAP,
+   * new tool names stand for themselves; the policy is the definition layer. */
+  tools?: readonly { name: string; policy: "allowed" | "approval" | "blocked" }[];
 };
 
 export type SpecialistSessionConfig = {

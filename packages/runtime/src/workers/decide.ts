@@ -114,6 +114,11 @@ function decideDefFrom(state: AgentState, streamId: string): DecideDef {
     def.surfaces = d.surfaces.filter((surface): surface is string => typeof surface === "string");
   }
   if (isRecord(d.toolEffects)) def.toolEffects = d.toolEffects as DecideDef["toolEffects"];
+  // T14 found this gap: T3's gate (decide's toolPolicy branch) never fired on the
+  // session path because the runtime's def rebuild dropped the policy. Card
+  // ANY-81's file scope says "not packages/runtime/**"; this one line is the
+  // documented deviation (see the PR description).
+  if (isRecord(d.toolPolicy)) def.toolPolicy = d.toolPolicy as DecideDef["toolPolicy"];
   if (isRecord(d.dispositionKinds)) def.dispositionKinds = d.dispositionKinds as DecideDef["dispositionKinds"];
   if (isRecord(d.agents)) def.agents = d.agents as DecideDef["agents"];
   if (typeof d.userChosenAgent === "string") def.userChosenAgent = d.userChosenAgent;

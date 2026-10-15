@@ -24,6 +24,7 @@
     "@fabric/integrations": "*",
     "@fabric/llm": "*",
     "@fabric/runtime": "*",
+    "@fabric/tools": "*",
     "@huggingface/transformers": "^3.7.6",
     "@mastra/core": "^1.74.0",
     "@neon/ai-sdk-provider": "^1.0.0",

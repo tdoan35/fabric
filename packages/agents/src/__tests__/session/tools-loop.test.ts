@@ -89,7 +89,7 @@ interface StoredEventLike {
  * back everything the assertions need. */
 async function runTurn(opts: {
   script: FakeResult[];
-  beforeMessage?: EventInput;
+  beforeMessage?: EventInput[];
   drainAfterRespond?: boolean;
   respondTo?: string; // the wait id; undefined = no respond phase
 }) {

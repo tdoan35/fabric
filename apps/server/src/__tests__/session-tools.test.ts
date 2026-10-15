@@ -81,7 +81,8 @@ const stamp = async (agentId: string): Promise<Record<string, unknown>> =>
 
 const toolsOf = (definition: Record<string, unknown>) => ({
   tools: definition.tools as string[],
-  policy: definition.toolPolicy as Record<string, { access: string; gate: string; kind: string }>,
+  // a stamp without survivors carries no policy map; normalize for the `in` checks
+  policy: (definition.toolPolicy ?? {}) as Record<string, { access: string; gate: string; kind: string }>,
   effects: definition.toolEffects as Record<string, string>,
 });
 
@@ -104,7 +105,9 @@ test("J10 the stamp: the researcher's exa.search row becomes web_search with its
 
 // -- J11 -----------------------------------------------------------------------
 
-test("J11 FABRIC_SEND_FROM unset leaves no send on any stamp; set, send asks with gate always", async () => {
+test(
+  "J11 FABRIC_SEND_FROM unset leaves no send on any stamp; set, send asks with gate always",
+  async () => {
   const sender: SpecialistAgent = { ...RESEARCHER, id: "sender", tools: [{ name: "agentmail.send", policy: "allowed" }] };
   setSessionAgents([sender]);
 
@@ -119,7 +122,10 @@ test("J11 FABRIC_SEND_FROM unset leaves no send on any stamp; set, send asks wit
   const withSend = toolsOf(await stamp("sender"));
   expect(withSend.tools).toContain("send");
   expect(withSend.policy.send?.gate).toBe("always");
-});
+  },
+  // two full runtime boots (PGlite + vault + registry); the repo's 30s budget, as in runtime/tools
+  30_000,
+);
 
 // -- J12 -----------------------------------------------------------------------
 
