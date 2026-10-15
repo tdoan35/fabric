@@ -145,9 +145,6 @@ export const mcp = new Hono()
     const name = c.req.param("name");
     const record = await runtime.mcp.servers.get(name);
     if (record === undefined) return c.json({ error: `unknown mcp server ${name}` }, 404);
-    if (record.auth === "none") {
-      return c.json({ error: `mcp server ${name} needs no sign-in (auth none)` }, 400);
-    }
     const fields = await fieldsOf(c.req.raw);
     const clientId = typeof fields.clientId === "string" ? fields.clientId : undefined;
     const clientSecret = typeof fields.clientSecret === "string" ? fields.clientSecret : undefined;
@@ -155,8 +152,13 @@ export const mcp = new Hono()
       const { authorizeUrl } = await runtime.mcp.oauth.start(name, {
         // The public origin the provider redirects back to. Read per
         // request — the vault reads its process.env fallbacks the same
-        // lazy way — because the parsed env snapshots at import.
-        redirectUri: `${process.env.FABRIC_PUBLIC_URL ?? `http://localhost:${env.PORT}`}/api/mcp/oauth/callback`,
+        // lazy way — because the parsed env snapshots at import. A
+        // trailing slash is dropped: providers match redirect_uri
+        // exactly, so `https://host//api/...` would never sign in.
+        redirectUri: `${(process.env.FABRIC_PUBLIC_URL ?? `http://localhost:${env.PORT}`).replace(
+          /\/+$/,
+          "",
+        )}/api/mcp/oauth/callback`,
         ...(clientId === undefined ? {} : { clientId }),
         // Straight to M5; never echoed, never logged.
         ...(clientSecret === undefined ? {} : { clientSecret }),

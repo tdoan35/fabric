@@ -47,13 +47,15 @@ const WRITER: SpecialistAgent = {
 let mcpRoutes: Hono | undefined;
 const routes = async (): Promise<Hono> => (mcpRoutes ??= (await import("../routes/mcp")).mcp);
 
-/** Z10's scan: every response body and every console line the run produced. */
+/** Z10's scan: every response body and every console line (log, error and
+ * warn) the run produced. */
 const bodies: string[] = [];
 const capturedLogs: string[] = [];
-const consoleLog = console.log;
-console.log = (...args: unknown[]) => {
-  capturedLogs.push(args.map((value) => String(value)).join(" "));
-};
+for (const level of ["log", "error", "warn"] as const) {
+  console[level] = (...args: unknown[]) => {
+    capturedLogs.push(args.map((value) => String(value)).join(" "));
+  };
+}
 
 /** Every fake AS the file started; Z10 scans what they issued. */
 const authServers: FakeAuthServer[] = [];
@@ -121,9 +123,11 @@ const boot = async (): Promise<void> => {
 };
 
 /** The OAuth pair on top of a booted runtime: a fake authorization server
- * and a protected MCP server whose 401 challenge and metadata point at it. */
-const securePair = async (): Promise<void> => {
-  auth = await startFakeAuthServer();
+ * and a protected MCP server whose 401 challenge and metadata point at it.
+ * `authOptions` shape the AS (the review's follow-up 1 uses one without
+ * dynamic registration). */
+const securePair = async (authOptions: Parameters<typeof startFakeAuthServer>[0] = {}): Promise<void> => {
+  auth = await startFakeAuthServer(authOptions);
   authServers.push(auth);
   secure = await startTestMcpServer({
     auth: {
@@ -321,6 +325,15 @@ test(
       "https://fabric.example/api/mcp/oauth/callback",
     );
 
+    // The review's follow-up 3: a trailing slash must not double up.
+    process.env.FABRIC_PUBLIC_URL = "https://fabric.example/";
+    const slashed = await post("/mcp/servers/secure/oauth/start");
+    expect(slashed.status).toBe(200);
+    const slashedUrl = new URL(authorizeUrlFrom(slashed.text));
+    expect(slashedUrl.searchParams.get("redirect_uri")).toBe(
+      "https://fabric.example/api/mcp/oauth/callback",
+    );
+
     const none = await post("/mcp/servers/plain/oauth/start");
     expect(none.status).toBe(400);
   },
@@ -408,6 +421,7 @@ test(
     expect(failed.status).toBe(400);
     expect(failed.type).toContain("text/html");
     expect(failed.text).not.toContain("<script");
+    expect(failed.text).toContain("&lt;script&gt;boom&lt;/script&gt;");
     auth!.failToken(undefined);
   },
   30_000,
@@ -435,6 +449,45 @@ test(
     expect(unattached.status).toBe(409);
     expect(unattached.text).toContain("attach an agent first");
     expect(fixture!.calls("tools/list")).toBe(1);
+  },
+  30_000,
+);
+
+// -- pass-through (the review's follow-up 1) -----------------------------------
+
+test(
+  "M7 oauth/start with a user-supplied clientId/clientSecret (a provider without dynamic registration) carries them through to the AS exchange, and the secret never reaches a response body",
+  async () => {
+    await boot();
+    await securePair({ registration: false });
+    await addSecure();
+
+    const clientSecret = "cs_pre_registered_secret_0123456789abcdef";
+    const started = await post("/mcp/servers/secure/oauth/start", {
+      clientId: "pre-registered",
+      clientSecret,
+    });
+    expect(started.status).toBe(200);
+    const authorizeUrl = authorizeUrlFrom(started.text);
+    expect(new URL(authorizeUrl).searchParams.get("client_id")).toBe("pre-registered");
+    expect(started.text).not.toContain(clientSecret);
+
+    const code = auth!.approve(authorizeUrl);
+    const state = new URL(authorizeUrl).searchParams.get("state")!;
+    const signedIn = await get(
+      `/mcp/oauth/callback?state=${encodeURIComponent(state)}&code=${encodeURIComponent(code)}`,
+    );
+    expect(signedIn.status).toBe(200);
+
+    // The exchange proves the pass-through: the AS saw the pre-registered
+    // client id and its secret on the token request (form post or Basic).
+    const exchange = auth!.log().find((entry) => entry.path === "/token");
+    expect(exchange?.params.client_id ?? exchange?.authorization).toBeDefined();
+    const secretSeen =
+      exchange?.params.client_secret === clientSecret ||
+      exchange?.authorization ===
+        `Basic ${Buffer.from(`pre-registered:${clientSecret}`).toString("base64")}`;
+    expect(secretSeen).toBe(true);
   },
   30_000,
 );

@@ -69,11 +69,12 @@ export const env = z.object({
    * registry (the step-0 set then is empty and only the host tools load). */
   FABRIC_SEND_FROM: z.string().optional(),
   /** M7: the public origin MCP OAuth providers redirect back to
-   * (`<origin>/api/mcp/oauth/callback`); unset = http://localhost:<PORT>.
-   * The mcp route reads the process env per request — the vault reads its
-   * env fallbacks the same lazy way — because this object snapshots at
-   * import. */
-  FABRIC_PUBLIC_URL: z.string().optional(),
+   * (`<origin>/api/mcp/oauth/callback`); unset =
+   * http://localhost:<PORT>. Validated as a URL so a bad value fails at
+   * boot; the mcp route reads the process env per request — the vault
+   * reads its env fallbacks the same lazy way, because this object
+   * snapshots at import — and drops any trailing slash. */
+  FABRIC_PUBLIC_URL: z.string().url().optional(),
 }).parse(process.env);
 
 export const corsOrigins = env.CORS_ORIGINS

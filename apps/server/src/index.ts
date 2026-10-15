@@ -39,7 +39,12 @@ const api = new Hono()
 if (process.env.NODE_ENV !== "production") api.route("/", dev);
 
 const app = new Hono();
-app.use("*", logger());
+// M7: the OAuth callback's query string carries the one-time code and state
+// (the review's ask) — logged nowhere. Other paths keep their full URL.
+app.use(
+  "*",
+  logger((line) => console.log(line.includes("/api/mcp/oauth/callback") ? line.replace(/\?[^ ]*/g, "") : line)),
+);
 app.use("/api/*", cors({ origin: (origin) => (corsOrigins.includes(origin) ? origin : null) }));
 app.route("/api", api);
 
