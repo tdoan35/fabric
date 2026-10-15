@@ -325,3 +325,33 @@ On a branch, with the queue options behind one small interface:
 4. Measure, for each queue: the extra latency per hop (appends plus pickup, on PGlite, local Postgres and Neon), one decide at a time per stream under parallel lanes, and idle database traffic.
 5. Chat check: one Dana turn through the queue, time from POST to first token versus today's direct stream.
 6. PGlite checks: `pglite-pgvector` for memory and the registry, `SKIP LOCKED`, write throughput at a real run's event volume, data surviving a crash of the utility process, and the server's native dependencies (`onnxruntime-node` for embeddings) loading in Electron's utility process.
+
+### R12 results (2026-10-15, ANY-38 — Ty, real credentials)
+
+Environment: lane = self-hosted tensorfold **GLM-5.3-Flash-EXL3** on `ty-dgx-spark:8888/v1` (the `.env` Spark lane, `qwen3.8-flash-next` on :18300, was down — the DGX GPU is held by the live GLM server; a real self-hosted lane either way). Sprite = the real `fabric-coder` over `@fly/sprites`. Local Postgres = 17.10 on :55488. Neon = the project's own branch, dedicated `fabric_r12` database, direct (unpooled) endpoint, ~65 ms RTT. PGlite 0.3.16. `MODEL_PORT=ai`, `LLM_PROVIDER=spark`.
+
+| # | Check (§) | Numbers | Verdict |
+|---|---|---|---|
+| 1 | Real lanes (§15.2) | Session turn end to end: 2× `llm.completed` (disposition + reply), `agent.message`, `message.delivered`, POST→reply ≈1.5 s; 0 duplicate facts (the fact-causation count, checked after the turn — telemetry carries no causation). Agent run with one real `sprite.exec`: 14.6 s wall, 2 model calls, 1 resolved tool run (first attempt a transient Sprite error, retried once), exactly one `run.finished` | **pass** for the turn proper (`message.received` → reply + delivery); everything after the turn is ANY-93's spin, not this check |
+| 2 | Chat latency (§15.5) | POST → first token on the SSE stream: **1 606 ms** queued vs **1 151 ms** for the same call direct (+455 ms; a second run measured 14 540 ms — ANY-93's timer starvation). Only 1 delta frame arrived, **after** `llm.completed` (+93 ms), while the direct port streamed 42 | **fail** — over the ~200 ms target, and deltas never stream (ANY-94, ANY-95). Queue transport alone (POST→`llm.requested`) is 43–55 ms |
+| 3 | Latency per hop (§15.4) | Hop table below: append p50/p95 and the production per-hop shape (append + enqueue in one transaction → a worker holds the job). Serial decide under 4 parallel lanes: max 1 lease per stream, 0 overlap instants (200 jobs, 8 streams) | **pass** locally; remote hops are RTT-bound — see the Neon column |
+| 4 | Idle traffic, scale to zero (§9, §14 q2) | One idle claimer at the daemon's 200 ms poll: 295 statements/min (PGlite, local PG), 221/min (Neon); the **shipped daemon** (4 worker loops + the purge claim loop) measured **2 292/min** on Neon via `pg_stat_statements`. `SELECT 1` on Neon stayed 62–71 ms for the whole 6-min idle window — the compute never suspends under the queue | **fail vs the 60/min budget** — a database with a running server never sleeps; needs `claimWaiting` (wake) or a longer poll (ANY-100) |
+| 5 | PGlite in Electron's utility process (§15.6) | The runtime does not start there — **no utility process exists**, so the Electron leg is unmeasured (ANY-97). Plain-Node supporting data: `SKIP LOCKED` ok; appends p50 2.6 / p95 4.7 ms; SIGKILL mid-write stream: 21/21 committed events recovered, no torn writes; `pglite-pgvector` does **not** load on 0.3.16 (WASM ABI: `vacuum_delay_point`), loads + cosine query works on 0.5.10 (ANY-96); `onnxruntime-node` 1.21.0 — already in the tree via `@huggingface/transformers` (`packages/agents/src/memory`) — loads in Node in 564 ms; its utility-process load is unmeasured (ANY-97) | **fail** as written — the check's host does not exist yet (ANY-96, ANY-97) |
+| 6 | kill −9, real lanes (§15.3 K1/K2) | K1 (SIGKILL mid model call): handover 2 796 ms, settled 5 116 ms, one `llm.completed`, exactly-once `run.finished`. K2 (SIGKILL mid real sprite run): handover 2 841–3 000 ms, settled 8 109–11 979 ms, `tool.interrupted` recorded, the real command never ran to completion twice (0 resolved re-runs), the model saw the note and finished | **pass** |
+
+**Hop table** (own `PgQueue`; "idle board" = the server daemon's shape — empty claim every 200 ms; Neon "production shape" = `kind: "postgres"` pool, what `bootstrap.ts` builds):
+
+| | PGlite | local Postgres | Neon (direct, ~65 ms RTT) |
+|---|---|---|---|
+| append, 1 event/tx, p50/p95 (ms) | 2.64 / 4.70 | 1.58 / 5.61 | 405 / 456 |
+| per hop — append + enqueue in one tx → claim, p50/p95 (ms) | 7.0 / 10.7 | 14.8 / 26.5 | 639 / 686 (42 / 69 measured from commit — the claim is fast; the WAN transaction dominates) |
+| pickup, idle board (the daemon's 200 ms poll), p50/p95 (ms) | 111 / 201 | 117 / 192 | 278 / 289 |
+| dead-worker handover (s) | 60.5 | 60.2 | 60.1 |
+| idle statements/min, one claimer | 295 | 295 | 221 |
+| idle statements/min, shipped daemon (4 worker loops + purge) | — (in-process) | — | **2 292** (pg_stat_statements, 3 min) |
+
+The earlier single-run append means (2.88 and 5.63 ms on PGlite) both sit inside the distribution above. A continuous back-to-back enqueue bench on Neon once read 42–49 s "pickup" — an artifact of the bench's bare-`QueueTx` staged-apply path (production enqueues ride the store's transaction, as the per-hop row shows); recorded so the number is not mistaken for production behavior.
+
+For the record, the retired pg-boss probe the same day: pickup 5.2/8 ms (PGlite), 3.7/5 ms (Postgres); idle 79/min; handover 60.0 s; Q7 fails on uuid ids (§14's known pin).
+
+**Follow-ups filed under ANY-49:** ANY-93 (session decide re-appends `agent.message` forever — ~30 events/s, board never idles, `rt.stop()` hangs; reproduces with `MODEL_PORT=test`), ANY-94 (live deltas never stream with a real lane), ANY-95 (`llm.call` holds the serialized PGlite transaction across the whole model call), ANY-96 (PGlite 0.5 bump so `pglite-pgvector` loads), ANY-97 (Electron utility-process host), ANY-100 (idle polling vs the 60/min budget and scale-to-zero). The Sessions epic's chat-path acceptance is blocked on ANY-94/ANY-95; everything else above is recorded as measured.

@@ -15,20 +15,47 @@ import path from "node:path";
 import { HTTPException } from "hono/http-exception";
 import { openStore, PgQueue, runWorker } from "@fabric/runtime";
 import type { Queue, RuntimeStore, RuntimeTx, WorkerPorts } from "@fabric/runtime";
+import type { ToolRegistry } from "@fabric/tools";
+import { createRegistry } from "@fabric/tools";
+import { builtinTools } from "@fabric/tools/builtin";
+import { hostTools } from "@fabric/tools/host";
+import {
+  type McpClient,
+  ensureMcpSchema,
+  mcpClient,
+  mcpOAuth,
+  mcpServers,
+  type McpOAuth,
+  type McpServers,
+} from "@fabric/tools/mcp";
+import {
+  encryptedTableVault,
+  ensureVaultSchema,
+  envFallbackVault,
+  loadOrCreateMasterKey,
+  type Vault,
+} from "@fabric/tools/vault";
 import { createModelPort } from "@fabric/llm";
+import { ensureSkillsSchema, renderSkillIndex, skillTools, skillsStore, type SkillsStore } from "@fabric/memory/skills";
 import { createDb, schema, sql } from "@fabric/db";
 import type { Db } from "@fabric/db";
 import {
   dbProposalStore,
+  definitionAccess,
   danaSessionDef,
   legacyBridges,
+  mcpToolRunner,
   specialistSessionDef,
   sessionTools,
+  SKILL_TOOL_DEFAULTS,
   withBridges,
   withSessionContext,
+  withSkillsIndex,
+  withToolset,
+  withMcpTools,
   type SessionBridgeEngines,
 } from "@fabric/agents/session";
-import type { ProposalActions, SpecialistAgent } from "@fabric/agents/session";
+import type { McpSessionDeps, ProposalActions, SpecialistAgent } from "@fabric/agents/session";
 import { recallFacts } from "@fabric/agents/assistant";
 import { InProcessLiveBus, type LiveBus } from "./live-bus";
 import { createTestModelPort, type TestModelOptions } from "./test-model";
@@ -56,6 +83,12 @@ export type RuntimeEnv = {
   DATABASE_URL?: string;
   /** DEMO_RECORDING_KEY: what a Fast-forward splices into after a bridge handoff (S8b). */
   DEMO_RECORDING_KEY?: string;
+  /** T14: the root of the per-agent work dirs (`agents/<id>` under it). */
+  FABRIC_WORK_DIR?: string;
+  /** T14: the vault's master key file; created 0600 on first boot. */
+  FABRIC_MASTER_KEY_FILE?: string;
+  /** T14: the inbox `send` sends from; unset leaves `send` out of the registry. */
+  FABRIC_SEND_FROM?: string;
 };
 
 export type FabricRuntime = {
@@ -66,6 +99,15 @@ export type FabricRuntime = {
   /** The proposal store behind the loop's `propose_*` tools and the decision
    * endpoint (S8a); undefined without an app database. */
   proposals?: ProposalActions;
+  /** The agents' secret vault (T14): the encrypted table behind the env
+   * fallback, keyed by FABRIC_MASTER_KEY_FILE. */
+  vault: Vault;
+  /** The skills store (M3): the imported skills behind the tools, the index
+   * stamp and the import route, on this runtime's store. */
+  skills: SkillsStore;
+  /** The MCP wiring (M6): the workspace's servers and OAuth — M7's routes
+   * take over from here; the stamp and the run hook read the seam. */
+  mcp: { servers: McpServers; oauth: McpOAuth };
   /** Drains the workers, then closes queue and store. Idempotent. */
   stop: () => Promise<void>;
 };
@@ -80,38 +122,81 @@ export const SESSION_TURN_DEF = {
 
 /**
  * The turn definition a new session's stream is stamped with (S7, ANY-56; S9,
- * ANY-59): Dana's for `agentId: "dana"` — the loop knobs, the system prompt and
- * the tool schemas from `danaSessionDef`, the per-turn cap from
- * DANA_TURN_COST_CAP_USD — the specialist's (built from the agent's registry
- * record) for any other known agent, and the S5 placeholder only when no
- * snapshot is loaded; under a loaded one an unknown agent raises the create
+ * ANY-59; T14, ANY-81): Dana's for `agentId: "dana"` — the loop knobs, the
+ * system prompt and the tool schemas from `danaSessionDef`, the per-turn cap
+ * from DANA_TURN_COST_CAP_USD — the specialist's (built from the agent's
+ * registry record) for any other known agent, and the S5 placeholder only when
+ * no snapshot is loaded; under a loaded one an unknown agent raises the create
  * route's 404. Incognito sessions carry no recall tool, which is what keeps the
  * memory path shut (PRODUCT §10.7). The env var is read here, at stamp time; the
  * parsed-env object the server builds strips unknown keys, and the definition is
  * not a port.
+ *
+ * T14: async, because the stamp reads stores (M3, M6) — and, when the tool
+ * registry seam is set, the agent's own row wears the toolset: the registry
+ * tools its rows name, access per row policy. Unset seam or no mapped rows:
+ * the definition is exactly as before.
+ *
+ * M3 (ANY-83): the toolset's defaults give every agent the two skills read
+ * tools, and the skills seam set, the agent's rendered index lands on the
+ * system prompt — stamped once here, so a skill imported later shows up
+ * through the tools and in the index of new sessions only.
  */
-export function sessionTurnDefinition(
+export async function sessionTurnDefinition(
   agentId: string,
   opts: { incognito?: boolean } = {}
-): Record<string, unknown> {
+): Promise<Record<string, unknown>> {
+  let def: Record<string, unknown>;
   if (agentId !== "dana") {
     const agent = sessionAgents.get(agentId);
-    if (agent !== undefined) return specialistSessionDef(agent, { incognito: opts.incognito === true });
+    if (agent !== undefined) def = specialistSessionDef(agent, { incognito: opts.incognito === true });
     // A loaded snapshot makes the id space closed: an unknown agent is a 404
     // raised before the create route's transaction touches any stream (S9).
-    if (sessionAgentsLoaded) throw new HTTPException(404, { message: `unknown agent: ${agentId}` });
-    return SESSION_TURN_DEF;
+    else if (sessionAgentsLoaded) throw new HTTPException(404, { message: `unknown agent: ${agentId}` });
+    else def = { ...SESSION_TURN_DEF };
+  } else {
+    const raw = process.env.DANA_TURN_COST_CAP_USD;
+    const parsed = raw === undefined ? undefined : Number(raw);
+    // S8b: the legacy-engine bridges ride Dana's definition — the `once` effects
+    // and the S2 disposition kinds (handoff → team/its id, errand → agent/browser).
+    def = withBridges(
+      danaSessionDef({
+        incognito: opts.incognito === true,
+        ...(parsed !== undefined && Number.isFinite(parsed) ? { turnCostCapUsd: parsed } : {}),
+      }),
+    ) as unknown as Record<string, unknown>;
   }
-  const raw = process.env.DANA_TURN_COST_CAP_USD;
-  const parsed = raw === undefined ? undefined : Number(raw);
-  // S8b: the legacy-engine bridges ride Dana's definition — the `once` effects
-  // and the S2 disposition kinds (handoff → team/its id, errand → agent/browser).
-  return withBridges(
-    danaSessionDef({
-      incognito: opts.incognito === true,
-      ...(parsed !== undefined && Number.isFinite(parsed) ? { turnCostCapUsd: parsed } : {}),
-    }),
-  );
+
+  // T14: the row is the definition layer (D5) — the tools its names map to,
+  // access per policy, in registry order; M3's defaults fill the two skills
+  // read tools no row mentions. No registry and no skills: the stamp is the
+  // pre-T14 definition, byte for byte.
+  const registry = sessionToolRegistry;
+  let stamped = def;
+  if (registry !== undefined) {
+    const rows = sessionAgents.get(agentId)?.tools ?? [];
+    const access = definitionAccess(rows, new Set(registry.names()), SKILL_TOOL_DEFAULTS);
+    stamped = withToolset(def as never, { registry, access }) as Record<string, unknown>;
+  }
+
+  // M6: the attached ready MCP servers join the stamp — discovered tools as
+  // fresh `mcp_<server>_` names (no collision with the static set), access
+  // from the attachment. A server that cannot be discovered is skipped with
+  // its status set: creating a session never fails because of MCP.
+  if (sessionMcp !== undefined) {
+    stamped = (await withMcpTools(stamped as never, agentId, sessionMcp)) as Record<string, unknown>;
+  }
+
+  // M3: the skills index on the system prompt — role `dana` for Dana,
+  // `specialist` for everyone else; empty index (or placeholder def) is the
+  // identity, so the byte-stability of a skills-less stamp stands.
+  if (sessionSkills !== undefined) {
+    const index = renderSkillIndex(await sessionSkills.list(agentId), {
+      role: agentId === "dana" ? "dana" : "specialist",
+    });
+    stamped = withSkillsIndex(stamped as never, index) as unknown as Record<string, unknown>;
+  }
+  return stamped;
 }
 
 // The registry snapshot the stamp consults (S9, ANY-59): the agent records the
@@ -126,6 +211,47 @@ export function setSessionAgents(records: readonly SpecialistAgent[]): void {
   sessionAgents.clear();
   for (const record of records) sessionAgents.set(record.id, record);
   sessionAgentsLoaded = true;
+}
+
+// The tool registry the stamp's toolset and the worker port's registry calls
+// read (T14). Unset — the unit tests, `worker: false` boots without one — no
+// registry tools exist: the stamp carries no toolset and the port serves
+// the session tools only.
+let sessionToolRegistry: ToolRegistry | undefined;
+
+/** The tool-registry seam, S9's `setSessionAgents` twin: `startRuntime` installs
+ * the step-0 + host registry; tests install their own (or `undefined`). */
+export function setSessionToolRegistry(registry: ToolRegistry | undefined): void {
+  sessionToolRegistry = registry;
+}
+
+// The skills store the stamp's index and the worker port's skills tools read
+// (M3). Unset — the unit tests — no index is stamped and no skills tool runs.
+let sessionSkills: SkillsStore | undefined;
+
+/** The skills-store seam, `setSessionToolRegistry`'s twin: `startRuntime`
+ * installs the runtime's store; tests install their own (or `undefined`). */
+export function setSessionSkills(skills: SkillsStore | undefined): void {
+  sessionSkills = skills;
+}
+
+// The MCP session deps (M6): the workspace's server records, the client
+// factory (OAuth's fetchFor for oauth servers) and the scope factory, as the
+// stamp's withMcpTools and the port's mcpToolRunner need them. Unset — the
+// unit tests — no mcp_* tools are stamped or run.
+let sessionMcp: McpSessionDeps | undefined;
+
+/** The MCP seam, `setSessionSkills`'s twin: `startRuntime` installs the
+ * workspace's servers; tests install their own (or `undefined`). */
+export function setSessionMcp(deps: McpSessionDeps | undefined): void {
+  sessionMcp = deps;
+}
+
+/** M3: the import route's 404 gate — an id is unknown only under a loaded
+ * snapshot that does not carry it; Dana is always known (the stamp treats
+ * her so), and an unloaded snapshot leaves the id space open. */
+export function unknownSessionAgent(agentId: string): boolean {
+  return sessionAgentsLoaded && agentId !== "dana" && !sessionAgents.has(agentId);
 }
 
 /** The append enqueue port: one `decide` per touched stream, keyed on the
@@ -156,11 +282,33 @@ const appBridges = (): SessionBridgeEngines =>
     recordingKey: process.env.DEMO_RECORDING_KEY,
   });
 
+/** The per-call scope factory (T14): the session's identity plus the run dir —
+ * `FABRIC_WORK_DIR/agents/<id>`, T10's layout, created on first use — and the
+ * vault behind an arrow, so tools never see it. */
+const sessionToolScopeOf =
+  (env: RuntimeEnv, vault: Vault | undefined) =>
+  async (io: { workspaceId: string; streamId: string; agentId: string; callId?: string }) => {
+    const runDir = path.join(env.FABRIC_WORK_DIR ?? path.join(".data", "work"), "agents", io.agentId);
+    await mkdir(runDir, { recursive: true });
+    return {
+      workspaceId: io.workspaceId,
+      streamId: io.streamId,
+      agentId: io.agentId,
+      callId: io.callId,
+      runDir,
+      secret: (name: string) => {
+        if (vault === undefined) return Promise.reject(new Error("no vault configured"));
+        return vault.get(name, { agentId: io.agentId });
+      },
+    };
+  };
+
 /** The worker ports. S7: the model port wears the session context wrapper (the
  * turn's recall lands in the system prompt; sessions without the recall tool —
  * incognito, runs — pass through untouched) and the ToolPort is the session
- * registry (`recall`, effect `read`; the S8a proposal writers and the S8b
- * legacy-engine bridges when wired). The app surface remains a no-op that
+ * registry (`recall`, effect `read`; the S8a proposal writers, the S8b
+ * legacy-engine bridges and — T14 — the server's tool registry behind the
+ * per-call scope, when the seam is set). The app surface remains a no-op that
  * succeeds — the client reads the stream, the receipt only closes the job.
  * S6: model deltas ride the live bus, attributed by the enclosing transaction's
  * scan (see `wireLiveBus`) — the port's callback carries text only. */
@@ -169,6 +317,7 @@ export function workerPorts(
   live: LiveBus,
   proposals: ProposalActions | undefined,
   store: RuntimeStore,
+  vault?: Vault,
 ): WorkerPorts {
   const variant: TestModelOptions | undefined =
     env.MODEL_VARIANT === "chunked" ? { chunks: 5, intervalMs: 30 } : undefined;
@@ -181,6 +330,10 @@ export function workerPorts(
       ...(proposals !== undefined
         ? { proposals: { store: proposals, loop: { store, workspace: RUNTIME_WORKSPACE } } }
         : {}),
+      ...(sessionToolRegistry !== undefined
+        ? { registry: { tools: sessionToolRegistry, scope: sessionToolScopeOf(env, vault) } }
+        : {}),
+      ...(sessionMcp !== undefined ? { mcp: mcpToolRunner(sessionMcp) } : {}),
     }),
     surface: {
       send: async () => ({}),
@@ -370,6 +523,80 @@ export async function startRuntime(env: RuntimeEnv, opts: { worker?: boolean } =
     ? await openStore({ driver: "postgres", url: env.RUNTIME_DATABASE_URL })
     : await openStore({ driver: "pglite", dataDir: await pgliteDir(env) });
 
+  // M3: the skills store — its own idempotent DDL on this store, one
+  // workspace until tenancy, behind the tools, the index stamp and the
+  // import route.
+  await ensureSkillsSchema(store);
+  const skills = skillsStore(store, RUNTIME_WORKSPACE);
+  setSessionSkills(skills);
+
+  // T14: the agents' vault — the encrypted table on this store behind the env
+  // fallback, keyed by the master key file (created 0600 on first boot).
+  await ensureVaultSchema(store);
+  const masterKeyPath = env.FABRIC_MASTER_KEY_FILE ?? path.join(".data", "master.key");
+  await mkdir(path.dirname(masterKeyPath), { recursive: true });
+  const masterKey = await loadOrCreateMasterKey(masterKeyPath);
+  const vault = envFallbackVault(encryptedTableVault(store, RUNTIME_WORKSPACE, masterKey), process.env);
+
+  // T14: the tool registry — the step-0 set (`send` only when the identity is
+  // configured) plus the host tools — installed through the seam, S9-style.
+  // M3: M2's skills read tools ride along, so every agent can see and load
+  // its own skills (the toolset's defaults allow them).
+  const sendFrom = env.FABRIC_SEND_FROM;
+  const registryDefs = [
+    ...builtinTools({ sendFrom: sendFrom ?? "" }),
+    ...hostTools(),
+    ...skillTools(skills),
+  ];
+  setSessionToolRegistry(
+    createRegistry(sendFrom === undefined ? registryDefs.filter((def) => def.name !== "send") : registryDefs),
+  );
+
+  // M6: the workspace's MCP servers — connect once per workspace, attach per
+  // agent. ensureMcpSchema is M4's idempotent DDL; the deps the stamp's
+  // withMcpTools and the port's mcpToolRunner read go through the seam, and
+  // M7's routes take over from `runtime.mcp`. One client per (server,
+  // agentId) is cached, so the connection and discover's list_changed watch
+  // survive instead of a new MCP session per call; the cache is dropped (and
+  // closed) when a status changes, an agent detaches or the server goes away.
+  await ensureMcpSchema(store);
+  const servers = mcpServers(store, RUNTIME_WORKSPACE);
+  const oauth = mcpOAuth({ servers, vault, store, workspaceId: RUNTIME_WORKSPACE });
+  const mcpClients = new Map<string, McpClient>();
+  const closeMcpClients = (server: string, keep: readonly string[] = []) => {
+    for (const [key, client] of mcpClients) {
+      const separator = key.indexOf("\u0000");
+      if (key.slice(0, separator) !== server) continue;
+      if (keep.includes(key.slice(separator + 1))) continue;
+      mcpClients.delete(key);
+      void client.close().catch(() => {
+        // Best effort: the entry is dropped either way.
+      });
+    }
+  };
+  const unwatchMcpAgents = servers.onAgentsChanged(({ server, agents, removed }) => {
+    closeMcpClients(server, removed ? [] : agents);
+  });
+  setSessionMcp({
+    servers,
+    clientFor: async (server, agentId) => {
+      const key = `${server}\u0000${agentId}`;
+      const cached = mcpClients.get(key);
+      if (cached !== undefined) return cached;
+      const record = await servers.get(server);
+      if (record === undefined) throw new Error(`unknown mcp server ${server}`);
+      const client = mcpClient({
+        url: record.url,
+        ...(record.auth === "oauth" ? { fetch: oauth.fetchFor(server, agentId) } : {}),
+      });
+      mcpClients.set(key, client);
+      return client;
+    },
+    onStatusChange: (server) => closeMcpClients(server),
+    scope: sessionToolScopeOf(env, vault),
+    log: (line) => console.log(line),
+  });
+
   const concurrency = Math.max(1, env.RUNTIME_CONCURRENCY ?? 4);
   const queue = env.RUNTIME_DATABASE_URL
     ? new PgQueue({
@@ -414,6 +641,7 @@ export async function startRuntime(env: RuntimeEnv, opts: { worker?: boolean } =
           personality: schema.agents.personality,
           summary: schema.agents.summary,
           model: schema.agents.model,
+          tools: schema.agents.tools,
           workspace: schema.agents.workspace,
         })
         .from(schema.agents)
@@ -425,6 +653,8 @@ export async function startRuntime(env: RuntimeEnv, opts: { worker?: boolean } =
             .map((file) => file.body.trim())
             .filter((body) => body !== "")
             .join("\n\n");
+          // T14: the definition layer rides the row — name and policy only.
+          const tools = (row.tools ?? []).map(({ name, policy }) => ({ name, policy }));
           return {
             id: row.id,
             name: row.name,
@@ -433,6 +663,7 @@ export async function startRuntime(env: RuntimeEnv, opts: { worker?: boolean } =
             ...(row.personality !== "" ? { personality: row.personality } : {}),
             ...(row.summary !== "" ? { summary: row.summary } : {}),
             ...(row.model !== "" ? { model: row.model } : {}),
+            ...(tools.length > 0 ? { tools } : {}),
           };
         }),
       );
@@ -451,7 +682,7 @@ export async function startRuntime(env: RuntimeEnv, opts: { worker?: boolean } =
           runWorker({
             store,
             queue,
-            ports: workerPorts(env, live, proposals, store),
+            ports: workerPorts(env, live, proposals, store, vault),
             workerId: `fabric-runtime-${process.pid}-${index}-${randomUUID().slice(0, 8)}`,
             signal: signal.signal,
             pollIntervalMs: 200,
@@ -470,6 +701,9 @@ export async function startRuntime(env: RuntimeEnv, opts: { worker?: boolean } =
     store,
     queue,
     live,
+    vault,
+    skills,
+    mcp: { servers, oauth },
     ...(proposals !== undefined ? { proposals } : {}),
     stop: async () => {
       if (stopped) return;
@@ -479,6 +713,13 @@ export async function startRuntime(env: RuntimeEnv, opts: { worker?: boolean } =
       await queue.close();
       await store.close();
       await appDb?.close();
+      // M6: drop the cached MCP clients (and their agent-list listener)
+      // before the store they read closes.
+      unwatchMcpAgents();
+      await Promise.allSettled([...mcpClients.values()].map((client) => client.close()));
+      // M6: the seam's servers sit on this store; a closed store must not
+      // serve another boot's stamps.
+      setSessionMcp(undefined);
     },
   };
   setRuntime(runtime);

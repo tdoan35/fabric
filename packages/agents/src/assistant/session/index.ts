@@ -19,7 +19,17 @@ export {
   type ContextState,
   type RecallFn,
 } from "./context";
-export { sessionTools, type SessionToolDeps } from "./tools";
+export { sessionTools, type SessionToolDeps, type SessionToolRegistry } from "./tools";
+export {
+  MCP_STAMP_TIMEOUT_MS,
+  mcpToolRunner,
+  withMcpTools,
+  type McpSessionDeps,
+  type SessionMcpIo,
+  type SessionMcpRunner,
+} from "./mcp";
+export { SKILL_TOOL_DEFAULTS, withSkillsIndex } from "./skills";
+export { LEGACY_TOOL_MAP, definitionAccess, withToolset, type ToolAccessLevel } from "./toolset";
 export {
   BRIDGE_TOOLS,
   BRIDGE_DEF_EXTENSION,

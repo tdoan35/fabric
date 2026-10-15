@@ -58,6 +58,23 @@ export const env = z.object({
   RUNTIME_CONCURRENCY: z.coerce.number().int().min(1).default(4),
   /** `ai` (the real port) | `test` (the echo double; refused when NODE_ENV=production). */
   MODEL_PORT: z.enum(["ai", "test"]).default("ai"),
+  // -- T14 session tools (per-agent tools, vault, work dirs) -----------------
+  /** Root of the per-agent work dirs: `agents/<id>` is created under it on
+   * first tool call. Defaults to `.data/work`. */
+  FABRIC_WORK_DIR: z.string().optional(),
+  /** The vault's master key file; created 0600 on first boot. Defaults to
+   * `.data/master.key`. */
+  FABRIC_MASTER_KEY_FILE: z.string().optional(),
+  /** The inbox identity `send` sends from; unset leaves `send` out of the
+   * registry (the step-0 set then is empty and only the host tools load). */
+  FABRIC_SEND_FROM: z.string().optional(),
+  /** M7: the public origin MCP OAuth providers redirect back to
+   * (`<origin>/api/mcp/oauth/callback`); unset =
+   * http://localhost:<PORT>. Validated as a URL so a bad value fails at
+   * boot; the mcp route reads the process env per request — the vault
+   * reads its env fallbacks the same lazy way, because this object
+   * snapshots at import — and drops any trailing slash. */
+  FABRIC_PUBLIC_URL: z.string().url().optional(),
 }).parse(process.env);
 
 export const corsOrigins = env.CORS_ORIGINS

@@ -8,9 +8,11 @@ import { warmEmbedder } from "@fabric/agents/memory";
 import { chat } from "./routes/chat";
 import { dev } from "./routes/dev";
 import { memory } from "./routes/memory";
+import { mcp } from "./routes/mcp";
 import { registry } from "./routes/registry";
 import { reports } from "./routes/reports";
 import { runs } from "./routes/runs";
+import { skills } from "./routes/skills";
 import { sessions } from "./routes/sessions";
 import { schedules } from "./routes/schedules";
 import { startScheduler } from "./services/scheduler";
@@ -30,12 +32,19 @@ const api = new Hono()
   .route("/", weave)
   .route("/", stream)
   .route("/", chat)
-  .route("/", sessions);
+  .route("/", sessions)
+  .route("/", skills)
+  .route("/", mcp);
 
 if (process.env.NODE_ENV !== "production") api.route("/", dev);
 
 const app = new Hono();
-app.use("*", logger());
+// M7: the OAuth callback's query string carries the one-time code and state
+// (the review's ask) — logged nowhere. Other paths keep their full URL.
+app.use(
+  "*",
+  logger((line) => console.log(line.includes("/api/mcp/oauth/callback") ? line.replace(/\?[^ ]*/g, "") : line)),
+);
 app.use("/api/*", cors({ origin: (origin) => (corsOrigins.includes(origin) ? origin : null) }));
 app.route("/api", api);
 
