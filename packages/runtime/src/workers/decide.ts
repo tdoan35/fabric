@@ -8,7 +8,7 @@
 // `readEventRows` and `enqueueReDecides` live here because the card's file
 // scope pins the module set; `ll-call` imports them as the shared worker
 // internals they are.
-import { decideAgent, fold, type AgentState, type DecideDef } from "@fabric/core";
+import { decideAgent, eventClass, fold, type AgentState, type DecideDef } from "@fabric/core";
 import { randomUUID } from "node:crypto";
 import type { Queue, QueueLease } from "../queue/types";
 import { append } from "../store/store";
@@ -152,10 +152,28 @@ export async function handleDecideJob(lease: QueueLease, deps: DecideJobDeps): P
 
       const decision = decideAgent(state, def, now());
 
+      // ANY-98: the fold cannot see `agent.message` (telemetry by design), so a
+      // second decide folding the same completion re-fires endTurn and duplicates
+      // the reply — the re-decide the disposition fact queues, or a stale one
+      // racing it. A reply already sitting past the stream's last fact means the
+      // trigger was answered: this decide stands down (reply and its delivers).
+      const lastFactSeq = rows.reduce((seq, row) => (row.class === "fact" ? row.seq : seq), 0);
+      const replyAlreadyLanded = rows.some(
+        (row) => row.type === "agent.message" && row.seq > lastFactSeq
+      );
+      const events = replyAlreadyLanded
+        ? decision.events.filter((event) => event.type !== "agent.message")
+        : decision.events;
+      const jobs = replyAlreadyLanded
+        ? decision.jobs.filter(
+            (job) => !(job.type === "deliver" && job.key.startsWith("deliver:agent-message:"))
+          )
+        : decision.jobs;
+
       // -- one transaction: the decision's events, then its jobs ------------------
       const ordinals = new Map<string, number>();
       const batches = new Map<string, import("../store/types").EventInput[]>();
-      for (const event of decision.events) {
+      for (const event of events) {
         const stream = event.streamId ?? streamId;
         const n = ordinals.get(event.type) ?? 0;
         ordinals.set(event.type, n + 1);
@@ -173,7 +191,7 @@ export async function handleDecideJob(lease: QueueLease, deps: DecideJobDeps): P
         ? await append(tx, lease.workspaceId, batchList)
         : [];
 
-      for (const job of decision.jobs) {
+      for (const job of jobs) {
         await queue.enqueue(tx, {
           type: job.type,
           key: job.key,
@@ -185,10 +203,19 @@ export async function handleDecideJob(lease: QueueLease, deps: DecideJobDeps): P
 
       // §2: every stream that gained a fact decides again — the decision's own
       // appends included (a background delegation's completion re-opens the loop).
+      // A telemetry-only append (endTurn's `agent.message`) re-decides nothing:
+      // the fold skips telemetry, so that decide would face an unchanged state
+      // and re-fire the same decision — the runaway agent.message loop (ANY-98).
       const decidedHere = new Set<string>(
-        decision.jobs.filter((job) => job.type === "decide").map((job) => job.streamId)
+        jobs.filter((job) => job.type === "decide").map((job) => job.streamId)
       );
-      const touched = batchList.filter((_, index) => results[index]!.duplicate === false).map((b) => b.streamId);
+      const touched = batchList
+        .filter(
+          (batch, index) =>
+            results[index]!.duplicate === false &&
+            batch.events.some((event) => eventClass(event.type) === "fact")
+        )
+        .map((batch) => batch.streamId);
       await enqueueReDecides(tx, queue, lease.workspaceId, touched, decidedHere);
 
       await queue.complete(tx, lease);
