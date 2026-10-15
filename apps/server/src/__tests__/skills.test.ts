@@ -39,7 +39,7 @@ const RESEARCHER: SpecialistAgent = {
 
 const app = (): Hono => new Hono().route("/api", sessions).route("/api", skills);
 
-const post = (pathName: string, body: unknown): Promise<Response> =>
+const post = async (pathName: string, body: unknown): Promise<Response> =>
   app().request(pathName, { method: "POST", body: JSON.stringify(body), headers: { "content-type": "application/json" } });
 
 const importBody = (dir: string, agentId: string): Promise<Response> => post("/api/skills/import", { dir, agentId });
@@ -119,7 +119,10 @@ test("N3 Stamp: the researcher's system carries the header and both index lines 
   } finally {
     await rm(many, { recursive: true, force: true });
   }
-});
+},
+  // one boot, two imports, 16 folders, two stamps: the repo's 30s budget, as in runtime/tools
+  30_000,
+);
 
 // -- N4 ------------------------------------------------------------------------
 
@@ -209,7 +212,7 @@ test("N9 a skill imported after the session is created: skills_list serves it in
 
   // but the session's skills_list reads the live store: the late import is there
   const ports = workerPorts({ MODEL_PORT: "test" }, new InProcessLiveBus(), undefined, runtime.store, runtime.vault);
-  const result = await ports.tools.run("skills_list", {}, { workspaceId: WORKSPACE, streamId, agentId: "researcher" });
+  const result = await ports.tools!.run("skills_list", {}, { workspaceId: WORKSPACE, streamId, agentId: "researcher" });
   expect(result.ok).toBe(true);
   const value: unknown = result.result;
   const listed =

@@ -11,6 +11,7 @@ import { memory } from "./routes/memory";
 import { registry } from "./routes/registry";
 import { reports } from "./routes/reports";
 import { runs } from "./routes/runs";
+import { skills } from "./routes/skills";
 import { sessions } from "./routes/sessions";
 import { schedules } from "./routes/schedules";
 import { startScheduler } from "./services/scheduler";
@@ -30,7 +31,8 @@ const api = new Hono()
   .route("/", weave)
   .route("/", stream)
   .route("/", chat)
-  .route("/", sessions);
+  .route("/", sessions)
+  .route("/", skills);
 
 if (process.env.NODE_ENV !== "production") api.route("/", dev);
 

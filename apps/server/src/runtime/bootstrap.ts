@@ -27,6 +27,7 @@ import {
   type Vault,
 } from "@fabric/tools/vault";
 import { createModelPort } from "@fabric/llm";
+import { ensureSkillsSchema, renderSkillIndex, skillTools, skillsStore, type SkillsStore } from "@fabric/memory/skills";
 import { createDb, schema, sql } from "@fabric/db";
 import type { Db } from "@fabric/db";
 import {
@@ -36,8 +37,10 @@ import {
   legacyBridges,
   specialistSessionDef,
   sessionTools,
+  SKILL_TOOL_DEFAULTS,
   withBridges,
   withSessionContext,
+  withSkillsIndex,
   withToolset,
   type SessionBridgeEngines,
 } from "@fabric/agents/session";
@@ -88,6 +91,9 @@ export type FabricRuntime = {
   /** The agents' secret vault (T14): the encrypted table behind the env
    * fallback, keyed by FABRIC_MASTER_KEY_FILE. */
   vault: Vault;
+  /** The skills store (M3): the imported skills behind the tools, the index
+   * stamp and the import route, on this runtime's store. */
+  skills: SkillsStore;
   /** Drains the workers, then closes queue and store. Idempotent. */
   stop: () => Promise<void>;
 };
@@ -116,6 +122,11 @@ export const SESSION_TURN_DEF = {
  * registry seam is set, the agent's own row wears the toolset: the registry
  * tools its rows name, access per row policy. Unset seam or no mapped rows:
  * the definition is exactly as before.
+ *
+ * M3 (ANY-83): the toolset's defaults give every agent the two skills read
+ * tools, and the skills seam set, the agent's rendered index lands on the
+ * system prompt — stamped once here, so a skill imported later shows up
+ * through the tools and in the index of new sessions only.
  */
 export async function sessionTurnDefinition(
   agentId: string,
@@ -143,13 +154,27 @@ export async function sessionTurnDefinition(
   }
 
   // T14: the row is the definition layer (D5) — the tools its names map to,
-  // access per policy, in registry order. No registry, no row, no survivors:
-  // the stamp is the pre-T14 definition, byte for byte.
+  // access per policy, in registry order; M3's defaults fill the two skills
+  // read tools no row mentions. No registry: the stamp is the pre-T14
+  // definition, byte for byte.
   const registry = sessionToolRegistry;
-  if (registry === undefined) return def;
-  const rows = sessionAgents.get(agentId)?.tools ?? [];
-  const access = definitionAccess(rows, new Set(registry.names()));
-  return withToolset(def as never, { registry, access }) as Record<string, unknown>;
+  let stamped = def;
+  if (registry !== undefined) {
+    const rows = sessionAgents.get(agentId)?.tools ?? [];
+    const access = definitionAccess(rows, new Set(registry.names()), SKILL_TOOL_DEFAULTS);
+    stamped = withToolset(def as never, { registry, access }) as Record<string, unknown>;
+  }
+
+  // M3: the skills index on the system prompt — role `dana` for Dana,
+  // `specialist` for everyone else; empty index (or placeholder def) is the
+  // identity, so the byte-stability of a skills-less stamp stands.
+  if (sessionSkills !== undefined) {
+    const index = renderSkillIndex(await sessionSkills.list(agentId), {
+      role: agentId === "dana" ? "dana" : "specialist",
+    });
+    stamped = withSkillsIndex(stamped as never, index) as unknown as Record<string, unknown>;
+  }
+  return stamped;
 }
 
 // The registry snapshot the stamp consults (S9, ANY-59): the agent records the
@@ -176,6 +201,23 @@ let sessionToolRegistry: ToolRegistry | undefined;
  * the step-0 + host registry; tests install their own (or `undefined`). */
 export function setSessionToolRegistry(registry: ToolRegistry | undefined): void {
   sessionToolRegistry = registry;
+}
+
+// The skills store the stamp's index and the worker port's skills tools read
+// (M3). Unset — the unit tests — no index is stamped and no skills tool runs.
+let sessionSkills: SkillsStore | undefined;
+
+/** The skills-store seam, `setSessionToolRegistry`'s twin: `startRuntime`
+ * installs the runtime's store; tests install their own (or `undefined`). */
+export function setSessionSkills(skills: SkillsStore | undefined): void {
+  sessionSkills = skills;
+}
+
+/** M3: the import route's 404 gate — an id is unknown only under a loaded
+ * snapshot that does not carry it; Dana is always known (the stamp treats
+ * her so), and an unloaded snapshot leaves the id space open. */
+export function unknownSessionAgent(agentId: string): boolean {
+  return sessionAgentsLoaded && agentId !== "dana" && !sessionAgents.has(agentId);
 }
 
 /** The append enqueue port: one `decide` per touched stream, keyed on the
@@ -446,6 +488,13 @@ export async function startRuntime(env: RuntimeEnv, opts: { worker?: boolean } =
     ? await openStore({ driver: "postgres", url: env.RUNTIME_DATABASE_URL })
     : await openStore({ driver: "pglite", dataDir: await pgliteDir(env) });
 
+  // M3: the skills store — its own idempotent DDL on this store, one
+  // workspace until tenancy, behind the tools, the index stamp and the
+  // import route.
+  await ensureSkillsSchema(store);
+  const skills = skillsStore(store, RUNTIME_WORKSPACE);
+  setSessionSkills(skills);
+
   // T14: the agents' vault — the encrypted table on this store behind the env
   // fallback, keyed by the master key file (created 0600 on first boot).
   await ensureVaultSchema(store);
@@ -456,10 +505,13 @@ export async function startRuntime(env: RuntimeEnv, opts: { worker?: boolean } =
 
   // T14: the tool registry — the step-0 set (`send` only when the identity is
   // configured) plus the host tools — installed through the seam, S9-style.
+  // M3: M2's skills read tools ride along, so every agent can see and load
+  // its own skills (the toolset's defaults allow them).
   const sendFrom = env.FABRIC_SEND_FROM;
   const registryDefs = [
     ...builtinTools({ sendFrom: sendFrom ?? "" }),
     ...hostTools(),
+    ...skillTools(skills),
   ];
   setSessionToolRegistry(
     createRegistry(sendFrom === undefined ? registryDefs.filter((def) => def.name !== "send") : registryDefs),
@@ -570,6 +622,7 @@ export async function startRuntime(env: RuntimeEnv, opts: { worker?: boolean } =
     queue,
     live,
     vault,
+    skills,
     ...(proposals !== undefined ? { proposals } : {}),
     stop: async () => {
       if (stopped) return;

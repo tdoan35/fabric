@@ -20,6 +20,7 @@ export {
   type RecallFn,
 } from "./context";
 export { sessionTools, type SessionToolDeps, type SessionToolRegistry } from "./tools";
+export { SKILL_TOOL_DEFAULTS, withSkillsIndex } from "./skills";
 export { LEGACY_TOOL_MAP, definitionAccess, withToolset, type ToolAccessLevel } from "./toolset";
 export {
   BRIDGE_TOOLS,
