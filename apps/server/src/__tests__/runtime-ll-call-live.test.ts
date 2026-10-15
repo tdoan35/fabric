@@ -154,16 +154,23 @@ describeDrivers("C10 server: ll.call live deltas off the store transaction (ANY-
       "the bystander committed while the call was still in flight (no completion recorded yet)",
     ).toBe(0);
     if (h.driver === "postgres") {
-      // and on the pooled driver: the call holds no stream-row lock either
-      const locked = await rt.store
-        .transaction((tx) =>
-          tx.query("select id from streams where id = $1 and workspace_id = $2 for update nowait", [
-            streamId,
-            RUNTIME_WORKSPACE,
-          ]),
-        )
-        .then((rows) => rows.length)
-        .catch(() => 0);
+      // and on the pooled driver: the call holds no stream-row lock either.
+      // Retried briefly: under load the record transaction's own row lock can
+      // race this probe (a nowait catch), and the window to observe a free
+      // lock recurs every attempt until the completion lands.
+      let locked = 0;
+      for (let attempt = 0; attempt < 100 && locked !== 1; attempt++) {
+        locked = await rt.store
+          .transaction((tx) =>
+            tx.query("select id from streams where id = $1 and workspace_id = $2 for update nowait", [
+              streamId,
+              RUNTIME_WORKSPACE,
+            ]),
+          )
+          .then((rows) => rows.length)
+          .catch(() => 0);
+        if (locked !== 1) await new Promise((resolve) => setTimeout(resolve, 10));
+      }
       expect(locked, "the call's stream row locks nowait during the call").toBe(1);
     }
 
