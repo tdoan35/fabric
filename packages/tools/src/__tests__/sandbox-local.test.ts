@@ -5,6 +5,7 @@
 // exercised for real. The daemon-backed cases (D1–D11) live in
 // sandbox-docker.test.ts; the tool contracts (D12) are daemon-free, here.
 import { chmodSync } from "node:fs";
+import { spawnSync } from "node:child_process";
 import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path, { join } from "node:path";
@@ -37,6 +38,11 @@ interface FakeState {
 
 let base = "";
 let statePath = "";
+let savedPath: string | undefined;
+
+/** The minimal rg stand-in for hosts without ripgrep (CI runner images ship
+ * none); a real rg on PATH always wins. */
+const RG_FIXTURE_BIN = path.join(path.dirname(SHIM), "bin");
 
 const seed = async (state: FakeState): Promise<void> => {
   await writeFile(statePath, `${JSON.stringify(state, null, 2)}\n`);
@@ -49,15 +55,26 @@ const fakeProvider = () => dockerSandboxes({ image: IMAGE, docker: SHIM });
 
 beforeEach(async () => {
   base = await mkdtemp(path.join(tmpdir(), "fabric-sandbox-"));
-  statePath = join(base, "fake-docker-state.json");
+  statePath = path.join(base, "fake-docker-state.json");
   // The shim is committed executable; enforce the bit for odd checkouts.
   chmodSync(SHIM, 0o755);
+  chmodSync(path.join(RG_FIXTURE_BIN, "rg"), 0o755);
   process.env.FABRIC_FAKE_DOCKER_STATE = statePath;
+  // The sandboxed search tool execs `rg` by name; when the host has none, put
+  // the fixture's first on PATH for the duration of the test.
+  if (spawnSync("rg", ["--version"], { stdio: "ignore" }).error !== undefined) {
+    savedPath = process.env.PATH;
+    process.env.PATH = `${RG_FIXTURE_BIN}${path.delimiter}${process.env.PATH ?? ""}`;
+  }
   await seed({ seq: 0, images: [IMAGE], containers: [] });
 });
 
 afterEach(async () => {
   delete process.env.FABRIC_FAKE_DOCKER_STATE;
+  if (savedPath !== undefined) {
+    process.env.PATH = savedPath;
+    savedPath = undefined;
+  }
   await rm(base, { recursive: true, force: true });
 });
 

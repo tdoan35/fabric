@@ -6,7 +6,7 @@
 // labels, mounts, env), `ps` filters on labels, `rm` drops containers, and
 // `exec` runs the command argv as a real local process — the "container
 // filesystem" is whatever directories the test mounts.
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { dirname } from "node:path";
 
@@ -23,6 +23,30 @@ const load = () => {
 const save = (state) => {
   mkdirSync(dirname(statePath), { recursive: true });
   writeFileSync(statePath, `${JSON.stringify(state, null, 2)}\n`);
+};
+
+// The provider removes containers concurrently (reap, stopAll), so state
+// mutations are serialized: without the lock, two racing read-modify-writes
+// lose one side's deletion and a removed container survives in the file.
+const lockPath = `${statePath}.lock`;
+const mutate = (fn) => {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      mkdirSync(lockPath);
+      break;
+    } catch {
+      if (attempt > 10_000) break; // proceed rather than wedge the suite
+    }
+  }
+  try {
+    fn(load());
+  } finally {
+    try {
+      rmSync(lockPath, { recursive: true, force: true });
+    } catch {
+      // the next mutation's mkdir retries cleanly
+    }
+  }
 };
 
 const [, , command, ...rest] = process.argv;
@@ -87,11 +111,13 @@ switch (command) {
         labels[value.slice(0, at)] = value.slice(at + 1);
       }
     }
-    const id = `c${String(state.seq + 1).padStart(3, "0")}`;
-    state.seq += 1;
-    state.containers.push({ id, labels, argv: ["run", ...rest] });
-    save(state);
-    console.log(id);
+    mutate((state) => {
+      const id = `c${String(state.seq + 1).padStart(3, "0")}`;
+      state.seq += 1;
+      state.containers.push({ id, labels, argv: ["run", ...rest] });
+      save(state);
+      console.log(id);
+    });
     break;
   }
 
@@ -118,8 +144,10 @@ switch (command) {
   case "rm": {
     const ids = rest.filter((id) => !id.startsWith("-"));
     const gone = new Set(ids);
-    state.containers = state.containers.filter((c) => !gone.has(c.id));
-    save(state);
+    mutate((state) => {
+      state.containers = state.containers.filter((c) => !gone.has(c.id));
+      save(state);
+    });
     break;
   }
 

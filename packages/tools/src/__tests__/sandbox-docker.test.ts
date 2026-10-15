@@ -5,7 +5,7 @@
 // missing daemon fails the suite. D12 (the tool contracts, daemon-free) lives
 // in sandbox-local.test.ts.
 import { execFile } from "node:child_process";
-import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { userInfo } from "node:os";
 import path, { join } from "node:path";
@@ -41,28 +41,34 @@ let base = "";
 let agentDir = "";
 let projectDir = "";
 let provider: SandboxProvider | undefined;
+/** One provider per test: the daemon-backed cases exercise one live sandbox
+ * table, not several providers racing each one's crash-recovery sweep. */
+const theProvider = (): SandboxProvider => (provider ??= dockerSandboxes());
 
 /** The mounts D3/D8 use: the agent folder at /workspace, one read project. */
-const mountsFor = async (agentId: string): Promise<SandboxMount[]> => [
+const mountsFor = (agentId: string): SandboxMount[] => [
   { hostPath: agentDir, containerPath: "/workspace" },
   { hostPath: projectDir, containerPath: `/projects/${agentId}`, readOnly: true },
 ];
 
 const acquire = async (agentId: string) => {
-  const instance = dockerSandboxes();
-  provider = instance;
-  return instance.acquire({ workspaceId: "ws1", agentId, mounts: await mountsFor(agentId) });
+  const instance = theProvider();
+  return instance.acquire({ workspaceId: "ws1", agentId, mounts: mountsFor(agentId) });
 };
 
 beforeEach(async () => {
   base = await mkdtemp(path.join(tmpdir(), "fabric-sandbox-d-"));
   agentDir = path.join(base, "agent");
   projectDir = path.join(base, "project");
-  // Container uid 1000 writes here over the bind mount.
+  // Container uid 1000 writes here over the bind mount. The explicit chmod is
+  // umask-proof: mkdir's mode lands masked (022 -> 755, no `w` for others) and
+  // the runner user's uid is not the container's 1000, so the mask alone makes
+  // every container-side write fail.
   await Promise.all([
     mkdir(agentDir, { recursive: true, mode: 0o777 }),
     mkdir(projectDir, { recursive: true, mode: 0o777 }),
   ]);
+  await Promise.all([chmod(agentDir, 0o777), chmod(projectDir, 0o777)]);
 });
 
 afterEach(async () => {
@@ -261,6 +267,9 @@ docker("D9 putArchive/getArchive round-trip through /tmp/x byte for byte", async
     const parser = new Parser();
     const collected: Array<{ path: string; data: Buffer }> = [];
     parser.on("entry", (entry: ReadEntry) => {
+      // Directory entries ride along in the tar stream; the assertion is about
+      // the files.
+      if (entry.type !== "File") return;
       const chunks: Buffer[] = [];
       entry.on("data", (chunk: Buffer) => chunks.push(chunk));
       entry.on("end", () => {
@@ -322,7 +331,7 @@ docker("D11 a starting provider clears containers left by a dead run", async () 
 // ---------------------------------------------------------------------------
 
 function toolbelt(agentId = "researcher"): ToolDef[] {
-  return sandboxTools(dockerSandboxes(), () => mountsFor(agentId));
+  return sandboxTools(theProvider(), async () => mountsFor(agentId));
 }
 
 function findTool(tools: ToolDef[], name: string): ToolDef {
