@@ -183,9 +183,14 @@ test("N8 dir relative → 400; dir missing → 400; an unknown agent → 404; no
   const unknown = await importBody(FIXTURES, "ghost");
   expect(unknown.status).toBe(404);
 
+  // nothing is written in any of the three — for the agent each request
+  // named, not just the one the re-list covers
   const list = await app().request("/api/agents/researcher/skills");
   expect(list.status).toBe(200);
   expect(await list.json()).toEqual([]);
+  const ghost = await app().request("/api/agents/ghost/skills");
+  expect(ghost.status).toBe(200);
+  expect(await ghost.json()).toEqual([]);
 });
 
 // -- N9 ------------------------------------------------------------------------

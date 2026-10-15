@@ -155,8 +155,8 @@ export async function sessionTurnDefinition(
 
   // T14: the row is the definition layer (D5) — the tools its names map to,
   // access per policy, in registry order; M3's defaults fill the two skills
-  // read tools no row mentions. No registry: the stamp is the pre-T14
-  // definition, byte for byte.
+  // read tools no row mentions. No registry and no skills: the stamp is the
+  // pre-T14 definition, byte for byte.
   const registry = sessionToolRegistry;
   let stamped = def;
   if (registry !== undefined) {
@@ -193,7 +193,7 @@ export function setSessionAgents(records: readonly SpecialistAgent[]): void {
 
 // The tool registry the stamp's toolset and the worker port's registry calls
 // read (T14). Unset — the unit tests, `worker: false` boots without one — no
-// registry tools exist: the stamp is the pre-T14 definition and the port serves
+// registry tools exist: the stamp carries no toolset and the port serves
 // the session tools only.
 let sessionToolRegistry: ToolRegistry | undefined;
 

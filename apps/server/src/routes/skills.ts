@@ -6,7 +6,7 @@
 import { stat } from "node:fs/promises";
 import path from "node:path";
 import { Hono } from "hono";
-import { importSkills } from "@fabric/memory/skills";
+import { importSkills, type SkillImportResult } from "@fabric/memory/skills";
 import { getRuntime, unknownSessionAgent } from "../runtime/bootstrap";
 
 /** The request body: `{ dir, agentId }`, both strings. */
@@ -33,7 +33,15 @@ export const skills = new Hono()
     if (dirStat?.isDirectory() !== true) return c.json({ error: `dir is not an existing directory: ${dir}` }, 400);
     if (unknownSessionAgent(agentId)) return c.json({ error: `unknown agent: ${agentId}` }, 404);
 
-    const results = await importSkills(runtime.skills, dir, { agentId });
+    // The walk itself failing (a dir that exists but can't be read) is an
+    // input error like the two above, not a 500; a folder that merely errors
+    // is caught per-folder inside importSkills and reported in `results`.
+    let results: SkillImportResult[];
+    try {
+      results = await importSkills(runtime.skills, dir, { agentId });
+    } catch (error) {
+      return c.json({ error: `dir could not be read: ${error instanceof Error ? error.message : String(error)}` }, 400);
+    }
     const counts = { created: 0, patched: 0, unchanged: 0, errors: 0 };
     for (const result of results) counts[result.status === "error" ? "errors" : result.status] += 1;
     return c.json({ results, counts }, 200);
