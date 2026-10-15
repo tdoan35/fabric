@@ -128,7 +128,10 @@ describeDrivers("C10 server: ll.call live deltas off the store transaction (ANY-
 
     // While the model still streams: a bystander transaction commits, and the
     // stream holds no completion yet — the call is off any store transaction.
+    // The count is read inside the settle handler: the window between the
+    // bystander's commit and the read is the read's own latency, not a poll.
     let bystanderSettled = false;
+    let completedAtSettle = -1;
     const bystander = rt.store
       .transaction((tx) =>
         append(tx, RUNTIME_WORKSPACE, [
@@ -138,12 +141,31 @@ describeDrivers("C10 server: ll.call live deltas off the store transaction (ANY-
           },
         ]),
       )
-      .then(() => {
+      .then(async () => {
+        const events = await rt.store.readStream(streamId, { workspaceId: RUNTIME_WORKSPACE });
+        completedAtSettle = events.filter((event) => event.type === "llm.completed").length;
+        // flagged only once the count is in hand: the poll must never observe
+        // the settle between the commit and the read's own await.
         bystanderSettled = true;
       });
     await expect.poll(() => bystanderSettled, { timeout: 2_000, interval: 10 }).toBe(true);
-    const midCall = await rt.store.readStream(streamId, { workspaceId: RUNTIME_WORKSPACE });
-    expect(midCall.filter((event) => event.type === "llm.completed")).toHaveLength(0);
+    expect(
+      completedAtSettle,
+      "the bystander committed while the call was still in flight (no completion recorded yet)",
+    ).toBe(0);
+    if (h.driver === "postgres") {
+      // and on the pooled driver: the call holds no stream-row lock either
+      const locked = await rt.store
+        .transaction((tx) =>
+          tx.query("select id from streams where id = $1 and workspace_id = $2 for update nowait", [
+            streamId,
+            RUNTIME_WORKSPACE,
+          ]),
+        )
+        .then((rows) => rows.length)
+        .catch(() => 0);
+      expect(locked, "the call's stream row locks nowait during the call").toBe(1);
+    }
 
     await until(async () =>
       (await eventsOf(rt, sessionId)).some((event) => event.type === "llm.completed") ? true : undefined,

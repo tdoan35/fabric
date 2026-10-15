@@ -46,6 +46,7 @@ export { ModelError } from "./ports";
 export type {
   ModelCallRequest,
   ModelDelta,
+  ModelDeltaCall,
   ModelMessage,
   ModelPort,
   ModelResult,
