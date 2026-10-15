@@ -10,7 +10,8 @@
  *   3. follow the stream until the `agent.message` reply arrives;
  *   4. disconnect, post again, reconnect from the last seq;
  *   5. the second reply arrives exactly once, with nothing replayed at or
- *      before the resume cursor.
+ *      before the resume cursor;
+ *   6. the event log itself holds exactly one copy of each reply.
  *
  * Exits non-zero on any failure. The MOB-E fixture mode is gone (S13).
  */
@@ -120,5 +121,22 @@ const firstAgain = run2.events.filter((e) => e.type === "agent.message" && textO
 if (firstAgain > 0) fail("5. the first reply was re-delivered after the resume");
 console.log(`5. reply at seq ${run2.hit.seq} arrived exactly once; ${run2.events.length} events, nothing at or before the cursor`);
 
+// ---- 6. the log itself holds exactly one reply per turn ----
+// The checks above only see what one connection delivered before its abort;
+// duplicates appended server-side after the match would slip through. The
+// event log is authoritative — a runaway decide loop (agent.message
+// re-appended per turn, a runtime bug) fails here deterministically.
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+await sleep(1_000); // let any runaway appends land
+const logRaw: unknown = await (await fetch(`${base}/api/sessions/${sessionId}/events?after=0`)).json();
+const log: SessionEvent[] = Array.isArray(logRaw) ? logRaw : fail("6. /events did not return an array");
+const copiesOf = (needle: string) =>
+  log.filter((e) => e.type === "agent.message" && textOf(e) === needle).length;
+const firsts = copiesOf(`echo: ${first}`);
+const seconds = copiesOf(`echo: ${second}`);
+if (firsts !== 1) fail(`6. the log holds ${firsts} copies of the first reply — expected exactly one`);
+if (seconds !== 1) fail(`6. the log holds ${seconds} copies of the second reply — expected exactly one`);
+console.log(`6. the log holds exactly one copy of each reply (${log.length} events total)`);
+
 clearTimeout(watchdog);
-console.log(`SMOKE OK — session ${sessionId}: 2 posts, 2 echo replies, resume exact`);
+console.log(`SMOKE OK — session ${sessionId}: 2 posts, 2 echo replies, resume exact, log clean`);

@@ -44,6 +44,10 @@ export interface SessionThread {
   send: (text: string) => Promise<void>;
 }
 
+/** Restart backoff after a stream error, mirroring the client's own reconnect
+ * ladder (session-client.ts FOLLOW_BACKOFF_MS), capped at its last entry. */
+const RESTART_BACKOFF_MS = [500, 1000, 2000, 4000, 10_000];
+
 /**
  * One chat thread on the durable-session protocol. `sessionId` is the durable
  * id (server-minted uuid) or, when `fresh`, a locally minted key that is never
@@ -85,6 +89,9 @@ export function useSessionThread(sessionId: string, opts: { fresh?: boolean } = 
       pending && !projected.some((m) => m.id === pending.id) ? [...projected, pending.message] : projected;
     setMessages([...deltasRef.current.values()].reduce((ms, delta) => applyDelta(ms, delta), base));
   }, []);
+  const restartsRef = useRef(0); // consecutive stream-error restarts since the last frame
+  // A callback can't name itself; the error path below restarts through this.
+  const startFollowRef = useRef<(id: string, after?: number) => void>(() => {});
 
   const startFollow = useCallback(
     (id: string, after?: number) => {
@@ -96,10 +103,17 @@ export function useSessionThread(sessionId: string, opts: { fresh?: boolean } = 
         after,
         signal: controller.signal,
         onEvent: (event) => {
+          // A frame arrived: the connection is healthy again.
+          restartsRef.current = 0;
+          setError(undefined); // no-op once clear (React bails on Object.is)
           // agent.message carries only {text} — no turn/callNo to correlate
           // with (core decide.ts endTurn) — and it ends the turn, so the final
-          // reply replaces every provisional this turn streamed.
-          if (event.type === "agent.message") deltasRef.current.clear();
+          // reply replaces every provisional this turn streamed. A turn that
+          // ends in human.requested never sends one: drop the provisionals
+          // there too, or a failed turn's partial text lingers forever.
+          if (event.type === "agent.message" || event.type === "human.requested") {
+            deltasRef.current.clear();
+          }
           eventsRef.current.set(event.seq, event);
           lastSeqRef.current = Math.max(lastSeqRef.current ?? 0, event.seq);
           recompute();
@@ -109,16 +123,29 @@ export function useSessionThread(sessionId: string, opts: { fresh?: boolean } = 
           recompute();
         },
       }).catch((err: unknown) => {
-        // followSession rides out drops and dead servers inside its retry
-        // loop; this is a stream error outside it. Surface it — the next
-        // foregrounding reconnects from the last delivered seq.
-        if (!controller.signal.aborted && aliveRef.current) {
-          setError(err instanceof Error ? err.message : String(err));
-        }
+        // The client's retry loop rides out connect failures and non-ok
+        // responses, but a read error mid-body (node undici's "terminated")
+        // is rethrown by consumeStream instead of being treated as a drop —
+        // an S12a gap whose real fix belongs in contracts. Until then this
+        // hook owns the restart: surface the error, then follow again from
+        // the last delivered seq with backoff (the client's own ladder).
+        if (controller.signal.aborted || !aliveRef.current) return;
+        setError(err instanceof Error ? err.message : String(err));
+        if (abortRef.current !== controller) return; // a newer loop owns the stream
+        const delay = RESTART_BACKOFF_MS[Math.min(restartsRef.current, RESTART_BACKOFF_MS.length - 1)]!;
+        restartsRef.current += 1;
+        setTimeout(() => {
+          if (aliveRef.current && abortRef.current === controller) {
+            startFollowRef.current(id, lastSeqRef.current);
+          }
+        }, delay);
       });
     },
     [recompute],
   );
+  useEffect(() => {
+    startFollowRef.current = startFollow;
+  }, [startFollow]);
 
   // Probe once, then follow. GET /api/sessions/:id/events answers 404 for ids
   // the session store doesn't know (legacy threads), 410 for purged ones, and

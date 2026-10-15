@@ -71,6 +71,10 @@ export function ThreadView({ sessionId, fresh, placeholder, agentName = "Dana", 
   const data = thread.messages;
   const empty = data.length === 0;
   const loading = thread.status.kind === "probing";
+  // The turn runs on the stream: "typing" covers the post round-trip (busy)
+  // and the wait for the first reply frame (the user's line is still last) —
+  // after that the provisional text streams visibly.
+  const awaitingReply = data.length > 0 && data[data.length - 1]!.role === "user";
 
   return (
     <View style={styles.fill}>
@@ -91,7 +95,7 @@ export function ThreadView({ sessionId, fresh, placeholder, agentName = "Dana", 
           contentContainerStyle={styles.list}
           keyboardDismissMode="interactive"
           ListFooterComponent={
-            thread.busy ? (
+            thread.busy || awaitingReply ? (
               <View style={styles.thinking}>
                 <ActivityIndicator size="small" color={theme.colors.run} />
                 <Text style={styles.thinkingText}>{agentName} is typing…</Text>
