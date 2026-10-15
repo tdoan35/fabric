@@ -6,7 +6,6 @@
 // unchanged: a card's addResult stamps {decision} on its part and starts the
 // next run, whose turn the server decides from the log.
 import type { ChatModelAdapter } from "@assistant-ui/react";
-import { api } from "@/lib/api";
 import { chatAgentContext, sessionTurn } from "./session-stream";
 import { markSent, toRuntimeParts } from "./session";
 

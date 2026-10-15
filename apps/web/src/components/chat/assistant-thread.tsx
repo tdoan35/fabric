@@ -354,7 +354,7 @@ function useLiveResults(sessionId: string) {
 function useStreamResync(sessionId: string) {
   const aui = useAui();
   useEffect(() => {
-    let alive = true;
+    const alive = true;
     const isDelta = (id: unknown): boolean => typeof id === "string" && id.startsWith("delta:");
     const textOf = (content: readonly unknown[]): string =>
       content

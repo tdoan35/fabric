@@ -353,7 +353,6 @@ export const W2ReopenMidTurn: Story = {
     await roundTrip();
 
     // The reopened thread shows the turn: provisional text, then the final reply.
-    const reopened = within(canvasElement);
     await waitFor(() => expect(canvasElement.textContent).toContain(W_REPLY_HEAD), { timeout: 5000, interval: 50 });
     await waitFor(() => expect(canvasElement.textContent).toContain(W_REPLY_TAIL), { timeout: 5000, interval: 50 });
     await waitFor(() => expect(canvasElement.textContent).toContain(W_QUESTION), { timeout: 5000, interval: 50 });

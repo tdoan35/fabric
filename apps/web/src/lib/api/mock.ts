@@ -140,6 +140,11 @@ export const mockApi = {
       platformMessageId: req.clientMessageId,
     });
     const done = mockTurn(session, req.attachments);
+    // A failing turn rejects before the adapter can attach its own handlers
+    // (the failure lands while the post's delay is still pending, so the
+    // global unhandled-rejection tracker would fire first). Marking it handled
+    // here keeps that tracker quiet; later consumers still see the rejection.
+    done.catch(() => {});
     return delay({ seq: event.seq, done });
   },
   followSession: (id: string, { after, onEvent, onDelta, signal }: FollowSessionOptions): Promise<void> => {
