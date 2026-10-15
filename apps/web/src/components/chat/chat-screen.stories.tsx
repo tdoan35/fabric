@@ -291,7 +291,10 @@ const W_QUESTION = "What is the capital of France?";
 const W_REPLY_HEAD = "I can answer that direct"; // proper prefix: mid-reply state
 const W_REPLY_TAIL = "placeholder.)"; // only in the complete reply
 const W_ROUTES = (sessionId: string) => [
-  { path: "/", element: <ChatScreen sessionId={sessionId} /> },
+  // Keyed by session: a route swap between two threads must remount the screen
+  // (the production HomePage keys the thread by sessionId too), never update
+  // the mounted instance in place with the previous thread's runtime content.
+  { path: "/", element: <ChatScreen key={sessionId} sessionId={sessionId} /> },
   { path: "/away", element: <p data-testid="away">Away</p> },
 ];
 
@@ -365,7 +368,7 @@ export const W3SpecialistAndIncognito: Story = {
     router: {
       routes: [
         ...W_ROUTES("w3-specialist"),
-        { path: "/incognito", element: <ChatScreen sessionId="w3-incognito" /> },
+        { path: "/incognito", element: <ChatScreen key="w3-incognito" sessionId="w3-incognito" /> },
       ],
     },
   },
@@ -393,7 +396,13 @@ export const W3SpecialistAndIncognito: Story = {
     const incognito = within(canvasElement);
     await waitFor(() => expect(incognito.getByRole("switch", { name: "Incognito chat" })).toBeInTheDocument(), { timeout: 5000 });
     await user.click(incognito.getByRole("switch", { name: "Incognito chat" }));
-    await waitFor(() => expect(incognito.getByText("Not saved to your sessions or used to shape your assistant.")).toBeInTheDocument(), { timeout: 5000 });
+    // The remount races the click: retry until the switch reads on.
+    await waitFor(async () => {
+      const switchEl = incognito.getByRole("switch", { name: "Incognito chat" });
+      if (switchEl.getAttribute("aria-checked") !== "true") await user.click(switchEl);
+      expect(switchEl).toHaveAttribute("aria-checked", "true");
+    }, { timeout: 5000 });
+    await waitFor(() => expect(incognito.getByText("Not saved to your sessions or used to shape your assistant.")).toBeVisible(), { timeout: 5000 });
     await user.type(incognito.getByRole("textbox"), W_QUESTION);
     await user.click(incognito.getByRole("button", { name: "Send" }));
     await waitFor(() => expect(canvasElement.textContent).toContain(W_REPLY_TAIL), { timeout: 5000, interval: 50 });

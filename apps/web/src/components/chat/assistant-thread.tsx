@@ -345,18 +345,21 @@ function useLiveResults(sessionId: string) {
 
 /**
  * Background stream updates — a turn orphaned by a remount, results, another
- * device — appended onto the idle thread (a running adapter owns the thread's
- * content, so while one is in flight this does nothing). The runtime's
- * message repository upserts by id: the load-laid messages carry the
- * projection's ids, so a re-appended provisional grows in place and a fresh
- * `agent.message` lands once; the provisional it supersedes is then removed.
- * Counts gate everything, so a thread a run has carried never gets doubles.
+ * device — folded into the idle thread (a running adapter owns the thread's
+ * content, so while one is in flight this does nothing). The sync is a plain
+ * reset to the projection: a thread the load or a run already carried resets
+ * to itself, a stale one catches up in one step, provisional growth included.
+ * The count-and-tail check keeps idle threads reset-free.
  */
 function useStreamResync(sessionId: string) {
   const aui = useAui();
   useEffect(() => {
     let alive = true;
     const isDelta = (id: unknown): boolean => typeof id === "string" && id.startsWith("delta:");
+    const textOf = (content: readonly unknown[]): string =>
+      content
+        .flatMap((part) => ((part as { type?: string; text?: string })?.type === "text" ? [(part as { text?: string }).text ?? ""] : []))
+        .join("");
     const apply = (): void => {
       const serverId = knownSessionId(sessionId);
       const stream = serverId ? peekStream(serverId) : undefined;
@@ -365,39 +368,39 @@ function useStreamResync(sessionId: string) {
         .then(() => {
           if (!alive) return;
           const thread = aui.thread();
+          if (thread.getState().isRunning) return; // re-checked inside the async continuation
           const shown = thread.getState().messages;
-          if (thread.getState().isRunning) return; // read again inside the async continuation
+          const target = stream.state.messages;
           const shownReal = shown.filter((message) => !isDelta(message.id));
-          const completed = stream.state.messages.filter((message) => !message.provisional);
-          if (shownReal.length > completed.length) return; // the runtime is ahead: a run carried it
-          const last = stream.state.messages.at(-1);
-          if (last?.provisional && shownReal.length === completed.length && isDelta(shown.at(-1)?.id)) {
-            // The turn still streams: grow the provisional in place, by id.
-            void thread.append({
-              id: last.id,
-              role: last.role,
-              content: toRuntimeParts(last.content),
-              createdAt: new Date(last.createdAt),
-              startRun: false,
-            } as never);
+          const completed = target.filter((message) => !message.provisional);
+          if (shownReal.length === completed.length) {
+            // Up to date on completed messages; in sync too when the tail
+            // provisional is shown and current (or there is none).
+            const last = target.at(-1);
+            const shownLast = shown.at(-1);
+            const sameTail =
+              (!last?.provisional && !isDelta(shownLast?.id)) ||
+              (last?.provisional &&
+                !!shownLast &&
+                isDelta(shownLast.id) &&
+                shownLast.id === last.id &&
+                textOf(shownLast.content) === textOf(last.content));
+            if (sameTail) return;
           }
-          if (shownReal.length === completed.length) return;
-          for (const message of completed.slice(shownReal.length)) {
-            void thread.append({
+          thread.reset(
+            target.map((message) => ({
               id: message.id,
               role: message.role,
               content: toRuntimeParts(message.content),
               createdAt: new Date(message.createdAt),
-              startRun: false,
-            } as never);
-          }
-          // The grown-in-place provisional is superseded by the final that just landed.
-          for (const message of shown) {
-            if (isDelta(message.id)) void thread.deleteMessage(message.id);
-          }
+            })),
+          );
         })
         .catch(() => {});
     };
+    // The backlog predates this mount (a reopen, another tab's turn): sync once
+    // on the way in — a stream event alone never fires for an already-quiet log.
+    apply();
     return onStreamChange(sessionId, apply);
   }, [aui, sessionId]);
 }

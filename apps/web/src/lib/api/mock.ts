@@ -17,6 +17,7 @@ import type {
   SessionDelta, SessionEvent,
 } from "@fabric/contracts";
 import { projectThread } from "@fabric/contracts";
+import { resetSessionStreams } from "@/lib/chat/session-stream";
 import { mockAssistant } from "../mock/chat";
 import type { ContextSnapshot, Report, Run, RunEvent, Task } from "../types";
 
@@ -217,4 +218,5 @@ const yieldText = (content: unknown[]): string | undefined => {
 export function resetMockData() {
   projects.length = 0;
   projects.push(...projectSeed);
+  resetSessionStreams();
 }

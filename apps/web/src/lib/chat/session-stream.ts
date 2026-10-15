@@ -54,6 +54,15 @@ const streams = new Map<string, StreamHandle>();
 /** The live stream backing a server session, when one is attached. */
 export const peekStream = (serverId: string): StreamHandle | undefined => streams.get(serverId);
 
+/** Test seam (the storybook harness's per-story reset): drop every stream, alias and
+ * pending ensure, so a story never inherits an earlier story's session state. */
+export function resetSessionStreams(): void {
+  streams.clear();
+  aliases.clear();
+  ensuring.clear();
+  persistAliases();
+}
+
 /** The server session behind a thread key, when one is known. */
 export const knownSessionId = (threadKey: string): string | undefined =>
   aliases.get(threadKey) ?? (streams.has(threadKey) ? threadKey : undefined);
@@ -198,14 +207,23 @@ export async function* sessionTurn(threadKey: string, args: SessionTurnArgs): As
   // The turn runner's rejection must stay handled even when it lands between
   // the post and the first wait (the mock brain fails synchronously).
   done?.catch(() => {});
+  // The per-turn completion (the mock's `done`) is the authoritative end: the
+  // agent.message of a concurrent turn would end this one early, so on the raw
+  // event stream (http, no `done`) the first agent.message after our
+  // message.received stands in. Either way the provisional keeps streaming
+  // until the turn is done — the final is yielded once, at the end.
+  let doneSettled = false;
+  const doneWait = done?.then(
+    () => { doneSettled = true; },
+    (err: unknown) => { doneSettled = true; throw err; },
+  );
   let lastText: string | undefined;
 
   for (;;) {
     if (args.signal?.aborted) return;
     const { events, messages } = stream.state;
 
-    // The turn's reply: the first agent.message after our message.received.
-    if (events.some((event) => event.seq > post.seq && event.type === "agent.message")) {
+    if (done === undefined && events.some((event) => event.seq > post.seq && event.type === "agent.message")) {
       const final = [...messages].reverse().find((message) => message.role === "assistant" && !message.provisional);
       if (final) yield { content: final.content };
       return;
@@ -219,8 +237,15 @@ export async function* sessionTurn(threadKey: string, args: SessionTurnArgs): As
       yield { content: [{ type: "text" as const, text }] };
     }
 
-    await Promise.race([stream.changeAfter(stream.version), abortable(args.signal), ...(done ? [done] : [])]);
-    // A failed turn (the mock's brain) rejects `done` and throws here; a
-    // completed one loops back into the checks and finds the agent.message.
+    const race: Promise<void>[] = [stream.changeAfter(stream.version), abortable(args.signal)];
+    if (doneWait) race.push(doneWait);
+    await Promise.race(race);
+    if (doneSettled) {
+      // The turn's reply is finalized; a rejection has already thrown above.
+      if (args.signal?.aborted) return;
+      const final = [...stream.state.messages].reverse().find((message) => message.role === "assistant" && !message.provisional);
+      if (final) yield { content: final.content };
+      return;
+    }
   }
 }
