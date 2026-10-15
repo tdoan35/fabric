@@ -325,3 +325,30 @@ On a branch, with the queue options behind one small interface:
 4. Measure, for each queue: the extra latency per hop (appends plus pickup, on PGlite, local Postgres and Neon), one decide at a time per stream under parallel lanes, and idle database traffic.
 5. Chat check: one Dana turn through the queue, time from POST to first token versus today's direct stream.
 6. PGlite checks: `pglite-pgvector` for memory and the registry, `SKIP LOCKED`, write throughput at a real run's event volume, data surviving a crash of the utility process, and the server's native dependencies (`onnxruntime-node` for embeddings) loading in Electron's utility process.
+
+### R12 results (2026-10-15, ANY-38 — Ty, real credentials)
+
+Environment: lane = self-hosted tensorfold **GLM-5.3-Flash-EXL3** on `ty-dgx-spark:8888/v1` (the `.env` Spark lane, `qwen3.8-flash-next` on :18300, was down — the DGX GPU is held by the live GLM server; a real self-hosted lane either way). Sprite = the real `fabric-coder` over `@fly/sprites`. Local Postgres = 17.10 on :55488. Neon = the project's own branch, dedicated `fabric_r12` database, direct (unpooled) endpoint, ~65 ms RTT. PGlite 0.3.16. `MODEL_PORT=ai`, `LLM_PROVIDER=spark`.
+
+| # | Check (§) | Numbers | Verdict |
+|---|---|---|---|
+| 1 | Real lanes (§15.2) | Session turn end to end: 2× `llm.completed` (disposition + reply), `agent.message`, `message.delivered`, 0 duplicate facts, POST→reply ≈1.5 s. Agent run with one real `sprite.exec`: 14.6 s wall, 2 model calls, 1 resolved tool run (first attempt a transient Sprite error, retried once), exactly one `run.finished` | **pass** (but see ANY-93) |
+| 2 | Chat latency (§15.5) | Queue transport POST→`llm.requested` **43–55 ms**; direct port first delta 1 151 ms (42 deltas). Through the queue: **1 delta frame, after `llm.completed`** (+93 ms…+4 s) | transport **pass** (≤200 ms target); first token to client **fail** — deltas never stream (ANY-94, ANY-95) |
+| 3 | Latency per hop (§15.4) | Own-queue hop table below; serial decide under 4 parallel lanes: max 1 lease per stream, 0 overlap instants (200 jobs, 8 streams) | **pass** (remote hops are RTT-bound — see the Neon column) |
+| 4 | Idle traffic, scale to zero (§9, §14 q2) | 295 statements/min (PGlite, local PG) and 221/min (Neon) from one idle claimer at the daemon's 200 ms poll; `SELECT 1` on Neon 62–71 ms for the whole 6-min idle window — the compute never suspends under the queue's poll | **fail vs the 60/min budget** — a database with a running worker never sleeps; needs `claimWaiting` (wake) or a longer poll (ANY-100) |
+| 5 | PGlite (§15.6) | `SKIP LOCKED` ok; 348 events/s single appends (2.88 ms), 10-event batch 6 ms; SIGKILL mid-write stream: 21/21 committed events recovered, no torn writes; `pglite-pgvector` does **not** load on 0.3.16 (WASM ABI: `vacuum_delay_point`), loads + cosine query works on 0.5.10; **no Electron utility process exists** — the Electron leg is unmeasured | partial — ANY-96, ANY-97 |
+| 6 | kill −9, real lanes (§15.3 K1/K2) | K1 (SIGKILL mid model call): handover 2 796 ms, settled 5 116 ms, one `llm.completed`, exactly-once `run.finished`. K2 (SIGKILL mid real sprite run): handover 2 841–3 000 ms, settled 8 109–11 979 ms, `tool.interrupted` recorded, the real command never ran to completion twice (0 resolved re-runs), the model saw the note and finished | **pass** |
+
+**Hop table** (own `PgQueue`; "idle board" = the server daemon's shape — empty claim every 200 ms; Neon "production shape" = `kind: "postgres"` pool, what `bootstrap.ts` builds):
+
+| | PGlite | local Postgres | Neon (direct, ~65 ms RTT) |
+|---|---|---|---|
+| pickup p50/p95, continuous traffic (ms) | 5.3 / 9.4 | 4.5 / 11.9 | 41 889 / 49 069 — the serialized staged-apply pipeline, not the claim: back-to-back enqueues from one process run at ≈1/RTT (~7–14/s) |
+| pickup p50/p95, idle board (ms) | 111 / 201 | 117 / 192 | 278 / 289 (207 / 224 on the single-connection shape) |
+| append, 1 event/tx (ms) | 5.63 | 2.27 | 400 — a multi-statement transaction over WAN |
+| dead-worker handover (s) | 60.5 | 60.2 | 60.1 |
+| idle statements/min | 295 | 295 | 221 |
+
+For the record, the retired pg-boss probe the same day: pickup 5.2/8 ms (PGlite), 3.7/5 ms (Postgres); idle 79/min; handover 60.0 s; Q7 fails on uuid ids (§14's known pin).
+
+**Follow-ups filed under ANY-49:** ANY-93 (session decide re-appends `agent.message` forever — ~30 events/s, board never idles, `rt.stop()` hangs; reproduces with `MODEL_PORT=test`), ANY-94 (live deltas never stream with a real lane), ANY-95 (`llm.call` holds the serialized PGlite transaction across the whole model call), ANY-96 (PGlite 0.5 bump so `pglite-pgvector` loads), ANY-97 (Electron utility-process host), ANY-100 (idle polling vs the 60/min budget and scale-to-zero). The Sessions epic's chat-path acceptance is blocked on ANY-94/ANY-95; everything else above is recorded as measured.
