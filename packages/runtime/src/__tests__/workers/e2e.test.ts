@@ -93,10 +93,43 @@ describeDrivers("runtime worker loop, end to end (ANY-40 R9c)", (h) => {
     // exactly one deliver happened, of the turn's reply
     expect(surface.sent).toHaveLength(1);
     expect(surface.sent[0]!.text).toBe("done");
-    const delivered = (await store.readStream(stream, { workspaceId: WORKSPACE })).filter(
-      (event) => event.type === "message.delivered"
-    );
-    expect(delivered).toHaveLength(1);
+    const all = await store.readStream(stream, { workspaceId: WORKSPACE });
+    expect(all.filter((event) => event.type === "message.delivered")).toHaveLength(1);
+    // the reply itself landed exactly once — the count ANY-98 ran away with
+    expect(all.filter((event) => event.type === "agent.message")).toHaveLength(1);
+  });
+  test("W14b a dispositioned turn's reply lands once — a telemetry-only append never re-decides (ANY-98)", async () => {
+    const store = await h.openStore();
+    const queue = new MemoryQueue();
+    const model = new FakeModel([
+      // the turn records its disposition mid-turn (the session's virtual tool),
+      // then answers in a second call — so endTurn's batch is agent.message only
+      modelResult("", [{ name: "record_disposition", id: "c1", args: { kind: "direct", target: null, reason: "r", considered: [] } }], 0.1),
+      modelResult("done", [], 0.2),
+    ]);
+    const tools = new FakeTools({});
+    const surface = new FakeSurface();
+    const stream = "session:e2e-disposition";
+
+    await seed(store, stream, [
+      sessionCreated({ systemPrompt: "SYS", tools: [], surfaces: ["app"], model: "m1" }),
+      messageReceived("hi"),
+    ]);
+    await bootstrapDecide(store, queue, stream);
+
+    await runUntilIdle({ store, queue, ports: { model, tools, surface }, workerId: "worker-e2e" });
+
+    // the turn closed exactly once: one disposition, one reply, one deliver.
+    // A re-decide on the telemetry-only append would see an unchanged fold and
+    // re-fire endTurn forever — the runaway agent.message loop.
+    const events = await store.readStream(stream, { workspaceId: WORKSPACE });
+    expect(events.filter((event) => event.type === "disposition.recorded")).toHaveLength(1);
+    const replies = events.filter((event) => event.type === "agent.message");
+    expect(replies).toHaveLength(1);
+    expect(replies[0]!.payload).toEqual({ text: "done" });
+    expect(events.filter((event) => event.type === "message.delivered")).toHaveLength(1);
+    expect(surface.sent).toHaveLength(1);
+    expect(surface.sent[0]!.text).toBe("done");
   });
 
   test("W14a a delegation: the parent's turn resumes with the child's result and folds its cost", async () => {
