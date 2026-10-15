@@ -3,6 +3,7 @@
 // inside another's callback joins it as a savepoint (R13) rather than queueing
 // behind it, which would deadlock.
 import { PGlite } from "@electric-sql/pglite";
+import { vector } from "@electric-sql/pglite-pgvector";
 import type { Adapter } from "./adapter";
 import { TransactionNesting } from "./nesting";
 import type { Row, RuntimeTx } from "./types";
@@ -14,7 +15,13 @@ export class PgliteAdapter implements Adapter {
   private readonly nesting = new TransactionNesting();
 
   constructor(dataDir?: string) {
-    this.db = dataDir === undefined ? new PGlite() : new PGlite(dataDir);
+    // RUNTIME §15.6: pgvector is available wherever the store is — data dir or
+    // in-memory. PGlite only wires extensions at construction, so both shapes
+    // pass the same set; `create extension if not exists vector` then works
+    // through the store as it does on the pgvector Postgres service. The
+    // runtime's migrations stay extension-free (the memory work owns those).
+    const options = { extensions: { vector } };
+    this.db = dataDir === undefined ? new PGlite(options) : new PGlite(dataDir, options);
   }
 
   async exec(sql: string): Promise<void> {
