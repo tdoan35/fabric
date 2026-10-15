@@ -103,6 +103,6 @@ test("G5b a known specialist stamps the specialist definition; dana keeps hers",
   expect(definition.tools).toEqual(["ask_user"]);
 
   // dana's stamp is untouched by the specialist path
-  const dana = sessionTurnDefinition("dana") as Record<string, unknown>;
+  const dana = await sessionTurnDefinition("dana") as Record<string, unknown>;
   expect((dana.tools as string[]).includes("record_disposition")).toBe(true);
 });

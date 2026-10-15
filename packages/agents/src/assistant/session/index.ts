@@ -19,7 +19,8 @@ export {
   type ContextState,
   type RecallFn,
 } from "./context";
-export { sessionTools, type SessionToolDeps } from "./tools";
+export { sessionTools, type SessionToolDeps, type SessionToolRegistry } from "./tools";
+export { LEGACY_TOOL_MAP, definitionAccess, withToolset, type ToolAccessLevel } from "./toolset";
 export {
   BRIDGE_TOOLS,
   BRIDGE_DEF_EXTENSION,
