@@ -1,25 +1,26 @@
-// One chat thread over the real server, shared by the Chat tab's new thread
-// and /thread/[id]. History loads from GET /api/sessions/:id/messages (skipped for a freshly
-// minted id); sending POSTs /api/chat and replaces the in-progress assistant message on every
-// NDJSON line — each line is a CUMULATIVE snapshot (§4.3), never an append. Approvals stay on the
-// desktop: cards render read-only (components/chat/parts.tsx).
-// Web counterpart: components/chat/assistant-thread.tsx + lib/chat/http-assistant.ts.
+// One chat thread over the durable-session stream (S13), shared by the Chat
+// tab's new thread and /thread/[id]. lib/session-stream.ts follows
+// /api/sessions/:id/stream and renders projectThread + applyDelta (the same
+// projection as web); sending is createSession / postMessage then the stream
+// replays it (RUNTIME §13 — post, then follow). Legacy /api/chat-era threads
+// and incognito-purged ones render read-only. Approvals stay on the desktop:
+// cards render read-only (components/chat/parts.tsx).
+// Web counterpart: components/chat/assistant-thread.tsx + lib/chat (S12b).
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { ActivityIndicator, FlatList, KeyboardAvoidingView, Platform, Pressable, StyleSheet, Text, TextInput, View } from "react-native";
-import { fetch as expoFetch } from "expo/fetch";
-import type { ThreadMessage } from "@fabric/contracts";
+import type { SessionThreadMessage, ThreadMessage } from "@fabric/contracts";
 
 import { MessageBubble } from "@/components/chat/parts";
-import { httpApi } from "@/lib/api";
-import { chatStream, toWire } from "@/lib/chat";
+import { useSessionThread } from "@/lib/session-stream";
 import { theme } from "@/lib/theme";
-import { useAppEvents } from "@/lib/app-stream";
 
-const now = () => new Date().toISOString();
+/** Legacy threads predate the session stream; the composer is web-first now. */
+const LEGACY_NOTE = "This thread predates live sessions — it's read-only here. Start a new thread from the Chat tab.";
+const PURGED_NOTE = "This incognito session was purged — its log is gone.";
 
 export function ThreadView({ sessionId, fresh, placeholder, agentName = "Dana", disabledNote, renderEmpty, onStarted }: {
   sessionId: string;
-  /** Minted on this device and never sent: no history to fetch. */
+  /** Minted on this device and never sent: the durable session is created on the first send. */
   fresh?: boolean;
   placeholder: string;
   agentName?: string;
@@ -29,87 +30,47 @@ export function ThreadView({ sessionId, fresh, placeholder, agentName = "Dana", 
   renderEmpty?: (fill: (text: string) => void) => ReactNode;
   onStarted?: () => void;
 }) {
-  const [messages, setMessages] = useState<ThreadMessage[]>([]);
-  const [streaming, setStreaming] = useState<ThreadMessage | undefined>(undefined);
+  const thread = useSessionThread(sessionId, { fresh });
   const [draft, setDraft] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | undefined>(undefined);
-  const [loading, setLoading] = useState(!fresh);
-  const sentRef = useRef(!fresh);
-  const busyRef = useRef(false);
-  const abortRef = useRef<AbortController | undefined>(undefined);
-  const listRef = useRef<FlatList<ThreadMessage>>(null);
+  const [focusTick, setFocusTick] = useState(0);
+  const listRef = useRef<FlatList<SessionThreadMessage>>(null);
   const inputRef = useRef<TextInput>(null);
 
-  const load = useCallback(async () => {
-    if (!sentRef.current) return;
-    try {
-      const history = await httpApi.getSessionMessages(sessionId);
-      setMessages(history.messages);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setLoading(false);
-    }
-  }, [sessionId]);
+  const readOnly =
+    !!disabledNote ||
+    thread.status.kind === "legacy" ||
+    thread.status.kind === "purged" ||
+    thread.status.kind === "probing";
+  const note =
+    disabledNote ??
+    (thread.status.kind === "legacy" ? LEGACY_NOTE : thread.status.kind === "purged" ? PURGED_NOTE : undefined);
 
-  useEffect(() => {
-    void load();
-    return () => {
-      abortRef.current?.abort(); // leaving the thread mid-turn cancels the request
-    };
-  }, [load]);
-
-  // Live while idle: the results message (CHAT-14) and decisions made on the desktop both change
-  // this thread's history — `session.message` for it, or `registry.changed`. Never mid-own-turn.
-  useAppEvents(
-    (e) => e.type === "registry.changed" || (e.type === "session.message" && e.sessionId === sessionId),
-    () => {
-      if (!busyRef.current) void load();
-    },
-  );
-
-  const send = useCallback(async () => {
+  const send = useCallback(() => {
     const text = draft.trim();
-    if (!text || busyRef.current) return;
-    const user: ThreadMessage = { id: `local-${Date.now()}`, role: "user", content: [{ type: "text", text }], createdAt: now() };
-    const wire = toWire([...messages, user]);
-    setMessages((prev) => [...prev, user]);
+    if (!text || thread.busy) return;
     setDraft("");
-    setError(undefined);
-    setBusy(true);
-    busyRef.current = true;
-    sentRef.current = true;
     onStarted?.();
-    const controller = new AbortController();
-    abortRef.current = controller;
-    setStreaming({ id: "streaming", role: "assistant", content: [], createdAt: now() });
-    try {
-      let any = false;
-      for await (const line of chatStream(expoFetch, { sessionId, messages: wire }, controller.signal)) {
-        any = true;
-        setStreaming({ id: "streaming", role: "assistant", content: line.content, createdAt: now() });
-      }
-      if (!any) throw new Error(`${agentName} didn't answer. Send it again.`);
-      // The stored thread is authoritative (real ids, decisions stamped by the desktop): reload it.
-      await load();
-    } catch (err) {
-      if (err instanceof Error && err.name === "AbortError") return;
-      setError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setStreaming(undefined);
-      setBusy(false);
-      busyRef.current = false;
-    }
-  }, [draft, messages, load, sessionId, agentName, onStarted]);
+    void thread.send(text);
+  }, [draft, thread, onStarted]);
 
   const fill = useCallback((text: string) => {
     setDraft(text);
-    inputRef.current?.focus();
+    setFocusTick((tick) => tick + 1); // the effect below focuses, off the render path
   }, []);
+  useEffect(() => {
+    if (focusTick > 0) inputRef.current?.focus();
+  }, [focusTick]);
 
-  const data = streaming ? [...messages, streaming] : messages;
+  // Follow the thread: every projection update (event or delta) grows the
+  // list, so an effect on `messages` scrolls like the old onContentSizeChange
+  // without touching a ref during render (react-hooks/refs).
+  useEffect(() => {
+    listRef.current?.scrollToEnd({ animated: false });
+  }, [thread.messages]);
+
+  const data = thread.messages;
   const empty = data.length === 0;
+  const loading = thread.status.kind === "probing";
 
   return (
     <View style={styles.fill}>
@@ -121,12 +82,16 @@ export function ThreadView({ sessionId, fresh, placeholder, agentName = "Dana", 
           style={styles.fill}
           data={data}
           keyExtractor={(item) => item.id}
-          renderItem={({ item }) => <MessageBubble message={item} />}
+          renderItem={({ item }) => (
+            // The projection's parts are ChatPart plus session-only shapes
+            // (ask-human); MessageBubble's defensive renderer degrades the
+            // extras visibly instead of crashing (parts.tsx).
+            <MessageBubble message={item as ThreadMessage} />
+          )}
           contentContainerStyle={styles.list}
           keyboardDismissMode="interactive"
-          onContentSizeChange={() => listRef.current?.scrollToEnd({ animated: false })}
           ListFooterComponent={
-            busy ? (
+            thread.busy ? (
               <View style={styles.thinking}>
                 <ActivityIndicator size="small" color={theme.colors.run} />
                 <Text style={styles.thinkingText}>{agentName} is typing…</Text>
@@ -135,10 +100,10 @@ export function ThreadView({ sessionId, fresh, placeholder, agentName = "Dana", 
           }
         />
       )}
-      {error ? <Text style={styles.error}>{error}</Text> : null}
+      {thread.error ? <Text style={styles.error}>{thread.error}</Text> : null}
       <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : undefined} keyboardVerticalOffset={8}>
-        {disabledNote ? (
-          <Text style={styles.note}>{disabledNote}</Text>
+        {readOnly ? (
+          note ? <Text style={styles.note}>{note}</Text> : null
         ) : (
           <View style={styles.composer}>
             <TextInput
@@ -149,15 +114,15 @@ export function ThreadView({ sessionId, fresh, placeholder, agentName = "Dana", 
               placeholder={placeholder}
               placeholderTextColor={theme.colors.mutedForeground}
               multiline
-              editable={!busy}
+              editable={!thread.busy}
             />
             <Pressable
               hitSlop={8}
-              onPress={() => void send()}
-              disabled={busy || !draft.trim()}
-              style={[styles.sendButton, (busy || !draft.trim()) && styles.sendDisabled]}
+              onPress={send}
+              disabled={thread.busy || !draft.trim()}
+              style={[styles.sendButton, (thread.busy || !draft.trim()) && styles.sendDisabled]}
               accessibilityLabel="Send">
-              {busy ? <ActivityIndicator size="small" color={theme.colors.primaryForeground} /> : <Text style={styles.sendGlyph}>↑</Text>}
+              {thread.busy ? <ActivityIndicator size="small" color={theme.colors.primaryForeground} /> : <Text style={styles.sendGlyph}>↑</Text>}
             </Pressable>
           </View>
         )}
