@@ -17,6 +17,7 @@
     "@fabric/fixtures": "*",
     "@fabric/integrations": "*",
     "@fabric/llm": "*",
+    "@fabric/memory": "*",
     "@fabric/runtime": "*",
     "@fabric/tools": "*",
     "@hono/node-server": "^2.1.3",
