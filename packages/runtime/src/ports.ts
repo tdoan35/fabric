@@ -30,6 +30,11 @@ export type ModelMessage = {
 /** A live token delta. Deltas are pushed, never logged (§8). */
 export type ModelDelta = { text: string };
 
+/** The call a live delta belongs to (R15): the worker hands the attribution
+ * alongside the delta, because the model call runs outside any store
+ * transaction — there is no enclosing scope left to read it from. */
+export type ModelDeltaCall = { streamId: string; turn: number; callNo: number };
+
 export type ModelUsage = {
   inputTokens: number;
   outputTokens: number;

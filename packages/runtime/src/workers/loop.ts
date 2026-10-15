@@ -8,7 +8,7 @@
 // A job type without its port — `llm.call` without a model, `deliver` without
 // a surface — fails loud: the worker's wiring is the caller's, and half a
 // worker silently requeueing forever is worse than an error.
-import type { ModelPort, SurfacePort, ToolPort } from "../ports";
+import type { ModelDeltaCall, ModelPort, SurfacePort, ToolPort } from "../ports";
 import { DEFAULT_TYPE_CONFIG, DEFAULT_TYPE_CONFIGS } from "../queue/types";
 import type { Queue, QueueLease } from "../queue/types";
 import type { RuntimeStore } from "../store/types";
@@ -26,8 +26,10 @@ export type WorkerPorts = {
   model?: ModelPort;
   tools?: ToolPort;
   surface?: SurfacePort;
-  /** Live-delta sink, handed straight to the model port (§8). */
-  onDelta?: (delta: { text: string }) => void;
+  /** Live-delta sink, handed straight to the model port (§8). The second
+   * argument is the call the delta belongs to (R15), worked out by the
+   * handler's read phase — the call runs outside any store transaction. */
+  onDelta?: (delta: { text: string }, call: ModelDeltaCall) => void;
 };
 
 export type WorkerOptions = {
