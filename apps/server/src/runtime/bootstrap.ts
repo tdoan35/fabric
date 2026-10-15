@@ -15,17 +15,30 @@ import path from "node:path";
 import { HTTPException } from "hono/http-exception";
 import { openStore, PgQueue, runWorker } from "@fabric/runtime";
 import type { Queue, RuntimeStore, RuntimeTx, WorkerPorts } from "@fabric/runtime";
+import type { ToolRegistry } from "@fabric/tools";
+import { createRegistry } from "@fabric/tools";
+import { builtinTools } from "@fabric/tools/builtin";
+import { hostTools } from "@fabric/tools/host";
+import {
+  encryptedTableVault,
+  ensureVaultSchema,
+  envFallbackVault,
+  loadOrCreateMasterKey,
+  type Vault,
+} from "@fabric/tools/vault";
 import { createModelPort } from "@fabric/llm";
 import { createDb, schema, sql } from "@fabric/db";
 import type { Db } from "@fabric/db";
 import {
   dbProposalStore,
+  definitionAccess,
   danaSessionDef,
   legacyBridges,
   specialistSessionDef,
   sessionTools,
   withBridges,
   withSessionContext,
+  withToolset,
   type SessionBridgeEngines,
 } from "@fabric/agents/session";
 import type { ProposalActions, SpecialistAgent } from "@fabric/agents/session";
@@ -56,6 +69,12 @@ export type RuntimeEnv = {
   DATABASE_URL?: string;
   /** DEMO_RECORDING_KEY: what a Fast-forward splices into after a bridge handoff (S8b). */
   DEMO_RECORDING_KEY?: string;
+  /** T14: the root of the per-agent work dirs (`agents/<id>` under it). */
+  FABRIC_WORK_DIR?: string;
+  /** T14: the vault's master key file; created 0600 on first boot. */
+  FABRIC_MASTER_KEY_FILE?: string;
+  /** T14: the inbox `send` sends from; unset leaves `send` out of the registry. */
+  FABRIC_SEND_FROM?: string;
 };
 
 export type FabricRuntime = {
@@ -66,6 +85,9 @@ export type FabricRuntime = {
   /** The proposal store behind the loop's `propose_*` tools and the decision
    * endpoint (S8a); undefined without an app database. */
   proposals?: ProposalActions;
+  /** The agents' secret vault (T14): the encrypted table behind the env
+   * fallback, keyed by FABRIC_MASTER_KEY_FILE. */
+  vault: Vault;
   /** Drains the workers, then closes queue and store. Idempotent. */
   stop: () => Promise<void>;
 };
@@ -80,38 +102,54 @@ export const SESSION_TURN_DEF = {
 
 /**
  * The turn definition a new session's stream is stamped with (S7, ANY-56; S9,
- * ANY-59): Dana's for `agentId: "dana"` — the loop knobs, the system prompt and
- * the tool schemas from `danaSessionDef`, the per-turn cap from
- * DANA_TURN_COST_CAP_USD — the specialist's (built from the agent's registry
- * record) for any other known agent, and the S5 placeholder only when no
- * snapshot is loaded; under a loaded one an unknown agent raises the create
+ * ANY-59; T14, ANY-81): Dana's for `agentId: "dana"` — the loop knobs, the
+ * system prompt and the tool schemas from `danaSessionDef`, the per-turn cap
+ * from DANA_TURN_COST_CAP_USD — the specialist's (built from the agent's
+ * registry record) for any other known agent, and the S5 placeholder only when
+ * no snapshot is loaded; under a loaded one an unknown agent raises the create
  * route's 404. Incognito sessions carry no recall tool, which is what keeps the
  * memory path shut (PRODUCT §10.7). The env var is read here, at stamp time; the
  * parsed-env object the server builds strips unknown keys, and the definition is
  * not a port.
+ *
+ * T14: async, because the stamp reads stores (M3, M6) — and, when the tool
+ * registry seam is set, the agent's own row wears the toolset: the registry
+ * tools its rows name, access per row policy. Unset seam or no mapped rows:
+ * the definition is exactly as before.
  */
-export function sessionTurnDefinition(
+export async function sessionTurnDefinition(
   agentId: string,
   opts: { incognito?: boolean } = {}
-): Record<string, unknown> {
+): Promise<Record<string, unknown>> {
+  let def: Record<string, unknown>;
   if (agentId !== "dana") {
     const agent = sessionAgents.get(agentId);
-    if (agent !== undefined) return specialistSessionDef(agent, { incognito: opts.incognito === true });
+    if (agent !== undefined) def = specialistSessionDef(agent, { incognito: opts.incognito === true });
     // A loaded snapshot makes the id space closed: an unknown agent is a 404
     // raised before the create route's transaction touches any stream (S9).
-    if (sessionAgentsLoaded) throw new HTTPException(404, { message: `unknown agent: ${agentId}` });
-    return SESSION_TURN_DEF;
+    else if (sessionAgentsLoaded) throw new HTTPException(404, { message: `unknown agent: ${agentId}` });
+    else def = { ...SESSION_TURN_DEF };
+  } else {
+    const raw = process.env.DANA_TURN_COST_CAP_USD;
+    const parsed = raw === undefined ? undefined : Number(raw);
+    // S8b: the legacy-engine bridges ride Dana's definition — the `once` effects
+    // and the S2 disposition kinds (handoff → team/its id, errand → agent/browser).
+    def = withBridges(
+      danaSessionDef({
+        incognito: opts.incognito === true,
+        ...(parsed !== undefined && Number.isFinite(parsed) ? { turnCostCapUsd: parsed } : {}),
+      }),
+    ) as unknown as Record<string, unknown>;
   }
-  const raw = process.env.DANA_TURN_COST_CAP_USD;
-  const parsed = raw === undefined ? undefined : Number(raw);
-  // S8b: the legacy-engine bridges ride Dana's definition — the `once` effects
-  // and the S2 disposition kinds (handoff → team/its id, errand → agent/browser).
-  return withBridges(
-    danaSessionDef({
-      incognito: opts.incognito === true,
-      ...(parsed !== undefined && Number.isFinite(parsed) ? { turnCostCapUsd: parsed } : {}),
-    }),
-  );
+
+  // T14: the row is the definition layer (D5) — the tools its names map to,
+  // access per policy, in registry order. No registry, no row, no survivors:
+  // the stamp is the pre-T14 definition, byte for byte.
+  const registry = sessionToolRegistry;
+  if (registry === undefined) return def;
+  const rows = sessionAgents.get(agentId)?.tools ?? [];
+  const access = definitionAccess(rows, new Set(registry.names()));
+  return withToolset(def as never, { registry, access }) as Record<string, unknown>;
 }
 
 // The registry snapshot the stamp consults (S9, ANY-59): the agent records the
@@ -126,6 +164,18 @@ export function setSessionAgents(records: readonly SpecialistAgent[]): void {
   sessionAgents.clear();
   for (const record of records) sessionAgents.set(record.id, record);
   sessionAgentsLoaded = true;
+}
+
+// The tool registry the stamp's toolset and the worker port's registry calls
+// read (T14). Unset — the unit tests, `worker: false` boots without one — no
+// registry tools exist: the stamp is the pre-T14 definition and the port serves
+// the session tools only.
+let sessionToolRegistry: ToolRegistry | undefined;
+
+/** The tool-registry seam, S9's `setSessionAgents` twin: `startRuntime` installs
+ * the step-0 + host registry; tests install their own (or `undefined`). */
+export function setSessionToolRegistry(registry: ToolRegistry | undefined): void {
+  sessionToolRegistry = registry;
 }
 
 /** The append enqueue port: one `decide` per touched stream, keyed on the
@@ -156,11 +206,33 @@ const appBridges = (): SessionBridgeEngines =>
     recordingKey: process.env.DEMO_RECORDING_KEY,
   });
 
+/** The per-call scope factory (T14): the session's identity plus the run dir —
+ * `FABRIC_WORK_DIR/agents/<id>`, T10's layout, created on first use — and the
+ * vault behind an arrow, so tools never see it. */
+const sessionToolScopeOf =
+  (env: RuntimeEnv, vault: Vault | undefined) =>
+  async (io: { workspaceId: string; streamId: string; agentId: string; callId?: string }) => {
+    const runDir = path.join(env.FABRIC_WORK_DIR ?? path.join(".data", "work"), "agents", io.agentId);
+    await mkdir(runDir, { recursive: true });
+    return {
+      workspaceId: io.workspaceId,
+      streamId: io.streamId,
+      agentId: io.agentId,
+      callId: io.callId,
+      runDir,
+      secret: (name: string) => {
+        if (vault === undefined) return Promise.reject(new Error("no vault configured"));
+        return vault.get(name, { agentId: io.agentId });
+      },
+    };
+  };
+
 /** The worker ports. S7: the model port wears the session context wrapper (the
  * turn's recall lands in the system prompt; sessions without the recall tool —
  * incognito, runs — pass through untouched) and the ToolPort is the session
- * registry (`recall`, effect `read`; the S8a proposal writers and the S8b
- * legacy-engine bridges when wired). The app surface remains a no-op that
+ * registry (`recall`, effect `read`; the S8a proposal writers, the S8b
+ * legacy-engine bridges and — T14 — the server's tool registry behind the
+ * per-call scope, when the seam is set). The app surface remains a no-op that
  * succeeds — the client reads the stream, the receipt only closes the job.
  * S6: model deltas ride the live bus, attributed by the enclosing transaction's
  * scan (see `wireLiveBus`) — the port's callback carries text only. */
@@ -169,6 +241,7 @@ export function workerPorts(
   live: LiveBus,
   proposals: ProposalActions | undefined,
   store: RuntimeStore,
+  vault?: Vault,
 ): WorkerPorts {
   const variant: TestModelOptions | undefined =
     env.MODEL_VARIANT === "chunked" ? { chunks: 5, intervalMs: 30 } : undefined;
@@ -180,6 +253,9 @@ export function workerPorts(
       bridges: appBridges(),
       ...(proposals !== undefined
         ? { proposals: { store: proposals, loop: { store, workspace: RUNTIME_WORKSPACE } } }
+        : {}),
+      ...(sessionToolRegistry !== undefined
+        ? { registry: { tools: sessionToolRegistry, scope: sessionToolScopeOf(env, vault) } }
         : {}),
     }),
     surface: {
@@ -370,6 +446,25 @@ export async function startRuntime(env: RuntimeEnv, opts: { worker?: boolean } =
     ? await openStore({ driver: "postgres", url: env.RUNTIME_DATABASE_URL })
     : await openStore({ driver: "pglite", dataDir: await pgliteDir(env) });
 
+  // T14: the agents' vault — the encrypted table on this store behind the env
+  // fallback, keyed by the master key file (created 0600 on first boot).
+  await ensureVaultSchema(store);
+  const masterKeyPath = env.FABRIC_MASTER_KEY_FILE ?? path.join(".data", "master.key");
+  await mkdir(path.dirname(masterKeyPath), { recursive: true });
+  const masterKey = await loadOrCreateMasterKey(masterKeyPath);
+  const vault = envFallbackVault(encryptedTableVault(store, RUNTIME_WORKSPACE, masterKey), process.env);
+
+  // T14: the tool registry — the step-0 set (`send` only when the identity is
+  // configured) plus the host tools — installed through the seam, S9-style.
+  const sendFrom = env.FABRIC_SEND_FROM;
+  const registryDefs = [
+    ...builtinTools({ sendFrom: sendFrom ?? "" }),
+    ...hostTools(),
+  ];
+  setSessionToolRegistry(
+    createRegistry(sendFrom === undefined ? registryDefs.filter((def) => def.name !== "send") : registryDefs),
+  );
+
   const concurrency = Math.max(1, env.RUNTIME_CONCURRENCY ?? 4);
   const queue = env.RUNTIME_DATABASE_URL
     ? new PgQueue({
@@ -414,6 +509,7 @@ export async function startRuntime(env: RuntimeEnv, opts: { worker?: boolean } =
           personality: schema.agents.personality,
           summary: schema.agents.summary,
           model: schema.agents.model,
+          tools: schema.agents.tools,
           workspace: schema.agents.workspace,
         })
         .from(schema.agents)
@@ -425,6 +521,8 @@ export async function startRuntime(env: RuntimeEnv, opts: { worker?: boolean } =
             .map((file) => file.body.trim())
             .filter((body) => body !== "")
             .join("\n\n");
+          // T14: the definition layer rides the row — name and policy only.
+          const tools = (row.tools ?? []).map(({ name, policy }) => ({ name, policy }));
           return {
             id: row.id,
             name: row.name,
@@ -433,6 +531,7 @@ export async function startRuntime(env: RuntimeEnv, opts: { worker?: boolean } =
             ...(row.personality !== "" ? { personality: row.personality } : {}),
             ...(row.summary !== "" ? { summary: row.summary } : {}),
             ...(row.model !== "" ? { model: row.model } : {}),
+            ...(tools.length > 0 ? { tools } : {}),
           };
         }),
       );
@@ -451,7 +550,7 @@ export async function startRuntime(env: RuntimeEnv, opts: { worker?: boolean } =
           runWorker({
             store,
             queue,
-            ports: workerPorts(env, live, proposals, store),
+            ports: workerPorts(env, live, proposals, store, vault),
             workerId: `fabric-runtime-${process.pid}-${index}-${randomUUID().slice(0, 8)}`,
             signal: signal.signal,
             pollIntervalMs: 200,
@@ -470,6 +569,7 @@ export async function startRuntime(env: RuntimeEnv, opts: { worker?: boolean } =
     store,
     queue,
     live,
+    vault,
     ...(proposals !== undefined ? { proposals } : {}),
     stop: async () => {
       if (stopped) return;

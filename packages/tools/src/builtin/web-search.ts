@@ -31,7 +31,10 @@ export const webSearchTool = () =>
       let key: string | undefined;
       try {
         key = await ctx.scope.secret?.("exa");
-      } catch {
+      } catch (error) {
+        // A denial is actionable — surface it named, never with the value (T14 J9).
+        // Duck-typed by name: W12 keeps the vault out of the builtin layer's imports.
+        if (error instanceof Error && error.name === "VaultDenied") throw error;
         key = undefined;
       }
       if (key === undefined) throw new Error("web search is not configured (vault: exa)");

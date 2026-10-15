@@ -5,10 +5,18 @@
 // `recallFacts` body unchanged) and, when the deps carry the proposal store, the
 // `propose_*` tools (effect `idempotent`, bodies in ./proposals).
 import type { ToolDescriptor, ToolPort, ToolRunResult } from "@fabric/runtime";
+import type { ToolRegistry, ToolScope } from "@fabric/tools";
 import type { ToolSchema } from "./definition";
 import { RECALL_TOOL } from "./definition";
 import { PROPOSAL_TOOL_SCHEMAS, PROPOSE_TOOLS, runProposeTool, type ProposalLoopDeps } from "./proposals";
 import { BRIDGE_TOOLS, BRIDGE_TOOL_SCHEMAS, runBridgeTool, type SessionBridgeEngines } from "./bridges";
+
+/** The registry seam (T14): the server's tool registry plus the scope factory
+ * a session call is bound through. Absent = no registry tools on the port. */
+export type SessionToolRegistry = {
+  tools: ToolRegistry;
+  scope(io: { workspaceId: string; streamId: string; agentId: string; callId?: string }): Promise<ToolScope>;
+};
 
 export type SessionToolDeps = {
   /** The recall body, injected: the production adapter is today's
@@ -20,6 +28,9 @@ export type SessionToolDeps = {
   /** The legacy-engine bridges (S8b): `handoff_to_team` and `browser_task` as
    * `once` tool.exec. Absent = no bridge tools on the port. */
   bridges?: SessionBridgeEngines;
+  /** The tool registry (T14): the step-0 and host tools behind their scopes.
+   * Absent = the port serves the session tools only. */
+  registry?: SessionToolRegistry;
 };
 
 /** The session ToolPort: `recall` plus, when wired, the proposal writers and
@@ -46,12 +57,38 @@ export function sessionTools(deps: SessionToolDeps): ToolPort {
   }
 
   return {
-    async run(name, args, io = {}): Promise<ToolRunResult> {
+    async run(
+      name: string,
+      args: Record<string, unknown>,
+      io: {
+        onLine?: (line: string) => void;
+        callId?: string;
+        streamId?: string;
+        /** R14: the lease's workspace and the folded session agent. */
+        workspaceId?: string;
+        agentId?: string;
+      } = {},
+    ): Promise<ToolRunResult> {
       if (deps.bridges !== undefined && (BRIDGE_TOOLS as readonly string[]).includes(name)) {
         return runBridgeTool(name, args, io, deps.bridges);
       }
       if (deps.proposals !== undefined && (PROPOSE_TOOLS as readonly string[]).includes(name)) {
         return runProposeTool(name, args, io, deps.proposals);
+      }
+      // T14: a registry tool runs behind the scope the caller's factory builds —
+      // the session's identity, no store read. No agentId, no call.
+      const registry = deps.registry;
+      if (registry !== undefined && registry.tools.get(name) !== undefined) {
+        if (io.agentId === undefined || io.agentId === "") {
+          return { ok: false, error: "session tools need the session's agent" };
+        }
+        const scope = await registry.scope({
+          workspaceId: io.workspaceId ?? "",
+          streamId: io.streamId ?? "",
+          agentId: io.agentId,
+          callId: io.callId,
+        });
+        return registry.tools.toolPort(scope).run(name, args, { onLine: io.onLine, callId: io.callId });
       }
       if (name !== "recall") return { ok: false, error: `unknown session tool: ${name}` };
       const query = typeof args.query === "string" ? args.query : "";
@@ -63,8 +100,20 @@ export function sessionTools(deps: SessionToolDeps): ToolPort {
         return { ok: false, error: error instanceof Error ? error.message : String(error) };
       }
     },
-    describe: (name) => descriptors[name],
+    // the session descriptors first, then the registry's (metas give the effect)
+    describe: (name) =>
+      descriptors[name] ?? registryDescriptor(name, deps.registry),
   };
+}
+
+/** The registry half of `describe`: the declaration plus the effect, or
+ * undefined for a name the registry does not carry. */
+function registryDescriptor(name: string, registry: SessionToolRegistry | undefined): ToolDescriptor | undefined {
+  if (registry === undefined || registry.tools.get(name) === undefined) return undefined;
+  const meta = registry.tools.meta(name);
+  const model = registry.tools.modelTools([name])[0];
+  if (meta === undefined || model === undefined) return undefined;
+  return { name: model.name, effect: meta.effect, description: model.description, parameters: model.parameters };
 }
 
 /** Re-exported so the server wiring and the tests agree on one declaration. */
