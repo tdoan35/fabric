@@ -26,6 +26,7 @@ const BUILD_HINT = "npm run sandbox:build -w @fabric/tools";
 
 interface FakeContainer {
   id: string;
+  name?: string;
   labels: Record<string, string>;
   argv: string[];
 }
@@ -155,6 +156,20 @@ test("the egress gateway container is ensured once per provider and removed by s
 
   await provider.stopAll();
   expect((await fakeState()).containers).toEqual([]);
+});
+
+test("a dead gateway is replaced on the next acquire of a live sandbox", async () => {
+  const provider = dockerSandboxes({ image: IMAGE, docker: SHIM, egress: { instance: "t1" } });
+  await provider.acquire({ workspaceId: "w", agentId: "a", mounts: [] });
+
+  // The gateway dies without the provider noticing (E8: `docker rm -f`); the
+  // next acquire — even a cache hit for a live sandbox — must replace it.
+  spawnSync(SHIM, ["rm", "-f", "fabric-egress-t1"], { stdio: "ignore" });
+  await provider.acquire({ workspaceId: "w", agentId: "a", mounts: [] });
+
+  const gateways = (await fakeState()).containers.filter((container) => container.labels["fabric.egress"] === "1");
+  expect(gateways).toHaveLength(1);
+  expect(gateways[0]?.name).toBe("fabric-egress-t1");
 });
 
 test("exec streams lines as they arrive and reports them in the tail", async () => {

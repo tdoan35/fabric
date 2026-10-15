@@ -176,14 +176,16 @@ docker("D5 a timed-out exec is killed inside the container within 3s", async () 
   expect(procs.filter((line) => line.includes("sleep 30"))).toEqual([]);
 });
 
-docker("D6 no network inside; the process runs as uid 1000", async () => {
+docker("D6 no direct route out; egress only through the proxy; the process runs as uid 1000", async () => {
   const sandbox = await acquire("researcher");
 
-  const curl = await sandbox.exec("curl -sS https://example.com");
-  expect(curl.exitCode).not.toBe(0);
-
-  const getent = await sandbox.exec("getent hosts example.com");
-  expect(getent.exitCode).not.toBe(0);
+  // T18 moved the sandbox onto the internal `fabric-sbx` network (E1): the
+  // proxy env routes egress, and without it there is no route (E3's check,
+  // from the D-suite side). A direct curl must fail; the uid stays 1000.
+  const direct = await sandbox.exec("curl -sS -o /dev/null --noproxy '*' --max-time 8 https://example.com", {
+    timeoutMs: 15_000,
+  });
+  expect(direct.exitCode).not.toBe(0);
 
   const id = await sandbox.exec("id -u");
   expect(id.exitCode).toBe(0);

@@ -131,6 +131,8 @@ class DockerSandbox implements Sandbox {
       let settled = false;
       let failsafe: NodeJS.Timeout | undefined;
       let timeout: NodeJS.Timeout | undefined;
+      /** Resolves when the container-side kill has run (or given up). */
+      let killed = Promise.resolve();
       const settle = (fn: () => void): void => {
         if (settled) return;
         settled = true;
@@ -165,11 +167,15 @@ class DockerSandbox implements Sandbox {
             this.id,
             "bash",
             "-c",
-            `P=\$(cat ${pidfile} 2>/dev/null); [ -n "\$P" ] && kill -KILL -- "-\$P"\ntrue`,
+            `for i in 1 2 3 4 5 6 7 8 9 10; do P=\$(cat ${pidfile} 2>/dev/null); [ -n "\$P" ] && kill -KILL -- "-\$P" && break; sleep 0.1; done; true`,
           ],
           { stdio: "ignore" }
         );
-        killer.on("error", () => {}); // the failsafe below still closes the stream
+        killed = new Promise<void>((done) => {
+          const fin = (): void => done();
+          killer.on("exit", fin);
+          killer.on("error", fin);
+        });
       };
 
       if (options.timeoutMs !== undefined) {
@@ -189,7 +195,16 @@ class DockerSandbox implements Sandbox {
       });
       // close (not exit): the pipes have drained, so the tail is complete.
       child.on("close", (code) => {
-        settle(() => resolve({ exitCode: code, timedOut, tail }));
+        const finish = (): void => settle(() => resolve({ exitCode: code, timedOut, tail }));
+        if (!timedOut) return finish();
+        // A timed-out result implies the kill landed: an immediate follow-up
+        // exec (or the no-survivor assertions) races a fire-and-forget killer
+        // otherwise. Bounded — the failsafe below is the real wedged-daemon cap.
+        const bail = setTimeout(finish, 1_500);
+        void killed.then(() => {
+          clearTimeout(bail);
+          finish();
+        });
       });
     });
   }
@@ -288,12 +303,15 @@ export function dockerSandboxes(options: DockerSandboxOptions = {}): SandboxProv
   };
 
   return {
-    acquire(request: SandboxAcquireRequest): Promise<Sandbox> {
+    async acquire(request: SandboxAcquireRequest): Promise<Sandbox> {
       const key = `${request.workspaceId}/${request.agentId}`;
       const existing = live.get(key);
       if (existing !== undefined) {
         existing.touch();
-        return Promise.resolve(existing);
+        // The gateway can die while the sandbox lives (E8): every acquire,
+        // cache hit included, replaces a dead gateway before returning.
+        await ensureEgressGateway({ image, docker, ...options.egress, instance: options.egress?.instance ?? egressInstance }).catch(() => {});
+        return existing;
       }
       const inflight = pending.get(key);
       if (inflight !== undefined) return inflight;

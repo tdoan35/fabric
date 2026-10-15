@@ -195,7 +195,11 @@ docker("E6 the broker route forwards method, path and the egress token to the br
   await new Promise<void>((resolve) => broker.listen(0, brokerHost, resolve));
   try {
     const sandbox = await acquireWith("e6", { brokerPort: (broker.address() as AddressInfo).port });
-    const body = await sandbox.exec("curl -sS --max-time 20 -H 'FABRIC_EGRESS_TOKEN: tok-123' http://egress-e6/ping", {
+    // --noproxy: the env's NO_PROXY exempts the shared `egress` name only, and
+    // the per-instance alias resolves to the gateway's own (private) address —
+    // proxied, the request would be refused 403 like any private target. The
+    // broker route is a direct :80 hit by construction.
+    const body = await sandbox.exec("curl -sS --noproxy '*' --max-time 20 -H 'FABRIC_EGRESS_TOKEN: tok-123' http://egress-e6/ping", {
       timeoutMs: 25_000,
     });
     expect(body.exitCode).toBe(0);

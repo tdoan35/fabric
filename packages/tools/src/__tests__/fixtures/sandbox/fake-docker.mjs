@@ -6,7 +6,7 @@
 // labels, mounts, env), `ps` filters on labels, `rm` drops containers, and
 // `exec` runs the command argv as a real local process — the "container
 // filesystem" is whatever directories the test mounts.
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { dirname } from "node:path";
 
@@ -22,7 +22,12 @@ const load = () => {
 };
 const save = (state) => {
   mkdirSync(dirname(statePath), { recursive: true });
-  writeFileSync(statePath, `${JSON.stringify(state, null, 2)}\n`);
+  // Atomic rename: concurrent `load()` (every invocation's top level, outside
+  // the mutation lock) must never see a half-written file — a truncated read
+  // crashes the shim and silently drops e.g. one half of a parallel `rm`.
+  const tmp = `${statePath}.${process.pid}.tmp`;
+  writeFileSync(tmp, `${JSON.stringify(state, null, 2)}\n`);
+  renameSync(tmp, statePath);
 };
 
 // The provider removes containers concurrently (reap, stopAll), so state
