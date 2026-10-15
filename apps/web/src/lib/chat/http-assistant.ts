@@ -1,45 +1,48 @@
-// Dana on the real server: POST /api/chat {sessionId, messages} through lib/api and
-// read the NDJSON stream. Each line is a cumulative snapshot of the assistant message, so it replaces
-// the content. The human-tool flow is unchanged: a card's addResult stamps {decision} on its part and
-// starts the next run, which re-sends the thread with the result; the server diffs it against its own copy.
-import type { ChatModelAdapter, ThreadMessage } from "@assistant-ui/react";
-import type { ChatPart } from "@fabric/contracts";
-import { httpApi } from "@/lib/api";
-import { mockAssistant, mockContext } from "@/lib/mock/chat";
-import { takeFixture } from "./fixture";
-import { modelChoiceFields } from "./model-choice";
-import { markSent, toRuntimePart } from "./session";
+// The chat adapter, on the session protocol (RUNTIME §13): the turn is one
+// `sessionTurn` — post the message, then follow the stream, relaying the
+// provisional text as it grows and the projected assistant message once the
+// turn's `agent.message` lands. The transport is `api`, so the same adapter
+// serves the real server and the in-memory mock; the human-tool flow is
+// unchanged: a card's addResult stamps {decision} on its part and starts the
+// next run, whose turn the server decides from the log.
+import type { ChatModelAdapter } from "@assistant-ui/react";
+import { api } from "@/lib/api";
+import { chatAgentContext, sessionTurn } from "./session-stream";
+import { markSent, toRuntimeParts } from "./session";
 
-/** The thread as the server reads it: text and tool-call parts only. */
-export function toWire(messages: readonly ThreadMessage[]) {
-  return messages.map((m) => ({
-    role: m.role,
-    content: m.content.flatMap((p): ChatPart[] => {
-      if (p.type === "text") return [{ type: "text", text: p.text }];
-      if (p.type === "tool-call") {
-        return [{ type: "tool-call", toolCallId: p.toolCallId, toolName: p.toolName, args: p.args, ...(p.result !== undefined ? { result: p.result } : {}) }];
-      }
-      return [];
-    }),
-  }));
-}
+/** The turn's text: the last user message's words (the server has the history). */
+type RunMessage = { role: string; content: readonly { type: string; text?: string }[] };
+const turnText = (messages: readonly RunMessage[]): string => {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const message = messages[i]!;
+    if (message.role !== "user") continue;
+    return message.content.flatMap((part) => (part.type === "text" && part.text ? [part.text] : [])).join(" ").trim();
+  }
+  return "";
+};
 
 export function httpAssistant(sessionId: string, opts: { incognito?: boolean } = {}): ChatModelAdapter {
   return {
     async *run(options) {
-      // Phase 1 serves Dana only: direct and team chats with anyone else keep the mock placeholder.
-      if (mockContext.agent !== "Dana") {
-        yield* mockAssistant.run(options) as AsyncGenerator<{ content: never[] }>;
-        return;
-      }
-      const fixture = takeFixture();
+      // A turn went out on this thread: its history lives on the server now.
       markSent(sessionId);
-      let any = false;
-      for await (const line of httpApi.chat({ sessionId, messages: toWire(options.messages), ...modelChoiceFields(), ...(opts.incognito ? { incognito: true } : {}), ...(fixture ? { fixture: true } : {}) }, options.abortSignal)) {
-        any = true;
-        yield { content: line.content.map(toRuntimePart) };
+      const messages = options.messages as readonly RunMessage[];
+      const last = messages.at(-1);
+      // A run whose last message is the assistant's is the human-tool
+      // continuation: the card stamped {decision} on its part, and the stamp
+      // rides the post's attachments (free-form per the contract) for the
+      // mock brain; the server's own decision path is the proposals endpoint.
+      const continuation = last?.role === "assistant" ? { role: last.role, content: last.content } : undefined;
+      const turn = sessionTurn(sessionId, {
+        text: turnText(messages),
+        attachments: continuation ? [continuation] : undefined,
+        agentId: chatAgentContext.id,
+        incognito: opts.incognito,
+        signal: options.abortSignal,
+      });
+      for await (const step of turn) {
+        yield { content: toRuntimeParts(step.content) } as never;
       }
-      if (!any) throw new Error("Dana didn't answer. Send it again, or press Ctrl+Shift+F for scripted Dana.");
-    },
+    }
   };
 }

@@ -11,10 +11,11 @@ import { useTabs } from "@/components/shell/tabs";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { Button } from "@/components/ui/button";
 import { SidebarTrigger } from "@/components/ui/sidebar";
-import { mockAssistant, mockContext } from "@/lib/mock/chat";
+import { mockContext } from "@/lib/mock/chat";
 import { httpMode } from "@/lib/api";
 import { httpAssistant } from "@/lib/chat/http-assistant";
-import { fetchHistory, toRuntimePart } from "@/lib/chat/session";
+import { chatAgentContext, knownSessionId, onStreamChange, peekStream } from "@/lib/chat/session-stream";
+import { fetchHistory, toRuntimePart, toRuntimeParts } from "@/lib/chat/session";
 import { onSessionMessage } from "@/lib/chat/events";
 import { useSessionDesktop } from "@/lib/chat/desktop";
 import type { SessionDesktop } from "@/lib/chat/events";
@@ -308,7 +309,7 @@ export function AssistantThread({ sessionId, initialMessages, agentIndex, onAgen
     dictation: WebSpeechDictationAdapter.isSupported() ? new WebSpeechDictationAdapter() : undefined,
   }), []);
   // Incognito threads tell the server, which skips personal-memory recall (PRODUCT §10.7).
-  const chatModel = useMemo(() => (httpMode ? httpAssistant(sessionId, { incognito }) : mockAssistant), [sessionId, incognito]);
+  const chatModel = useMemo(() => httpAssistant(sessionId, { incognito }), [sessionId, incognito]);
   const runtime = useLocalRuntime(chatModel, { adapters, initialMessages, unstable_humanToolNames: ["propose_team", "propose_specialist", "confirm_browser"] });
   return (
     <AssistantRuntimeProvider runtime={runtime}>
@@ -342,6 +343,65 @@ function useLiveResults(sessionId: string) {
   }, [aui, sessionId]);
 }
 
+/**
+ * Background stream updates — a turn orphaned by a remount, results, another
+ * device — appended onto the idle thread (a running adapter owns the thread's
+ * content, so while one is in flight this does nothing). The runtime's
+ * message repository upserts by id: the load-laid messages carry the
+ * projection's ids, so a re-appended provisional grows in place and a fresh
+ * `agent.message` lands once; the provisional it supersedes is then removed.
+ * Counts gate everything, so a thread a run has carried never gets doubles.
+ */
+function useStreamResync(sessionId: string) {
+  const aui = useAui();
+  useEffect(() => {
+    let alive = true;
+    const isDelta = (id: unknown): boolean => typeof id === "string" && id.startsWith("delta:");
+    const apply = (): void => {
+      const serverId = knownSessionId(sessionId);
+      const stream = serverId ? peekStream(serverId) : undefined;
+      if (!stream) return;
+      void stream.ready
+        .then(() => {
+          if (!alive) return;
+          const thread = aui.thread();
+          const shown = thread.getState().messages;
+          if (thread.getState().isRunning) return; // read again inside the async continuation
+          const shownReal = shown.filter((message) => !isDelta(message.id));
+          const completed = stream.state.messages.filter((message) => !message.provisional);
+          if (shownReal.length > completed.length) return; // the runtime is ahead: a run carried it
+          const last = stream.state.messages.at(-1);
+          if (last?.provisional && shownReal.length === completed.length && isDelta(shown.at(-1)?.id)) {
+            // The turn still streams: grow the provisional in place, by id.
+            void thread.append({
+              id: last.id,
+              role: last.role,
+              content: toRuntimeParts(last.content),
+              createdAt: new Date(last.createdAt),
+              startRun: false,
+            } as never);
+          }
+          if (shownReal.length === completed.length) return;
+          for (const message of completed.slice(shownReal.length)) {
+            void thread.append({
+              id: message.id,
+              role: message.role,
+              content: toRuntimeParts(message.content),
+              createdAt: new Date(message.createdAt),
+              startRun: false,
+            } as never);
+          }
+          // The grown-in-place provisional is superseded by the final that just landed.
+          for (const message of shown) {
+            if (isDelta(message.id)) void thread.deleteMessage(message.id);
+          }
+        })
+        .catch(() => {});
+    };
+    return onStreamChange(sessionId, apply);
+  }, [aui, sessionId]);
+}
+
 /** Ctrl+Shift+F arms scripted Dana for the next turn (RUN-12); http mode only — mock mode is all scripted. */
 function useFixtureHotkey() {
   useEffect(() => {
@@ -367,6 +427,7 @@ function ThreadBody({ sessionId, agentIndex, onAgentChange, onBackToDana, incogn
   incognito: boolean; setIncognito: Dispatch<SetStateAction<boolean>>;
 }) {
   useLiveResults(sessionId);
+  useStreamResync(sessionId);
   useFixtureHotkey();
   const started = useAuiState((st) => !st.thread.isEmpty);
   useRegistry();
@@ -416,7 +477,11 @@ function ThreadBody({ sessionId, agentIndex, onAgentChange, onBackToDana, incogn
     if (sideOpen && sideTab === "agent") setSideOpen(false);
     else { setLastTab("agent"); setSideOpen(true); }
   };
-  useEffect(() => { mockContext.agent = agent.name; }, [agent.name]);
+  useEffect(() => {
+    mockContext.agent = agent.name;
+    // The session adapter reads the agent at run time (the chatAgentContext seam).
+    chatAgentContext.id = agent.id;
+  }, [agent.name, agent.id]);
 
   return (
     <ThreadPrimitive.Root className="@container/thread relative flex h-full min-h-0">
