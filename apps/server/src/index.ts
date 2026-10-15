@@ -8,6 +8,7 @@ import { warmEmbedder } from "@fabric/agents/memory";
 import { chat } from "./routes/chat";
 import { dev } from "./routes/dev";
 import { memory } from "./routes/memory";
+import { mcp } from "./routes/mcp";
 import { registry } from "./routes/registry";
 import { reports } from "./routes/reports";
 import { runs } from "./routes/runs";
@@ -32,7 +33,8 @@ const api = new Hono()
   .route("/", stream)
   .route("/", chat)
   .route("/", sessions)
-  .route("/", skills);
+  .route("/", skills)
+  .route("/", mcp);
 
 if (process.env.NODE_ENV !== "production") api.route("/", dev);
 
