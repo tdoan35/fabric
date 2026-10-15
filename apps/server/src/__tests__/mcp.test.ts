@@ -14,14 +14,14 @@ import { Hono } from "hono";
 import { ensureMcpSchema, mcpServers } from "@fabric/tools/mcp";
 import type { SpecialistAgent } from "@fabric/agents/session";
 import {
-  getRuntime,
-  RUNTIME_WORKSPACE,
   sessionTurnDefinition,
   setRuntime,
   setSessionAgents,
+  setSessionMcp,
   setSessionSkills,
   setSessionToolRegistry,
   startRuntime,
+  RUNTIME_WORKSPACE,
   workerPorts,
   type FabricRuntime,
   type RuntimeEnv,
@@ -69,15 +69,16 @@ type StampedDef = {
 const stamp = async (agentId: string): Promise<StampedDef> =>
   (await sessionTurnDefinition(agentId)) as StampedDef;
 
-let dataDir: string | undefined;
 let rt: FabricRuntime | undefined;
 let env: RuntimeEnv | undefined;
+let dataDir: string | undefined;
 let fixture: TestMcpServer | undefined;
 
 afterEach(async () => {
   setRuntime(undefined);
   setSessionToolRegistry(undefined);
   setSessionSkills(undefined);
+  setSessionMcp(undefined);
   setSessionAgents([]);
   if (rt) await rt.stop();
   rt = undefined;
@@ -110,9 +111,10 @@ const boot = async (): Promise<ReturnType<typeof mcpServers>> => {
 /** The worker's tool port, as the decide loop would call it. */
 const toolPort = () => {
   const runtime = rt!;
-  return workerPorts(env!, new InProcessLiveBus(), undefined, runtime.store, runtime.vault).tools;
+  const ports = workerPorts(env!, new InProcessLiveBus(), undefined, runtime.store, runtime.vault);
+  if (ports.tools === undefined) throw new Error("no tool port in this fixture");
+  return ports.tools;
 };
-
 const runTool = (name: string, args: Record<string, unknown>) =>
   toolPort().run(name, args, {
     agentId: "researcher",
@@ -172,7 +174,7 @@ test("Y2 an agent with no attachments gets no mcp_* tools and the server's count
   // the control: a ready server attached to researcher does stamp its tools
   await servers.attach("local", "researcher");
   const some = await stamp("researcher");
-  expect((some.tools ?? []).toContain("mcp_local_lookup")).toBe(true);
+  expect(some.tools ?? []).toContain("mcp_local_lookup");
 },
 30_000,
 );

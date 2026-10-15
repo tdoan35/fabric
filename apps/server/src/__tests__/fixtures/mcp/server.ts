@@ -72,24 +72,34 @@ export async function startTestMcpServer(
 ): Promise<TestMcpServer> {
   const tools = options.tools ?? [LOOKUP, CREATE, UPSERT];
   const methods = new Map<string, number>();
-  const server = new Server({ name: "fabric-m6-test", version: "1.0.0" }, { capabilities: { tools: {} } });
-
-  server.setRequestHandler("tools/list", async () => ({ tools: tools.map((entry) => entry.tool) }));
-  server.setRequestHandler("tools/call", async (request) => {
-    const entry = tools.find((candidate) => candidate.tool.name === request.params.name);
-    if (entry === undefined) {
-      return { content: [{ type: "text", text: `no tool ${request.params.name}` }], isError: true };
-    }
-    const args = (request.params.arguments ?? {}) as Record<string, unknown>;
-    return entry.handler === undefined
-      ? { content: [{ type: "text", text: JSON.stringify(args) }] }
-      : entry.handler(args);
-  });
-  const transport = new WebStandardStreamableHTTPServerTransport({
-    sessionIdGenerator: () => randomUUID(),
-    enableJsonResponse: true,
-  });
-  await server.connect(transport);
+  const authorizations: (string | undefined)[] = [];
+  // One (server, transport) pair per MCP session: a new client initializes
+  // into its own session, so every stamp and every run is a fresh protocol
+  // conversation over the same counted fixture.
+  const sessions = new Map<string, { server: Server; transport: WebStandardStreamableHTTPServerTransport }>();
+  function newSession(): { server: Server; transport: WebStandardStreamableHTTPServerTransport } {
+    const server = new Server({ name: "fabric-m6-test", version: "1.0.0" }, { capabilities: { tools: {} } });
+    server.setRequestHandler("tools/list", async () => ({ tools: tools.map((entry) => entry.tool) }));
+    server.setRequestHandler("tools/call", async (request) => {
+      const entry = tools.find((candidate) => candidate.tool.name === request.params.name);
+      if (entry === undefined) {
+        return { content: [{ type: "text", text: `no tool ${request.params.name}` }], isError: true };
+      }
+      const args = (request.params.arguments ?? {}) as Record<string, unknown>;
+      return entry.handler === undefined
+        ? { content: [{ type: "text", text: JSON.stringify(args) }] }
+        : entry.handler(args);
+    });
+    const transport = new WebStandardStreamableHTTPServerTransport({
+      sessionIdGenerator: () => randomUUID(),
+      enableJsonResponse: true,
+      onsessioninitialized: (id) => {
+        sessions.set(id, session);
+      },
+    });
+    const session = { server, transport };
+    return session;
+  }
 
   async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> {
     const chunks: Buffer[] = [];
@@ -105,6 +115,12 @@ export async function startTestMcpServer(
       }
     }
     authorizations.push(req.headers.authorization);
+    const sessionId = req.headers["mcp-session-id"];
+    let session = typeof sessionId === "string" ? sessions.get(sessionId) : undefined;
+    if (session === undefined) {
+      session = newSession();
+      await session.server.connect(session.transport);
+    }
 
     const headers = new Headers();
     for (const [name, value] of Object.entries(req.headers)) {
@@ -119,7 +135,7 @@ export async function startTestMcpServer(
       body: body.length > 0 ? body : undefined,
       signal: abort.signal,
     });
-    const response = await transport.handleRequest(request);
+    const response = await session.transport.handleRequest(request);
     res.writeHead(response.status, Object.fromEntries(response.headers));
     if (response.body === null) {
       res.end();
@@ -154,7 +170,7 @@ export async function startTestMcpServer(
     calls: (method) => methods.get(method) ?? 0,
     authorizations: () => [...authorizations],
     async close() {
-      await server.close();
+      await Promise.all([...sessions.values()].map((open) => open.server.close()));
       http.closeAllConnections();
       await new Promise<void>((resolve) => http.close(() => resolve()));
     },

@@ -20,6 +20,14 @@ import { createRegistry } from "@fabric/tools";
 import { builtinTools } from "@fabric/tools/builtin";
 import { hostTools } from "@fabric/tools/host";
 import {
+  ensureMcpSchema,
+  mcpClient,
+  mcpOAuth,
+  mcpServers,
+  type McpOAuth,
+  type McpServers,
+} from "@fabric/tools/mcp";
+import {
   encryptedTableVault,
   ensureVaultSchema,
   envFallbackVault,
@@ -35,6 +43,7 @@ import {
   definitionAccess,
   danaSessionDef,
   legacyBridges,
+  mcpToolRunner,
   specialistSessionDef,
   sessionTools,
   SKILL_TOOL_DEFAULTS,
@@ -42,9 +51,10 @@ import {
   withSessionContext,
   withSkillsIndex,
   withToolset,
+  withMcpTools,
   type SessionBridgeEngines,
 } from "@fabric/agents/session";
-import type { ProposalActions, SpecialistAgent } from "@fabric/agents/session";
+import type { McpSessionDeps, ProposalActions, SpecialistAgent } from "@fabric/agents/session";
 import { recallFacts } from "@fabric/agents/assistant";
 import { InProcessLiveBus, type LiveBus } from "./live-bus";
 import { createTestModelPort, type TestModelOptions } from "./test-model";
@@ -94,6 +104,9 @@ export type FabricRuntime = {
   /** The skills store (M3): the imported skills behind the tools, the index
    * stamp and the import route, on this runtime's store. */
   skills: SkillsStore;
+  /** The MCP wiring (M6): the workspace's servers and OAuth — M7's routes
+   * take over from here; the stamp and the run hook read the seam. */
+  mcp: { servers: McpServers; oauth: McpOAuth };
   /** Drains the workers, then closes queue and store. Idempotent. */
   stop: () => Promise<void>;
 };
@@ -165,6 +178,14 @@ export async function sessionTurnDefinition(
     stamped = withToolset(def as never, { registry, access }) as Record<string, unknown>;
   }
 
+  // M6: the attached ready MCP servers join the stamp — discovered tools as
+  // fresh `mcp_<server>_` names (no collision with the static set), access
+  // from the attachment. A server that cannot be discovered is skipped with
+  // its status set: creating a session never fails because of MCP.
+  if (sessionMcp !== undefined) {
+    stamped = (await withMcpTools(stamped as never, agentId, sessionMcp)) as Record<string, unknown>;
+  }
+
   // M3: the skills index on the system prompt — role `dana` for Dana,
   // `specialist` for everyone else; empty index (or placeholder def) is the
   // identity, so the byte-stability of a skills-less stamp stands.
@@ -211,6 +232,18 @@ let sessionSkills: SkillsStore | undefined;
  * installs the runtime's store; tests install their own (or `undefined`). */
 export function setSessionSkills(skills: SkillsStore | undefined): void {
   sessionSkills = skills;
+}
+
+// The MCP session deps (M6): the workspace's server records, the client
+// factory (OAuth's fetchFor for oauth servers) and the scope factory, as the
+// stamp's withMcpTools and the port's mcpToolRunner need them. Unset — the
+// unit tests — no mcp_* tools are stamped or run.
+let sessionMcp: McpSessionDeps | undefined;
+
+/** The MCP seam, `setSessionSkills`'s twin: `startRuntime` installs the
+ * workspace's servers; tests install their own (or `undefined`). */
+export function setSessionMcp(deps: McpSessionDeps | undefined): void {
+  sessionMcp = deps;
 }
 
 /** M3: the import route's 404 gate — an id is unknown only under a loaded
@@ -299,6 +332,7 @@ export function workerPorts(
       ...(sessionToolRegistry !== undefined
         ? { registry: { tools: sessionToolRegistry, scope: sessionToolScopeOf(env, vault) } }
         : {}),
+      ...(sessionMcp !== undefined ? { mcp: mcpToolRunner(sessionMcp) } : {}),
     }),
     surface: {
       send: async () => ({}),
@@ -517,6 +551,27 @@ export async function startRuntime(env: RuntimeEnv, opts: { worker?: boolean } =
     createRegistry(sendFrom === undefined ? registryDefs.filter((def) => def.name !== "send") : registryDefs),
   );
 
+  // M6: the workspace's MCP servers — connect once per workspace, attach per
+  // agent. ensureMcpSchema is M4's idempotent DDL; the deps the stamp's
+  // withMcpTools and the port's mcpToolRunner read go through the seam, and
+  // M7's routes take over from `runtime.mcp`.
+  await ensureMcpSchema(store);
+  const servers = mcpServers(store, RUNTIME_WORKSPACE);
+  const oauth = mcpOAuth({ servers, vault, store, workspaceId: RUNTIME_WORKSPACE });
+  setSessionMcp({
+    servers,
+    clientFor: async (server, agentId) => {
+      const record = await servers.get(server);
+      if (record === undefined) throw new Error(`unknown mcp server ${server}`);
+      return mcpClient({
+        url: record.url,
+        ...(record.auth === "oauth" ? { fetch: oauth.fetchFor(server, agentId) } : {}),
+      });
+    },
+    scope: sessionToolScopeOf(env, vault),
+    log: (line) => console.log(line),
+  });
+
   const concurrency = Math.max(1, env.RUNTIME_CONCURRENCY ?? 4);
   const queue = env.RUNTIME_DATABASE_URL
     ? new PgQueue({
@@ -623,6 +678,7 @@ export async function startRuntime(env: RuntimeEnv, opts: { worker?: boolean } =
     live,
     vault,
     skills,
+    mcp: { servers, oauth },
     ...(proposals !== undefined ? { proposals } : {}),
     stop: async () => {
       if (stopped) return;
@@ -632,6 +688,9 @@ export async function startRuntime(env: RuntimeEnv, opts: { worker?: boolean } =
       await queue.close();
       await store.close();
       await appDb?.close();
+      // M6: the seam's servers sit on this store; a closed store must not
+      // serve another boot's stamps.
+      setSessionMcp(undefined);
     },
   };
   setRuntime(runtime);

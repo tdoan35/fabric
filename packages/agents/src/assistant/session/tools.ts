@@ -9,7 +9,9 @@ import type { ToolRegistry, ToolScope } from "@fabric/tools";
 import type { ToolSchema } from "./definition";
 import { RECALL_TOOL } from "./definition";
 import { PROPOSAL_TOOL_SCHEMAS, PROPOSE_TOOLS, runProposeTool, type ProposalLoopDeps } from "./proposals";
+import type { SessionMcpRunner } from "./mcp";
 import { BRIDGE_TOOLS, BRIDGE_TOOL_SCHEMAS, runBridgeTool, type SessionBridgeEngines } from "./bridges";
+
 
 /** The registry seam (T14): the server's tool registry plus the scope factory
  * a session call is bound through. Absent = no registry tools on the port. */
@@ -31,6 +33,10 @@ export type SessionToolDeps = {
   /** The tool registry (T14): the step-0 and host tools behind their scopes.
    * Absent = the port serves the session tools only. */
   registry?: SessionToolRegistry;
+  /** The MCP run hook (M6): resolves the dynamic `mcp_*` names the static
+   * registry doesn't carry — serverOfToolName, the discovery cache, a
+   * one-def registry port. Absent = no MCP tools on the port. */
+  mcp?: SessionMcpRunner;
 };
 
 /** The session ToolPort: `recall` plus, when wired, the proposal writers and
@@ -89,6 +95,12 @@ export function sessionTools(deps: SessionToolDeps): ToolPort {
           callId: io.callId,
         });
         return registry.tools.toolPort(scope).run(name, args, { onLine: io.onLine, callId: io.callId });
+      }
+      // M6: a dynamic mcp_* name resolves through the MCP hook; undefined
+      // lets the port's own tools (recall) answer below.
+      if (deps.mcp !== undefined) {
+        const resolved = await deps.mcp(name, args, io);
+        if (resolved !== undefined) return resolved;
       }
       if (name !== "recall") return { ok: false, error: `unknown session tool: ${name}` };
       const query = typeof args.query === "string" ? args.query : "";
