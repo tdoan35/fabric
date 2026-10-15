@@ -1,80 +1,65 @@
-// Chat with Dana over the real server. Mirrors apps/web/src/lib/api/http.ts
-// `chatStream` and apps/web/src/lib/chat/http-assistant.ts `toWire`: POST /api/chat with
-// ChatRequestSchema, NDJSON where every line is a CUMULATIVE snapshot of the assistant message —
-// replace the in-progress message, never append. The fetch implementation is injected (expo/fetch
-// in the app; RN's global fetch can't stream response bodies), so scripts/chat-smoke.mts drives
-// this exact generator headlessly under node.
-import type { ChatRequest, ChatStreamLine, ThreadMessage } from "@fabric/contracts";
-import { ChatRequestSchema, ChatStreamLineSchema } from "@fabric/contracts";
+// S13: chat moves onto the durable-session protocol (ARCHITECTURE §10, RUNTIME
+// §13 "post, then follow"): createSession / postMessage commands plus the SSE
+// session stream, all through @fabric/contracts' platform-neutral session
+// client (S12a). The fetch implementation is injected — expo/fetch in the app
+// (RN's global fetch can't stream response bodies), node's fetch in
+// scripts/chat-smoke.mts — so the smoke script drives the exact send path the
+// app uses. The stream half of the protocol lives in lib/session-stream.ts.
+// Legacy threads (scripted Dana's /api/chat store: `c1`, `t-*` ids) are
+// read-only from here on; S14 retires that path entirely.
+import { createSession, postMessage, type FetchLike } from "@fabric/contracts";
 import { apiBase } from "./api";
 
-export type FetchLike = typeof globalThis.fetch;
+export type { FetchLike };
 
-/**
- * The demo session (MOB-E "Session choice"): **`c1`**. The web mints fresh `t-*` ids per thread
- * (apps/web/src/lib/chat/session.ts newSessionId) and the seed writes no chat rows, so the one
- * session id the demo path uses end to end is `c1` — scripts/check-chat.ts drives its turns and
- * reads /api/sessions/c1/messages, and the task Dana hands off points back at it. Any id works
- * (the server creates the session row on the first turn); this one keeps the phone on the demo
- * thread the desktop shows.
- */
-export const DEMO_SESSION_ID = "c1";
+/** The agent a mobile session hosts. The phone serves Dana only (the Chat tab
+ * keeps the other specialists read-only), and createSession snapshots her turn
+ * definition (S7) into the session's opening facts. */
+export const MOBILE_AGENT_ID = "dana";
 
-/** A fresh thread id, the web's format (apps/web/src/lib/chat/session.ts newSessionId). The server
- * creates the session row on the first turn, so a minted id has no history to fetch. */
+/** A fresh local thread key, the web's format (apps/web/src/lib/chat/session.ts
+ * newSessionId). The Chat tab mints one only to key the empty ThreadView; the
+ * durable session's real id is minted by the server at createSession time. */
 export function newSessionId(): string {
   return `t-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
 }
 
-const dev = typeof __DEV__ !== "undefined" && __DEV__;
-
-/** The thread as the server reads it (http-assistant.ts toWire): role + text/tool-call parts only.
- * The server diffs against its own stored thread (assistant/thread.ts) — it takes nothing else. */
-export function toWire(messages: ThreadMessage[]): ChatRequest["messages"] {
-  return messages.map((m) => ({ role: m.role, content: m.content }));
+/**
+ * A v4 uuid for `clientMessageId` — the key the server dedupes reposts on
+ * (message.received.platformMessageId). Passed explicitly on every post: the
+ * contracts client's fallback (`crypto.randomUUID`) doesn't exist on RN/Hermes.
+ * Not a secret — Math.random's entropy is plenty for a dedup key.
+ */
+export function newClientMessageId(): string {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") return crypto.randomUUID();
+  let out = "";
+  for (let i = 0; i < 36; i += 1) {
+    if (i === 8 || i === 13 || i === 18 || i === 23) out += "-";
+    else if (i === 14) out += "4";
+    else out += Math.floor(Math.random() * 16).toString(16);
+  }
+  return out;
 }
 
-/** POST /api/chat (§4.3): yields one cumulative ChatStreamLine snapshot per NDJSON line. */
-export async function* chatStream(
+/** POST /api/sessions: the server mints the session id and appends the opening
+ * facts. Incognito sessions never reach any list (PRODUCT §10.7). */
+export async function createChatSession(
   fetchImpl: FetchLike,
-  body: ChatRequest,
-  signal?: AbortSignal,
-): AsyncGenerator<ChatStreamLine> {
-  const request = ChatRequestSchema.parse(body);
-  const response = await fetchImpl(`${apiBase}/api/chat`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify(request),
-    signal,
-  }).catch((err: unknown) => {
-    if (err instanceof Error && err.name === "AbortError") throw err;
-    throw new Error("Can't reach the server. Check that it's running, then send again.");
-  });
-  if (!response.ok || !response.body) {
-    const err = (await response.json().catch(() => ({}))) as { error?: string };
-    throw new Error(err.error ?? `Dana is unavailable (${response.status})`);
-  }
-  const parse = (line: string): ChatStreamLine => {
-    const value: unknown = JSON.parse(line);
-    if (dev) {
-      const checked = ChatStreamLineSchema.safeParse(value);
-      if (!checked.success) console.warn("[api] /chat line contract mismatch", checked.error.issues);
-    }
-    return value as ChatStreamLine;
-  };
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = "";
-  for (;;) {
-    const { value, done } = await reader.read();
-    if (value) buffer += decoder.decode(value, { stream: true });
-    let nl: number;
-    while ((nl = buffer.indexOf("\n")) >= 0) {
-      const line = buffer.slice(0, nl).trim();
-      buffer = buffer.slice(nl + 1);
-      if (line) yield parse(line);
-    }
-    if (done) break;
-  }
-  if (buffer.trim()) yield parse(buffer.trim());
+  agentId: string = MOBILE_AGENT_ID,
+  incognito?: boolean,
+): Promise<string> {
+  const res = await createSession(fetchImpl, apiBase, { agentId, incognito });
+  return res.sessionId;
+}
+
+/** POST /api/sessions/:id/messages — idempotent on `clientMessageId` (the
+ * retries inside the contracts client reuse it). Returns the appended seq. */
+export async function sendChatMessage(
+  fetchImpl: FetchLike,
+  sessionId: string,
+  text: string,
+  clientMessageId: string = newClientMessageId(),
+): Promise<number> {
+  const res = await postMessage(fetchImpl, apiBase, sessionId, { text, clientMessageId });
+  return res.seq;
 }

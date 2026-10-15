@@ -109,11 +109,20 @@ export type ToolPort = {
    * runs; `callId` is the `tool.call`'s id (ANY-72), the seed for a `once`
    * tool's idempotency key (RUNTIME §6); `streamId` is the stream the call
    * belongs to (ANY-57 S8a) — the loop-scoped identity a session tool's body
-   * needs to act on its own stream. */
+   * needs to act on its own stream; `workspaceId` is the job lease's
+   * workspace and `agentId` the folded `session.agentId` when the stream
+   * hosts a session (S2) — absent for runs (R14) — so a session tool binds
+   * its scope with no store read. */
   run(
     name: string,
     args: Record<string, unknown>,
-    io: { onLine?: (line: string) => void; callId?: string; streamId?: string }
+    io: {
+      onLine?: (line: string) => void;
+      callId?: string;
+      streamId?: string;
+      workspaceId?: string;
+      agentId?: string;
+    }
   ): Promise<ToolRunResult>;
   /** The tool's declaration; undefined for a name outside the registry. */
   describe(name: string): ToolDescriptor | undefined;

@@ -21,8 +21,8 @@ const bridgeToolsOf = (definition: Record<string, unknown>) => {
   return { tools, effects };
 };
 
-test("the stamped dana definition carries the bridge tools: once effects and the S2 disposition kinds", () => {
-  const definition = sessionTurnDefinition("dana") as Record<string, unknown>;
+test("the stamped dana definition carries the bridge tools: once effects and the S2 disposition kinds", async () => {
+  const definition = await sessionTurnDefinition("dana") as Record<string, unknown>;
   const { tools, effects } = bridgeToolsOf(definition);
 
   expect(tools).toContain("handoff_to_team");
@@ -36,8 +36,8 @@ test("the stamped dana definition carries the bridge tools: once effects and the
   expect(schemas.map((schema) => schema.name)).toContain("browser_task");
 });
 
-test("incognito keeps the bridges while dropping only the memory path", () => {
-  const definition = sessionTurnDefinition("dana", { incognito: true }) as Record<string, unknown>;
+test("incognito keeps the bridges while dropping only the memory path", async () => {
+  const definition = await sessionTurnDefinition("dana", { incognito: true }) as Record<string, unknown>;
   const { tools, effects } = bridgeToolsOf(definition);
 
   expect(tools).toContain("handoff_to_team");
@@ -48,8 +48,8 @@ test("incognito keeps the bridges while dropping only the memory path", () => {
   expect(tools).not.toContain("recall");
 });
 
-test("the placeholder definition stays placeholder: no bridge tools on non-dana agents", () => {
-  const definition = sessionTurnDefinition("anyone-else") as Record<string, unknown>;
+test("the placeholder definition stays placeholder: no bridge tools on non-dana agents", async () => {
+  const definition = await sessionTurnDefinition("anyone-else") as Record<string, unknown>;
   const { tools } = bridgeToolsOf(definition);
   expect(tools).not.toContain("handoff_to_team");
   expect(tools).not.toContain("browser_task");

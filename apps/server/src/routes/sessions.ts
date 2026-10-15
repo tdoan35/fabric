@@ -18,7 +18,7 @@ import { enqueueDecide, getRuntime, sessionTurnDefinition, RUNTIME_WORKSPACE } f
 /** A new session's opening facts: whose agent it hosts (S2) plus the turn
  * definition snapshot decide reads — S7's `sessionTurnDefinition` (Dana's for
  * `dana`, the S5 placeholder for everyone else until S9). */
-const sessionEvents = (agentId: string, incognito: boolean) => [
+const sessionEvents = async (agentId: string, incognito: boolean) => [
   {
     type: "session.created",
     actor: "api",
@@ -28,7 +28,7 @@ const sessionEvents = (agentId: string, incognito: boolean) => [
     type: "run.created",
     actor: "api",
     payload: {
-      definition: sessionTurnDefinition(agentId, { incognito }),
+      definition: await sessionTurnDefinition(agentId, { incognito }),
       engineVersion: "s5",
       brief: "",
       grants: [],
@@ -87,11 +87,14 @@ export const sessions = new Hono()
 
     const sessionId = randomUUID();
     const streamId = `session:${sessionId}`;
+    // T14: the stamp (and S9's unknown-agent 404) lands before the transaction —
+    // no stream exists when the agent id is bad.
+    const events = await sessionEvents(parsed.data.agentId, parsed.data.incognito ?? false);
     await runtime.store.transaction((tx) =>
       append(tx, RUNTIME_WORKSPACE, [
         {
           streamId,
-          events: sessionEvents(parsed.data.agentId, parsed.data.incognito ?? false),
+          events,
         },
       ]),
     );

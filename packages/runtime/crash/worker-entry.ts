@@ -151,12 +151,11 @@ async function main(): Promise<void> {
     ...(cfg.blockClaimAfterCompleteOf !== undefined ? { blockClaimAfterCompleteOf: cfg.blockClaimAfterCompleteOf } : {}),
   });
 
-  // Drain until quiet. "Quiet" is FACT-head stability, not job-count: the
-  // post-turn decide re-fires on its own telemetry (the loop's documented
-  // self-feed), so a settled board can carry an endless, fact-free decide
-  // spin. Two stable fact-head reads an interval apart, after a drained
-  // pass — with a dead-lease reclaim still pending (KM1), nothing moves at
-  // all and the settle timeout is the honest exit.
+  // Drain until quiet. "Quiet" is FACT-head stability, not job-count: a
+  // settled board can still hold a dead-lease reclaim (KM1), and only facts
+  // move the fold — so two stable fact-head reads an interval apart, after a
+  // drained pass, mean nothing moves at all and the settle timeout is the
+  // honest exit.
   const startedAt = Date.now();
   const factHead = async (): Promise<number> => {
     const rows = await store.transaction(async (tx) => {
@@ -177,9 +176,8 @@ async function main(): Promise<void> {
         ports,
         workerId: cfg.workerId,
       },
-      // Small passes: the telemetry spin stays claimable forever, so the
-      // stability check must interleave with the drain, not follow a
-      // thousand-claim burn.
+      // Small passes: the stability check must interleave with the drain,
+      // not follow a thousand-claim burn.
       5
     );
     const head = await factHead();
