@@ -301,9 +301,34 @@ test("Y10 OAuth: tokens in the vault under mcp_secure_oauth reach the server as 
 
   await servers.add({ name: "sealed", url: fixture!.url, auth: "oauth" });
   await servers.attach("sealed", "researcher");
+  // `add` leaves an oauth server needs_auth, which would make the assertion
+  // below trivially true; flip it to ready so the run itself must flip it back.
+  await servers.setStatus("sealed", "ready");
   const denied = await runTool("mcp_sealed_lookup", { q: "x" });
   expect(denied.ok).toBe(false);
+  expect((denied as { error?: string }).error).toContain("mcp_sealed_oauth");
   expect((await servers.get("sealed"))?.status).toBe("needs_auth");
+},
+30_000,
+);
+
+// -- client reuse --------------------------------------------------------------
+
+test("M6 client reuse: the stamp and three runs share one client — one initialize, one tools/list, three tools/call", async () => {
+  const servers = await boot();
+  await servers.add({ name: "local", url: fixture!.url, auth: "none" });
+  await servers.attach("local", "researcher");
+
+  await stamp("researcher");
+  expect(fixture!.calls("initialize")).toBe(1);
+
+  for (let n = 0; n < 3; n += 1) {
+    const result = await runTool("mcp_local_lookup", { q: `x${n}` });
+    expect(result.ok).toBe(true);
+  }
+  expect(fixture!.calls("initialize")).toBe(1);
+  expect(fixture!.calls("tools/list")).toBe(1);
+  expect(fixture!.calls("tools/call")).toBe(3);
 },
 30_000,
 );
