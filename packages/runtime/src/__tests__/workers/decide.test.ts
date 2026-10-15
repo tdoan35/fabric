@@ -107,4 +107,53 @@ describeDrivers("runtime decide worker (ANY-35 R9a)", (h) => {
     expect(llCall?.key).toBe("run:r1:1:llm:1");
     expect(llCall?.streamId).toBe(STREAM);
   });
+
+  test("W2 a telemetry-only append queues no re-decide — the class filter (ANY-98)", async () => {
+    const store = await h.openStore();
+    const queue = new MemoryQueue();
+    const stream = "session:w2";
+
+    // The turn is already dispositioned, so the decide reacting to the
+    // completion appends only endTurn's reply — telemetry, no fact.
+    await seed(store, stream, [
+      {
+        type: "run.created",
+        actor: "api",
+        payload: {
+          definition: { systemPrompt: "SYS", tools: [], surfaces: ["app"], model: "m1" },
+          engineVersion: "v1",
+          brief: "",
+          grants: [],
+          budgets: {},
+          parent: null,
+        },
+      },
+      messageReceived,
+      { type: "llm.requested", actor: "decide", payload: { turn: 1, callNo: 1, model: "m1", params: {}, snapshotId: null } },
+      {
+        type: "llm.completed",
+        actor: "llm.call",
+        payload: { turn: 1, callNo: 1, text: "Done.", toolCalls: [], usage: { inputTokens: 1, outputTokens: 1, costUsd: 0.1 }, finishReason: "stop", model: "m1" },
+      },
+      {
+        type: "disposition.recorded",
+        actor: "decide",
+        payload: { kind: "direct", target: null, reason: "r", considered: [], source: "model", turn: 1 },
+      },
+    ]);
+    await enqueueJob(store, queue, { type: "decide", key: "decide:w2:a", streamId: stream });
+    const lease = await queue.claim("worker-1", ["decide"], 1);
+    await handleDecideJob(lease!, { store, queue });
+
+    // the reply landed, telemetry alone
+    const replies = (await store.readStream(stream, { workspaceId: WORKSPACE })).filter(
+      (event) => event.type === "agent.message"
+    );
+    expect(replies).toHaveLength(1);
+    expect(replies[0]!.class).toBe("telemetry");
+
+    // and it re-decides nothing: no decide job is claimable afterwards. With
+    // the class filter gone this exact turn self-feeds — ANY-98's runaway.
+    expect(await queue.claim("worker-2", ["decide"], 1)).toBeNull();
+  });
 });
