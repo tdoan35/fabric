@@ -24,8 +24,7 @@ import type { TeamRuntime } from "../team";
 import { buildSystemPrompt, fallbackDana } from "./prompt";
 import { runScheduledTurn } from "./scheduled";
 import type { ScheduledInput } from "./scheduled";
-import { fixtureBrief, fixtureTurn } from "./fixture";
-import type { FixtureDeps } from "./fixture";
+import { fixtureBrief } from "./fixture";
 import { runHandoff } from "./handoff";
 import type { HandoffDeps, HandoffInput } from "./handoff";
 import {
@@ -45,12 +44,11 @@ import type { RecalledFact } from "./recall";
 import { runErrand, confirmationFor, decideErrand } from "./errand";
 import type { ErrandResult } from "./errand";
 import { errandContext } from "./errand-context";
-import { fixtureErrandTurn } from "./errand-fixture";
 export { recallFacts } from "./recall";
 export { readSessionDesktop } from "./errand";
 
 export interface Assistant {
-  /** POST /api/chat: yields cumulative snapshots of the assistant message (§4.3). */
+  /** The one-shot turn: yields cumulative snapshots of the assistant message (§4.3). */
   chat(req: ChatRequestBody): AsyncIterable<ChatStreamLine>;
   history(sessionId: string): Promise<SessionMessages>;
   /** Called by finalizeRun: Dana's "I got the results" message (CHAT-14). */
@@ -59,11 +57,10 @@ export interface Assistant {
   runScheduled(i: ScheduledInput): Promise<{ messageId: string }>;
 }
 
-/** ChatRequest plus the server-side switches the route resolves (header, DANA_MODE). */
+/** The one-shot turn's request body (the legacy chat shape; the session path has its own). */
 export interface ChatRequestBody {
   sessionId: string;
   messages: unknown[];
-  fixture?: boolean;
   /** The composer's picks for this turn; absent means Dana's registry model, thinking off. */
   model?: string;
   effort?: ThinkingLevel;
@@ -78,8 +75,6 @@ export interface AssistantDeps {
   db: Db;
   /** AppEvents for the invalidation stream (§4.4) — wired to hub.publishApp. */
   publish: (e: AppEvent) => void;
-  /** DANA_MODE. Per-request `fixture` / the x-fabric-fixture header override to on, never off. */
-  mode?: "live" | "fixture";
   /** DEMO_RECORDING_KEY: what a Fast-forward splices into after the handoff. */
   recordingKey?: string;
   /** Tests inject a mock model; live turns use model(dana.agent.model) on the current provider. */
@@ -176,8 +171,7 @@ export function createAssistant(deps: AssistantDeps): Assistant {
       }
 
       // ---- the turn ----
-      const fixture = req.fixture || deps.mode === "fixture";
-      const lines = fixture ? fixtureLines(sessionId, session, delta) : liveLines(sessionId, session, delta, { incognito: req.incognito });
+      const lines = liveLines(sessionId, session, delta, { incognito: req.incognito });
       let final: ChatPart[] = [];
       for await (const line of lines) {
         final = line.content;
@@ -220,29 +214,6 @@ export function createAssistant(deps: AssistantDeps): Assistant {
           await setProposalStatus(db, row.id, next);
         }
         // discuss (next === "pending"): stays pending while Dana talks it through (CARD-4)
-      }
-
-      function fixtureLines(sessionId: string, session: SessionRow | undefined, delta: ThreadDelta) {
-        const ctx: FixtureDeps = {
-          sessionId, session, delta,
-          pending: [],
-          world: { agents: [], pool: [] },
-          disposition: async (args, toolCallId) => {
-            const result = await recordDisposition(db, sessionId, args);
-            return { type: "tool-call", toolCallId, toolName: "record_disposition", args, argsText: JSON.stringify(args), result };
-          },
-          propose: async (input) => (await storeProposal(db, { sessionId, ...input })).payload,
-          handoff: (input: HandoffInput) => runHandoff(handoffDeps(async (i) => fixtureBrief(i)), input),
-        };
-        if (delta.newUserText && /reserv|book.*(?:restaurant|dinner|table|japan)|browser|https?:\/\//i.test(delta.newUserText)) {
-          return fixtureErrandTurn({ db, writer: deps.writer, publish, sessionId, projectId: session?.projectId, goal: delta.newUserText, incognito: req.incognito });
-        }
-        return (async function* () {
-          const [proposals, view] = await Promise.all([listProposals(db, sessionId), readDanaView(db)]);
-          ctx.pending = proposals.filter((p) => p.status === "pending");
-          ctx.world = view.world;
-          yield* fixtureTurn(ctx);
-        })();
       }
 
       async function* liveLines(sessionId: string, session: SessionRow | undefined, delta: ThreadDelta, opts: { incognito?: boolean } = {}): AsyncGenerator<ChatStreamLine> {
@@ -561,7 +532,7 @@ export function createAssistant(deps: AssistantDeps): Assistant {
     },
 
     async runScheduled(i) {
-      return runScheduledTurn({ db, publish, mode: deps.mode, modelFor: deps.modelFor, ...i });
+      return runScheduledTurn({ db, publish, modelFor: deps.modelFor, ...i });
     },
   };
 }

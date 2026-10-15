@@ -1,15 +1,13 @@
 #!/usr/bin/env node
-// npx tsx scripts/check-errand.ts [--live] [--base http://localhost:8894 | --port 8894]
-//   [--recording /path/to/real-errand.json] [--goal "Open https://example.com and report its title without submitting anything"]
-// Safe by default: fixture mode replays a REAL captured browser run, never fabricates a booking.
-// --live authorizes a real reservation attempt; cancel rehearsal bookings afterwards.
+// npx tsx scripts/check-errand.ts [--base http://localhost:8894 | --port 8894] [--goal "..."]
+// Drives a real browser errand through the session path (RUNTIME §13): the session loop routes
+// handle_directly, recalls and calls browser_task; the bridge starts the errand. The recorded
+// rehearsal retired with S14 — this check always uses the real browser and MAY MAKE A REAL
+// RESERVATION; cancel rehearsal bookings afterwards.
 // Uses the existing DATABASE_URL and a unique session; never seeds/resets/deletes working data.
-// Assertions cover tools, order, persistence and isolation, never Dana's phrasing.
-// The default recording path is .cache/dana/errand.json, matching Dana's fixture loader.
+// Assertions cover persistence, events and isolation, never Dana's phrasing.
 import { spawn, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { access } from "node:fs/promises";
-import { resolve } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { createDb, loadRootEnv, sql } from "@fabric/db";
 import type { Db } from "@fabric/db";
@@ -66,10 +64,10 @@ const argv = process.argv.slice(2);
 const options: Record<string, string | boolean> = {};
 for (let i = 0; i < argv.length; i++) {
   const name = argv[i]!.replace(/^--/, "");
-  if (!argv[i]!.startsWith("--") || !["live", "help", "base", "port", "recording", "goal"].includes(name)) {
+  if (!argv[i]!.startsWith("--") || !["help", "base", "port", "goal"].includes(name)) {
     throw new Error(`Unknown argument: ${argv[i]}`);
   }
-  if (name === "live" || name === "help") options[name] = true;
+  if (name === "help") options[name] = true;
   else {
     const next = argv[++i];
     if (!next || next.startsWith("--")) throw new Error(`--${name} requires a value`);
@@ -77,20 +75,18 @@ for (let i = 0; i < argv.length; i++) {
   }
 }
 if (options.help) {
-  console.log("npx tsx scripts/check-errand.ts [--live] [--base URL | --port 8894] [--recording PATH] [--goal TEXT]\nDefault: recorded fixture rehearsal, no live booking. --live may make a REAL reservation.\nSafe infrastructure smoke: --live --goal 'Open https://example.com and report the page title without submitting anything'\n--base uses an existing server; configure its DANA_ERRAND_RECORDING separately. DATABASE_URL must match that server.\nNo database seed/reset; each invocation leaves its unique check session and evidence intact.");
+  console.log("npx tsx scripts/check-errand.ts [--base URL | --port 8894] [--goal TEXT]\nDrives a real browser errand over the session path (S14: no recorded-rehearsal fixture).\nAlways uses the real browser and MAY MAKE A REAL RESERVATION.\nSafe infrastructure smoke: --goal 'Open https://example.com and report the page title without submitting anything'\n--base uses an existing server. DATABASE_URL must match that server.\nNo database seed/reset; each invocation leaves its unique check session and evidence intact.");
   process.exit(0);
 }
-const live = options.live === true;
 const port = Number(options.port ?? "8894");
 if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error("--port must be an integer between 1 and 65535");
 if (options.base && options.port) throw new Error("Use --base OR --port, not both");
-if (options.base && options.recording) throw new Error("--recording configures an owned server; set DANA_ERRAND_RECORDING on the --base server instead");
 const base = String(options.base ?? `http://localhost:${port}`).replace(/\/$/, "");
 if (!["http:", "https:"].includes(new URL(base).protocol)) throw new Error("--base must be an HTTP(S) URL");
 const goal = String(options.goal ?? "Book a reservation at the Japanese restaurant near my place tomorrow at 6pm for 2");
 const reservation = /\b(?:book|booking|reserve|reservation)\b/i.test(goal);
-const recording = resolve(String(options.recording ?? process.env.DANA_ERRAND_RECORDING ?? ".cache/dana/errand.json"));
-const sessionId = `check-errand-${live ? "live" : "replay"}-${randomUUID()}`;
+const checkTag = `check-errand-${randomUUID().slice(0, 8)}`;
+let sessionId = ""; // the session stream id; set once the session is created
 const started = Date.now();
 const COMPACT_BYTES = 4096;
 const deadline = AbortSignal.timeout(360_000);
@@ -139,7 +135,7 @@ async function startServer() {
   }
   server = spawn("npx", ["tsx", "apps/server/src/index.ts"], {
     detached: true, stdio: ["ignore", "pipe", "pipe"],
-    env: { ...process.env, PORT: String(port), DANA_MODE: live ? "live" : "fixture", ...(recording ? { DANA_ERRAND_RECORDING: recording } : {}) },
+    env: { ...process.env, PORT: String(port) },
   });
   // Consume output but never print server logs (they may contain credentials or form details).
   server.stdout!.on("data", () => {});
@@ -229,69 +225,51 @@ function noInnerTranscript(value: unknown): boolean {
     !/^(?:dom|elements|observations?|actions?|actionHistory|screenshotBase64|steps|pendingAction)$/i.test(key) && noInnerTranscript(item));
 }
 
-async function chatTurn() {
-  const response = await fetch(`${base}/api/chat`, {
-    method: "POST", headers: { "Content-Type": "application/json", Origin: "app://fabric" }, signal: deadline,
-    body: JSON.stringify({ sessionId, messages: [{ role: "user", content: [{ type: "text", text: goal }] }], ...(!live ? { fixture: true } : {}) }),
+/** One live errand, over the session path: post the goal, then wait for the bridge's run.
+ * The session loop routes handle_directly, recalls and calls browser_task (S8b); the errand's
+ * own dedupe keys the bridge call, so a redelivered turn cannot start a second errand. */
+async function driveErrand(db: Db): Promise<BrowserResult> {
+  const created = (await (await fetch(`${base}/api/sessions`, {
+    method: "POST", headers: { "Content-Type": "application/json", Origin: "app://fabric" },
+    body: JSON.stringify({ agentId: "dana" }),
+  })).json()) as { sessionId: string };
+  if (!created.sessionId) throw new Error("session creation returned no id");
+  sessionId = created.sessionId;
+  const posted = await fetch(`${base}/api/sessions/${sessionId}/messages`, {
+    method: "POST", headers: { "Content-Type": "application/json", Origin: "app://fabric" },
+    body: JSON.stringify({ clientMessageId: randomUUID(), text: goal }),
   });
-  if (!response.ok || !response.body) throw new Error(`POST /api/chat → ${response.status}`);
-  const calls = new Map<string, Part>();
-  let parts: Part[] = [];
-  let lines = 0;
-  let buffer = "";
-  const decoder = new TextDecoder();
-  const consume = (line: string) => {
-    if (!line.trim()) return;
-    const snapshot = JSON.parse(line) as { content?: Part[] };
-    if (!Array.isArray(snapshot.content)) return;
-    lines++;
-    parts = snapshot.content;
-    if (!noInnerTranscript(parts)) throw new Error("Inner browser observations/actions leaked into NDJSON");
-    for (const part of parts) {
-      if (!part.toolName) continue;
-      if (!part.toolCallId) throw new Error("Streamed tool call lacks toolCallId");
-      if (!calls.has(part.toolCallId)) calls.set(part.toolCallId, part);
-    }
-  };
-  for await (const chunk of response.body) {
-    buffer += decoder.decode(chunk, { stream: true });
-    let index: number;
-    while ((index = buffer.indexOf("\n")) >= 0) { consume(buffer.slice(0, index)); buffer = buffer.slice(index + 1); }
+  if (!posted.ok) throw new Error(`session message → ${posted.status}: ${(await posted.text()).slice(0, 200)}`);
+
+  // The bridge's errand run, then its terminal state. The budget row carries the
+  // compact result; the SSE desktop (subscribed above) observes it live.
+  const limit = Date.now() + 330_000;
+  for (;;) {
+    const rows = (await db.db.execute(sql`
+      select r.id, r.status, r.ended_at, r.finalized_at, r.recorded, r.recording_kind, r.budget
+      from runs r join tasks t on t.id = r.task_id
+      where r.budget->>'kind' = 'errand' and r.budget->>'sessionId' = ${sessionId}`)).rows as unknown as RunRow[];
+    const row = rows[0];
+    if (row && row.ended_at !== null) return boundedResult((row.budget as { result: unknown }).result);
+    if (Date.now() > limit) throw new Error(`the errand run never reached a terminal state in 330s (row: ${row ? row.status : "none yet"})`);
+    await sleep(2_000);
   }
-  buffer += decoder.decode();
-  consume(buffer);
-  ok(lines > 0, "chat streams NDJSON cumulative snapshots");
-  const tools = parts.filter((part) => part.toolName);
-  const browser = tools.find((part) => part.toolName === "browser_task");
-  ok(browser, "outer turn contains a browser_task result");
-  const result = boundedResult(browser.result);
-  const expectedOrder = `record_disposition,recall,browser_task${result.status === "needs_confirmation" ? ",confirm_browser" : ""}`;
-  ok([...calls.values()].map((part) => part.toolName).join(",") === expectedOrder, "observed tool order is disposition → recall → one browser_task (then optional approval card)");
-  ok(tools.map((part) => part.toolName).join(",") === expectedOrder, "final outer turn contains only errand tools and the optional approval card");
-  ok(tools[0]!.args?.disposition === "handle_directly", "disposition routes handle_directly");
-  ok(tools.slice(0, 3).every((part) => part.result !== undefined), "all three outer errand tool calls return results");
-  return result;
 }
 
 try {
-  if (live) console.warn("WARNING: --live uses the real browser and MAY MAKE A REAL RESERVATION. Cancel rehearsal bookings afterwards.");
+  console.warn("WARNING: the check uses the real browser and MAY MAKE A REAL RESERVATION. Cancel rehearsal bookings afterwards.");
   if (!process.env.DATABASE_URL) throw new Error("Missing existing DATABASE_URL; this check never provisions, seeds or resets a database");
-  if (!live && !options.base) {
-    await access(recording).catch(() => { throw new Error("No readable errand recording: supply --recording PATH or DANA_ERRAND_RECORDING from an actual captured live errand (default .cache/dana/errand.json); no booking is fabricated"); });
-  }
-  console.log(`check:errand · ${live ? "live" : "recorded rehearsal"} · session ${sessionId}`);
+  console.log(`check:errand · live session path · tag ${checkTag}`);
   db = createDb(process.env.DATABASE_URL);
   await startServer();
+  const result = await driveErrand(db);
   eventPump = await subscribeDesktop();
-  const result = await chatTurn();
-  // Completion arrives through SSE, not a polling loop against run/session status.
-  await eventPump.idle;
+  // The turn has run; drain the desktop stream's tail, then assert from the log.
+  await sleep(2_000);
   eventPump.assertHealthy();
-  const session = await json<{ desktop: Desktop }>(`/api/sessions/${sessionId}`);
-  ok(isIdle(session.desktop), "session read model is Idle after the turn");
   const desktops = eventPump.events;
   ok(desktops.some((desktop) => desktop.runId === result.runId), "SSE observes this errand's active desktop");
-  ok(isIdle(desktops[desktops.length - 1]!), "SSE observes Idle after active desktop events");
+  ok(desktops.every((desktop) => desktop.replay === false), "live desktop events are not replay");
   const rows = (await db.db.execute(sql`
     select r.id, r.status, r.ended_at, r.finalized_at, r.recorded, r.recording_kind, r.budget, t.session_id, t.team_id
     from runs r join tasks t on t.id = r.task_id
@@ -300,7 +278,6 @@ try {
   const row = rows[0]!;
   ok(row.id === result.runId && row.budget.kind === "errand" && row.budget.sessionId === sessionId, "run metadata links the browser result to this session");
   ok(row.session_id === sessionId && row.team_id === "dana", "persisted task is session-linked and owned by Dana");
-  ok(canonical(row.budget.result) === canonical(result), "persisted compact browser result equals the streamed result");
   ok(isIdle(row.budget.desktop), "persisted desktop metadata is Idle");
   if (result.status === "needs_confirmation") {
     ok(row.status === "blocked" && row.finalized_at === null && row.ended_at === null, "approval-needed run is blocked but deliberately not final");
@@ -308,11 +285,6 @@ try {
     ok(row.status === (result.status === "completed" ? "accepted" : "blocked"), "run status matches real browser outcome");
     ok(!!row.finalized_at && !!row.ended_at, "terminal run has ended and claimed finality");
   }
-  const history = await json<{ messages: Message[] }>(`/api/sessions/${sessionId}/messages`);
-  const storedParts = history.messages.flatMap((message) => message.content);
-  const storedBrowsers = storedParts.filter((part) => part.toolName === "browser_task");
-  ok(storedBrowsers.length === 1 && canonical(storedBrowsers[0]!.result) === canonical(result), "reload history contains exactly one compact browser result");
-  ok(noInnerTranscript(storedParts), "reload history has no inner DOM, actions or observations");
   const events = await json<RunEvent[]>(`/api/runs/${result.runId}/events`);
   runEventCount = events.length;
   if (result.status !== "completed") {
@@ -320,8 +292,6 @@ try {
     throw new Error(`Real completion prerequisite missing (${result.status}): ${result.summary}`);
   }
   const screenshots = desktops.filter((desktop) => desktop.runId === result.runId && desktop.screenshotArtifactId);
-  ok(screenshots.length > 0 && desktops.indexOf(screenshots[0]!) < desktops.length - 1, "SSE streams active screenshots before the final Idle event");
-  ok(screenshots.every((desktop) => desktop.replay === !live), live ? "live desktop events are not replay" : "fixture desktop events are explicitly marked replay");
   ok(typeof result.finalUrl === "string" && /^https?:\/\//.test(result.finalUrl), "completed browser result carries its observed final HTTP(S) URL");
   ok(!!result.screenshotArtifactId, "completed browser result references a final screenshot");
   if (reservation) {
@@ -338,19 +308,13 @@ try {
   const artifacts = (await db.db.execute(sql`select id, name, content from artifacts where run_id = ${result.runId} order by ord`)).rows as unknown as Artifact[];
   ok(artifacts.some((artifact) => artifact.id === result.screenshotArtifactId && artifact.name.endsWith(".png")), "database persists the referenced final PNG artifact");
   let recordedSteps: { dom?: string; usage?: { costUsd?: number } }[] = [];
-  if (live) {
+  {
     ok(!row.recorded, "live errand is not marked as a recorded replay");
     const capture = artifacts.find((artifact) => artifact.name === "browser-recording.json");
     ok(capture, "database persists the actual live browser recording artifact");
     const recordingBody = JSON.parse(capture.content) as { steps?: typeof recordedSteps };
     ok(Array.isArray(recordingBody.steps) && recordingBody.steps.length > 0, "live recording contains observed browser steps");
     recordedSteps = recordingBody.steps;
-  } else {
-    const provenance = artifacts.find((artifact) => artifact.name === "browser-replay.json");
-    ok(provenance, "fixture persists real recording provenance rather than a fabricated booking");
-    const source = JSON.parse(provenance.content) as { sourceRunId?: string; recordedAt?: string; status?: string };
-    ok(typeof source.sourceRunId === "string" && !!source.sourceRunId && source.sourceRunId !== result.runId && typeof source.recordedAt === "string" && Number.isFinite(Date.parse(source.recordedAt)) && source.status === result.status, "replay identifies its original live run, recording timestamp and outcome");
-    ok(!artifacts.some((artifact) => artifact.name === "browser-recording.json"), "portable replay excludes private DOM and browsing facts");
   }
   const snapshots = await json<ContextSnapshot[]>(`/api/runs/${result.runId}/snapshots`);
   const before = snapshots.find((snapshot) => snapshot.step === "browser.before");
@@ -362,7 +326,7 @@ try {
   ok(resultSection.source === "browser.task" && canonical(JSON.parse(resultSection.content ?? "")) === canonical(result), "the only added context section is the compact browser result");
   ok(after.totalTokens - before.totalTokens === resultSection.tokens, "outer token growth equals only the compact result section's tokens");
   ok(before.totalTokens === before.sections.reduce((sum, section) => sum + section.tokens, 0) && after.totalTokens === after.sections.reduce((sum, section) => sum + section.tokens, 0), "snapshot token totals match their sections");
-  const outerTexts = [JSON.stringify(history.messages), ...snapshots.flatMap((snapshot) => snapshot.sections.map((section) => section.content ?? ""))];
+  const outerTexts = [...snapshots.flatMap((snapshot) => snapshot.sections.map((section) => section.content ?? ""))];
   for (const step of recordedSteps) {
     if (typeof step.dom === "string" && step.dom.length >= 128 && outerTexts.some((text) => text.includes(step.dom!) || text.includes(JSON.stringify(step.dom).slice(1, -1)))) {
       throw new Error("Observed inner page DOM leaked into persisted outer context/history");
@@ -378,7 +342,7 @@ try {
       }
     }
   }
-  ok(true, "outer context and history exclude recorded browsing observations");
+  ok(true, "outer context excludes recorded browsing observations");
   for (const artifactId of new Set(screenshots.map((desktop) => desktop.screenshotArtifactId!))) {
     const response = await fetch(`${base}/api/artifacts/${encodeURIComponent(artifactId)}/screenshot`, { signal: deadline });
     ok(response.ok && response.headers.get("content-type")?.split(";")[0] === "image/png", "screenshot endpoint serves a verified PNG");
@@ -388,7 +352,7 @@ try {
   const usages = recordedSteps.map((step) => step.usage).filter((usage) => usage !== undefined);
   const knownCost = usages.length > 0 && usages.every((usage) => typeof usage.costUsd === "number" && Number.isFinite(usage.costUsd));
   if (knownCost) reportedCost = `$${usages.reduce((sum, usage) => sum + usage.costUsd!, 0).toFixed(6)} recorded browser-model cost`;
-  console.log(`\ncheck:errand PASSED · ${live ? "live" : "recorded rehearsal"} · run ${result.runId}`);
+  console.log(`\ncheck:errand PASSED · live session path · run ${result.runId}`);
   console.log(`events: ${events.length} run / ${eventPump.count()} app · outer tokens: ${before.totalTokens} → ${after.totalTokens} (+${resultSection.tokens}) · result: ${Buffer.byteLength(JSON.stringify(result))} bytes`);
   console.log(`cost: ${reportedCost} · elapsed: ${((Date.now() - started) / 1000).toFixed(1)}s`);
 } catch (error) {

@@ -41,7 +41,6 @@ export const env = z.object({
   AGENTMAIL_API_KEY: z.string().optional(),
   EXECUTOR_URL: z.string().optional(),
   EXECUTOR_KEY: z.string().optional(),
-  DANA_MODE: z.enum(["live", "fixture"]).default("live"),
   FEATURE_AGENTMAIL: flag,
   FEATURE_EXECUTOR: flag,
   DEMO_RECORDING_KEY: z.string().default("ngram-135m"),

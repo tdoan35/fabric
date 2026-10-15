@@ -20,7 +20,6 @@ import { onSessionMessage } from "@/lib/chat/events";
 import { useSessionDesktop } from "@/lib/chat/desktop";
 import type { SessionDesktop } from "@/lib/chat/events";
 import { apiBase } from "@/lib/api/http";
-import { isFixtureHotkey, toggleFixture } from "@/lib/chat/fixture";
 import { demoMode } from "@/lib/chat/demo";
 import { suggestionPool, type Suggestion } from "@/lib/mock/suggestions";
 import { AgentHero, AgentProfilePanel, FLY, IncognitoInfo, veil, scrollArea, type SideTab, Portrait, nameLayoutId, portraitLayoutId } from "./assistant-hero";
@@ -405,20 +404,6 @@ function useStreamResync(sessionId: string) {
   }, [aui, sessionId]);
 }
 
-/** Ctrl+Shift+F arms scripted Dana for the next turn (RUN-12); http mode only — mock mode is all scripted. */
-function useFixtureHotkey() {
-  useEffect(() => {
-    if (!httpMode) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (!isFixtureHotkey(e)) return;
-      e.preventDefault();
-      toggleFixture();
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, []);
-}
-
 /**
  * One continuous layout for the empty screen and the conversation, so the first message can animate:
  * the portrait flies up into the top bar, the composer drops to the bottom, the tray and suggestions
@@ -431,7 +416,6 @@ function ThreadBody({ sessionId, agentIndex, onAgentChange, onBackToDana, incogn
 }) {
   useLiveResults(sessionId);
   useStreamResync(sessionId);
-  useFixtureHotkey();
   const started = useAuiState((st) => !st.thread.isEmpty);
   useRegistry();
   const chatAgents = registryChatAgents();

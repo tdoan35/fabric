@@ -43,19 +43,6 @@ impossible. Lead with what changed; keep it short.
 ${prompt}`;
 }
 
-/** DANA_MODE=fixture: a canned digest, so demos work without a model. */
-export function fixtureDigest(): string {
-  return [
-    "Three things since yesterday:",
-    "",
-    "1. The 360M n-gram loop is still running — Megan's survey widened to three more corpora, no blockers.",
-    "2. Carlos accepted the 135M report; the write-up is filed under Reports.",
-    "3. The NAND probe's loop 2 ran out of rework budget and is waiting on you.",
-    "",
-    "Nothing needs your call before noon.",
-  ].join("\n");
-}
-
 /** Search is the one read-only tool; only offered when Exa has a key. */
 function scheduledTools(): ToolSet | undefined {
   if (!process.env.EXA_API_KEY) return undefined;
@@ -77,8 +64,6 @@ function scheduledTools(): ToolSet | undefined {
 export interface ScheduledDeps {
   db: Db;
   publish: (e: AppEvent) => void;
-  /** DANA_MODE. Fixture mode skips the model call; same side effects either way. */
-  mode?: "live" | "fixture";
   /** Tests inject a mock model; live turns use model(dana.agent.model) on the current provider. */
   modelFor?: (dana: StudioProfile) => LanguageModel;
 }
@@ -87,22 +72,17 @@ export async function runScheduledTurn(deps: ScheduledDeps & ScheduledInput): Pr
   const { db, sessionId, title, prompt } = deps;
   await ensureSession(db, sessionId, title);
 
-  let text: string;
-  if (deps.mode === "fixture") {
-    text = fixtureDigest();
-  } else {
-    const [dana, view] = await Promise.all([getProfile(db, "dana"), readDanaView(db)]);
-    const m = deps.modelFor?.(dana ?? fallbackDana()) ?? model(dana?.agent.model ?? "", { thinking: "off", meter: { agentId: "dana", step: "schedule" } });
-    const result = await generateText({
-      model: m,
-      system: scheduledSystem(dana ?? fallbackDana(), view.registry, prompt),
-      prompt,
-      tools: scheduledTools(),
-      temperature: 0.2,
-      stopWhen: stepCountIs(4),
-    });
-    text = result.text || fixtureDigest();
-  }
+  const [dana, view] = await Promise.all([getProfile(db, "dana"), readDanaView(db)]);
+  const m = deps.modelFor?.(dana ?? fallbackDana()) ?? model(dana?.agent.model ?? "", { thinking: "off", meter: { agentId: "dana", step: "schedule" } });
+  const result = await generateText({
+    model: m,
+    system: scheduledSystem(dana ?? fallbackDana(), view.registry, prompt),
+    prompt,
+    tools: scheduledTools(),
+    temperature: 0.2,
+    stopWhen: stepCountIs(4),
+  });
+  const text = result.text;
 
   const parts: ChatPart[] = [
     { type: "text", text: `${title} · ${DAY_FMT.format(new Date())}` },
