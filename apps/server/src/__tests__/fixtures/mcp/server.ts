@@ -6,6 +6,13 @@
 // Authorization header is recorded in order, so a bearer-adding fetch is
 // observable. The three standard tools are Y1's set: `lookup`
 // (readOnlyHint), `create` (no hints) and `upsert` (idempotentHint).
+//
+// M7 (ANY-85) extends the helper with `auth`: the server becomes a
+// protected resource — every /mcp request must carry an Authorization
+// header `auth.accepts` takes, or it gets a 401 Bearer challenge; the
+// RFC 9728 metadata is served at the well-known path and at
+// `resourceMetadataPath` (named in the challenge as resource_metadata),
+// the tools package's ANY-78 fixture shape.
 import { randomUUID } from "node:crypto";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
@@ -58,6 +65,14 @@ export const UPSERT: FixtureTool = {
   handler: ({ key }) => ({ content: [{ type: "text", text: `upserted ${String(key)}` }] }),
 };
 
+/** M7: the fixture as a protected resource (ANY-78's shape). */
+export type TestMcpAuth = {
+  accepts(authorization: string | undefined): boolean;
+  /** Where the 401 challenge points; omitted → a bare `Bearer` challenge. */
+  resourceMetadataPath?: string;
+  metadata: { authorization_servers: string[]; scopes_supported?: string[] };
+};
+
 export type TestMcpServer = {
   url: string;
   /** JSON-RPC requests received per method (id-carrying requests only). */
@@ -68,11 +83,13 @@ export type TestMcpServer = {
 };
 
 export async function startTestMcpServer(
-  options: { tools?: readonly FixtureTool[] } = {},
+  options: { tools?: readonly FixtureTool[]; auth?: TestMcpAuth } = {},
 ): Promise<TestMcpServer> {
   const tools = options.tools ?? [LOOKUP, CREATE, UPSERT];
   const methods = new Map<string, number>();
   const authorizations: (string | undefined)[] = [];
+  let origin = "";
+  let url = "";
   // One (server, transport) pair per MCP session: a new client initializes
   // into its own session, so every stamp and every run is a fresh protocol
   // conversation over the same counted fixture.
@@ -114,7 +131,32 @@ export async function startTestMcpServer(
         }
       }
     }
-    authorizations.push(req.headers.authorization);
+    const auth = options.auth;
+    const pathname = new URL(req.url ?? "/", "http://localhost").pathname;
+    if (auth !== undefined && pathname !== "/mcp") {
+      const served = ["/.well-known/oauth-protected-resource", auth.resourceMetadataPath];
+      if (req.method === "GET" && served.includes(pathname)) {
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify({ resource: url, ...auth.metadata }));
+      } else {
+        res.writeHead(404).end();
+      }
+      return;
+    }
+    if (auth !== undefined) {
+      const authorization = req.headers.authorization;
+      authorizations.push(authorization);
+      if (!auth.accepts(authorization)) {
+        const challenge =
+          auth.resourceMetadataPath === undefined
+            ? "Bearer"
+            : `Bearer resource_metadata="${origin}${auth.resourceMetadataPath}"`;
+        res.writeHead(401, { "www-authenticate": challenge }).end();
+        return;
+      }
+    } else {
+      authorizations.push(req.headers.authorization);
+    }
     const sessionId = req.headers["mcp-session-id"];
     let session = typeof sessionId === "string" ? sessions.get(sessionId) : undefined;
     if (session === undefined) {
@@ -154,7 +196,6 @@ export async function startTestMcpServer(
     res.end();
   }
 
-  let url = "";
   const http = createServer((req, res) => {
     handle(req, res).catch((error: unknown) => {
       if (!res.headersSent) res.writeHead(500);
@@ -163,7 +204,8 @@ export async function startTestMcpServer(
   });
   await new Promise<void>((resolve) => http.listen(0, "127.0.0.1", resolve));
   const { port } = http.address() as AddressInfo;
-  url = `http://127.0.0.1:${port}/mcp`;
+  origin = `http://127.0.0.1:${port}`;
+  url = `${origin}/mcp`;
 
   return {
     url,
