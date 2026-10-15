@@ -39,6 +39,46 @@ const sessionEvents = (agentId: string, incognito: boolean) => [
 ];
 
 export const sessions = new Hono()
+  // S11 (ANY-61): the thread list. Incognito sessions are excluded (PRODUCT
+  // §10.7); the title is the first user message truncated to 60 chars, and
+  // updatedAt is the head event's ts.
+  .get("/sessions", async (c) => {
+    const runtime = getRuntime();
+    if (runtime === undefined) return c.json({ error: "runtime not started" }, 503);
+
+    const rows = await runtime.store.transaction((tx) =>
+      tx.query(
+        `select s.id as stream_id,
+                sc.payload ->> 'agentId' as agent_id,
+                coalesce((sc.payload ->> 'incognito')::boolean, false) as incognito,
+                (select e.payload ->> 'text' from events e
+                  where e.stream_id = s.id and e.workspace_id = $1 and e.type = 'message.received'
+                  order by e.seq limit 1) as title,
+                (select e.ts from events e
+                  where e.stream_id = s.id and e.workspace_id = $1
+                  order by e.seq desc limit 1) as updated_at
+         from streams s
+         join lateral (select payload from events
+                       where stream_id = s.id and workspace_id = $1 and type = 'session.created'
+                       order by seq limit 1) sc on true
+         where s.workspace_id = $1 and s.id like 'session:%'
+           and coalesce((sc.payload ->> 'incognito')::boolean, false) = false
+         order by updated_at desc, s.id desc`,
+        [RUNTIME_WORKSPACE],
+      )
+    );
+    const asTs = (value: unknown): string => (value instanceof Date ? value.toISOString() : String(value));
+    return c.json(
+      rows.map((row) => ({
+        sessionId: String(row.stream_id).slice("session:".length),
+        agentId: String(row.agent_id ?? ""),
+        title: String(row.title ?? "").slice(0, 60),
+        updatedAt: asTs(row.updated_at),
+        incognito: row.incognito === true,
+      })),
+    );
+  })
+
   .post("/sessions", async (c) => {
     const runtime = getRuntime();
     if (runtime === undefined) return c.json({ error: "runtime not started" }, 503);
@@ -147,6 +187,10 @@ export const sessions = new Hono()
       fromSeq: 1,
     });
     if (known.length === 0) return c.json({ error: "session not found" }, 404);
+    // S11 (ANY-61): a purged session's log is erased; its reads answer 410.
+    if (known.some((event) => event.type === "content.erased")) {
+      return c.json({ error: "session purged" }, 410);
+    }
 
     const { live } = runtime;
     const encoder = new TextEncoder();
@@ -320,12 +364,16 @@ export const sessions = new Hono()
 
     const streamId = `session:${c.req.param("id")}`;
     const stream = await runtime.store.transaction((tx) =>
-      tx.query("select 1 from streams where id = $1 and workspace_id = $2", [
-        streamId,
-        RUNTIME_WORKSPACE,
-      ]),
+      tx.query(
+        `select exists(select 1 from streams where id = $1 and workspace_id = $2) as known,
+                exists(select 1 from events where stream_id = $1 and workspace_id = $2
+                       and type = 'content.erased') as purged`,
+        [streamId, RUNTIME_WORKSPACE],
+      )
     );
-    if (stream.length === 0) return c.json({ error: "session not found" }, 404);
+    if (!stream[0]!.known) return c.json({ error: "session not found" }, 404);
+    // S11 (ANY-61): a purged session's log is erased; its reads answer 410.
+    if (stream[0]!.purged) return c.json({ error: "session purged" }, 410);
 
     const events = await runtime.store.readStream(streamId, {
       workspaceId: RUNTIME_WORKSPACE,

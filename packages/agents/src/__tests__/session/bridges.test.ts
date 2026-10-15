@@ -216,16 +216,25 @@ async function boot(
 }
 
 /** The store, with every transaction crashing after its work ran — the
- * at-least-once state: side effects happened, nothing was recorded. */
-const crashAfterRun = (store: RuntimeStore): RuntimeStore => ({
-  transaction: (fn) =>
-    store.transaction(async (tx) => {
-      await fn(tx);
-      throw new Error(CRASH); // the appends and the lease completion roll back
-    }),
-  readStream: (streamId, options) => store.readStream(streamId, options),
-  close: () => store.close(),
-});
+ * at-least-once state: side effects happened, nothing was recorded. Two-phase
+ * tool.exec (ANY-80 R14) runs the tool between the read and the record, so
+ * the first transaction (the read) passes and the record crashes: the tool
+ * ran, the appends and the lease completion rolled back. */
+const crashAfterRun = (store: RuntimeStore): RuntimeStore => {
+  let seen = 0;
+  return {
+    transaction: (fn) =>
+      store.transaction(async (tx) => {
+        const index = seen;
+        seen += 1;
+        const value = await fn(tx);
+        if (index >= 1) throw new Error(CRASH); // the appends and the lease completion roll back
+        return value;
+      }),
+    readStream: (streamId, options) => store.readStream(streamId, options),
+    close: () => store.close(),
+  };
+};
 
 const of = (events: StoredEventLike[], type: string) => events.filter((event) => event.type === type);
 
