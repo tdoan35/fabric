@@ -25,7 +25,7 @@ interface RawEntry {
 
 /** A gzip tarball built from raw entries — for archives the store did not pack. */
 async function tarball(entries: RawEntry[]): Promise<Buffer> {
-  const pack = new Pack({ gzip: true });
+  const pack = new Pack({ gzip: true, preservePaths: true });
   const chunks: Buffer[] = [];
   const done = new Promise<void>((resolve, reject) => {
     pack.on("data", (chunk: Buffer) => chunks.push(chunk as Buffer));
@@ -111,9 +111,9 @@ test("F1 path creates the agent, project and run folders, and names breaking the
   );
 
   // The invalid names created nothing anywhere.
-  expect(await readdir(path.join(root, "agents"))).toEqual(["researcher"]);
-  expect(await readdir(path.join(root, "projects"))).toEqual(["launch-plan"]);
-  expect(await readdir(path.join(root, "runs"))).toEqual(["r-1", "a".repeat(40)]);
+  expect((await readdir(path.join(root, "agents"))).sort()).toEqual(["researcher"]);
+  expect((await readdir(path.join(root, "projects"))).sort()).toEqual(["launch-plan"]);
+  expect((await readdir(path.join(root, "runs"))).sort()).toEqual(["a".repeat(40), "r-1"]);
 });
 
 test("F2 pack then unpack round-trips bytes, nesting, an empty file and executable modes", async () => {
