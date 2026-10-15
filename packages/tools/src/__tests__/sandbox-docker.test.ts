@@ -11,7 +11,7 @@ import { userInfo } from "node:os";
 import path, { join } from "node:path";
 import { promisify } from "node:util";
 import { Pack, Parser, type ReadEntry } from "tar";
-import { afterEach, beforeEach, describe, expect, test } from "vitest";
+import { afterEach, beforeEach, expect, test } from "vitest";
 import type { ToolDef } from "../define";
 import { dockerSandboxes, sandboxTools, type SandboxMount, type SandboxProvider } from "../sandbox";
 
@@ -35,7 +35,7 @@ if (withoutDaemon) {
   );
 }
 
-const docker = describe.skipIf(withoutDaemon);
+const docker = test.skipIf(withoutDaemon);
 
 let base = "";
 let agentDir = "";

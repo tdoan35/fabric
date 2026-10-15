@@ -152,7 +152,9 @@ test("exec kills the process group when the timeout lands", async () => {
   });
   expect(result.timedOut).toBe(true);
   expect(Date.now() - started).toBeLessThan(3_000);
-  expect(lines).toEqual([]); // `done` never ran
+  // Killed before the chain finished: no `done`, but bash's own kill notice
+  // on stderr is expected stream traffic.
+  expect(lines.includes("done")).toBe(false);
 
   // A follow-up process listing finds no survivor of the killed group.
   const procs: string[] = [];
@@ -165,13 +167,16 @@ test("putArchive and getArchive round-trip a tree byte for byte", async () => {
   const sandbox = await provider.acquire({ workspaceId: "w", agentId: "a", mounts: [] });
 
   const src = join(base, "src");
-  await mkdir(join(src, "sub"), { recursive: true });
+  await mkdir(src, { recursive: true });
   const files = new Map<string, Buffer>([
     ["a.txt", Buffer.from("alpha\n", "utf8")],
     ["sub/b.bin", Buffer.from([0, 1, 2, 254, 255])],
     ["sub/deep/c.txt", Buffer.from("gamma\ndelta\n", "utf8")],
   ]);
-  for (const [rel, data] of files) await writeFile(join(src, rel), data);
+  for (const [rel, data] of files) {
+    await mkdir(join(src, rel, ".."), { recursive: true });
+    await writeFile(join(src, rel), data);
+  }
 
   const packer = new Pack({ cwd: src });
   for (const rel of files.keys()) packer.add(rel);
@@ -200,9 +205,12 @@ test("putArchive and getArchive round-trip a tree byte for byte", async () => {
     archive.on("error", reject);
   });
 
-  expect(new Set(entries.map((entry) => entry.path))).toEqual(new Set(files.keys()));
-  for (const entry of entries) {
-    expect(entry.data.equals(files.get(entry.path) ?? Buffer.alloc(0))).toBe(true);
+  // Directory entries ride along; every file must come back byte-identical.
+  expect(entries.length).toBeGreaterThanOrEqual(files.size);
+  for (const [rel, data] of files) {
+    const entry = entries.find((candidate) => candidate.path === rel);
+    expect(entry, rel).toBeDefined();
+    expect(entry?.data.equals(data) ?? false).toBe(true);
   }
 
   // And the tree really sits under the destination.

@@ -37,14 +37,11 @@ const VALUE_FLAGS = new Set([
 
 function parse(argv) {
   const flags = [];
-  const values = {};
   const positionals = [];
   let index = 0;
   while (index < argv.length) {
     const arg = argv[index];
     if (VALUE_FLAGS.has(arg)) {
-      values.set ??= new Map();
-      values.set(arg, argv[index + 1]);
       flags.push([arg, argv[index + 1]]);
       index += 2;
     } else if (arg.startsWith("-") && arg !== "-") {
@@ -54,7 +51,7 @@ function parse(argv) {
       break;
     }
   }
-  return { flags, values, positionals: argv.slice(index) };
+  return { flags, positionals: argv.slice(index) };
 }
 
 const state = load();

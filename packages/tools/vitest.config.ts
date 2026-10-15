@@ -4,6 +4,9 @@ export default defineConfig({
   test: {
     environment: "node",
     include: ["src/**/*.test.ts"],
+    // The sandbox tests need the image; build it from sandbox/Dockerfile when
+    // missing (see sandbox/global-setup.ts). Everything else here is shared.
+    globalSetup: ["sandbox/global-setup.ts"],
     // The MCP seam tests boot embedded PGlite and a real MCP server over HTTP;
     // under a loaded machine (CI's parallel workspaces) that is not free.
     testTimeout: 30_000,
