@@ -1,0 +1,116 @@
+#!/usr/bin/env node
+// A minimal `rg --json` for hosts without ripgrep (CI runner images ship
+// none); the sandboxed search tool execs `rg` by name, and the daemon-free
+// sandbox tests run it on the host through the fake docker. Implements the
+// exact surface the tool builds: `rg --json -e PAT [--glob G]... [PATH]`,
+// plus `--version` for the presence probe. Real ripgrep is used wherever it
+// exists; the daemon-backed D8 case exercises it inside the container.
+import { readdirSync, readFileSync, statSync } from "node:fs";
+import { basename, join, resolve } from "node:path";
+
+const argv = process.argv.slice(2);
+if (argv.includes("--version")) {
+  console.log("rg fixture (fixture for hosts without ripgrep)");
+  process.exit(0);
+}
+
+let pattern = "";
+let root = ".";
+const globs = [];
+for (let index = 0; index < argv.length; index++) {
+  const arg = argv[index];
+  if (arg === "--json") continue;
+  if (arg === "-e") {
+    pattern = argv[++index] ?? "";
+  } else if (arg === "--glob") {
+    globs.push(argv[++index] ?? "");
+  } else if (arg.startsWith("-")) {
+    // other flags are not part of the tool's surface
+  } else {
+    root = arg;
+  }
+}
+if (pattern === "") {
+  console.error("rg fixture: a pattern via -e is required");
+  process.exit(2);
+}
+
+const excludes = globs.filter((glob) => glob.startsWith("!")).map((glob) => glob.slice(1));
+const includes = globs.filter((glob) => !glob.startsWith("!"));
+/** Glob → anchored matcher; `*` never crosses `/`, `**` does. */
+const matches = (relativePath, glob) => {
+  let source = "";
+  for (let i = 0; i < glob.length; i++) {
+    const char = glob[i];
+    if (char === "*") {
+      if (glob[i + 1] === "*") {
+        source += ".*";
+        i++;
+        if (glob[i + 1] === "/") i++;
+      } else {
+        source += "[^/]*";
+      }
+    } else {
+      source += char.replace(/[\\^$.+(){}[\]|]/g, "\\$&");
+    }
+  }
+  const anchored = new RegExp(`^${source}$`);
+  return (
+    anchored.test(relativePath) ||
+    glob.includes("/") === false &&
+      anchored.test(basename(relativePath))
+  );
+};
+
+const regex = new RegExp(pattern);
+const base = resolve(process.cwd(), root);
+const skip = new Set(["node_modules", ".git", ...excludes]);
+const walk = (dir, rel) => {
+  const matches_ = [];
+  for (const entry of readdirSync(dir, { withFileTypes: true }).sort((a, b) =>
+    a.name < b.name ? -1 : a.name > b.name ? 1 : 0
+  )) {
+    if (entry.name.startsWith(".") && entry.name !== ".") continue;
+    if (skip.has(entry.name)) continue;
+    const childRel = rel === "" ? entry.name : `${rel}/${entry.name}`;
+    const child = join(dir, entry.name);
+    if (entry.isDirectory()) {
+      matches_.push(...walk(child, childRel));
+    } else if (entry.isFile()) {
+      if (includes.length > 0 && !includes.some((glob) => matches(childRel, glob))) continue;
+      const lines = readFileSync(child, "utf8").split("\n");
+      for (let index = 0; index < lines.length; index++) {
+        const text = lines[index];
+        if (text === "" && index === lines.length - 1) break; // trailing newline
+        if (regex.test(text)) {
+          matches_.push({ path: childRel, line: index + 1, text });
+        }
+      }
+    }
+  }
+  return matches_;
+};
+
+let found;
+try {
+  statSync(base);
+  found = walk(base, "");
+} catch (error) {
+  console.error(`rg fixture: ${error?.message ?? error}`);
+  process.exit(2);
+}
+
+// The match events parseRgJson consumes; begin/end/summary are skippable.
+for (const match of found) {
+  process.stdout.write(
+    `${JSON.stringify({
+      type: "match",
+      data: {
+        path: { text: match.path },
+        lines: { text: `${match.text}\n` },
+        line_number: match.line,
+      },
+    })}\n`
+  );
+}
+process.exit(found.length > 0 ? 0 : 1);
