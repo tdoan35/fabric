@@ -267,12 +267,15 @@ docker("D9 putArchive/getArchive round-trip through /tmp/x byte for byte", async
     const parser = new Parser();
     const collected: Array<{ path: string; data: Buffer }> = [];
     parser.on("entry", (entry: ReadEntry) => {
-      // Directory entries ride along in the tar stream; the assertion is about
-      // the files.
-      if (entry.type !== "File") return;
+      // Every entry gets a consumer: the parser only finishes once each entry
+      // stream drains, so a skipped directory entry would stall the `end`
+      // (observed as a 30 s test timeout on CI).
       const chunks: Buffer[] = [];
       entry.on("data", (chunk: Buffer) => chunks.push(chunk));
       entry.on("end", () => {
+        // Directory entries ride along in the tar stream; the assertion is
+        // about the files.
+        if (entry.type !== "File") return;
         const rel = String(entry.path ?? "").replace(/^\.\//, "").replace(/\/+$/, "");
         if (rel !== "") collected.push({ path: rel, data: Buffer.concat(chunks) });
       });
