@@ -5,6 +5,7 @@
 // releases it on completion or failure. Host mode — no slots port, or a tool
 // that needs none — is byte-identical to the R14 path. Both drivers.
 import { expect, test } from "vitest";
+import { fold } from "@fabric/core";
 import { append, sandboxSlots } from "../../index";
 import type { EventInput, RuntimeStore } from "../../index";
 import { MemoryQueue } from "../../queue/memory";
@@ -231,6 +232,161 @@ describeDrivers("tool.exec sandbox slots (ANY-92 T16)", (h) => {
     const events = await store.readStream(streamId, { workspaceId: WORKSPACE });
     expect(of(events, "tool.completed")).toHaveLength(0);
     expect(of(events, "tool.queued")).toHaveLength(0); // the slot was free; the call never queued
+  });
+
+  test("each wait and each position change records its own tool.queued fact — 1 -> 2 -> 1 keeps all three", async () => {
+    const store = await h.openStore();
+    const queue = new MemoryQueue();
+    const slots = sandboxSlots(store, { cap: 1 });
+    expect((await slots.acquire({ workspaceId: WORKSPACE, callKey: "run:zz:hold", priority: 1, now: 0 })).granted).toBe(true);
+
+    const streamId = "run:t16-pos";
+    const tools = new SlotTools({ sh: { effect: "read", needsSlot: true, runs: [{ ok: true, result: "listing" }] } });
+    await seed(store, streamId, [runCreated(streamId), toolCalled(streamId, "c1", "read")]);
+    await enqueueToolExec(store, queue, streamId, "c1");
+
+    const pass = async (worker: string, now: number) => {
+      const lease = await queue.claim(worker, ["tool.exec"], now);
+      if (lease === null) throw new Error("expected a claimable tool.exec job in the test setup");
+      expect(lease.key).toBe(`${streamId}:c1`);
+      await handleToolExecJob(lease, { store, queue, tools, slots, now: () => now });
+    };
+
+    // position 1: the slot is held elsewhere
+    await pass("worker-1", 5_000);
+    // a chat turn's call ranks ahead, pushing this one to position 2
+    const chatTurn = await slots.acquire({ workspaceId: WORKSPACE, callKey: "session:s:cx", priority: 0, now: 5_500 });
+    expect(chatTurn.granted).toBe(false);
+    await pass("worker-2", 7_000);
+    // the chat turn goes away: back to position 1
+    await slots.release("session:s:cx");
+    await pass("worker-3", 9_000);
+
+    const events = await store.readStream(streamId, { workspaceId: WORKSPACE });
+    const queued = of(events, "tool.queued");
+    // every transition is its own fact — the return to 1 is not deduplicated
+    // into the first wait's fact, and no fact is a repeat of the current state
+    expect(queued.map((fact) => fact.payload)).toEqual([
+      { callId: "c1", reason: "sandbox_slot", position: 1 },
+      { callId: "c1", reason: "sandbox_slot", position: 2 },
+      { callId: "c1", reason: "sandbox_slot", position: 1 },
+    ]);
+    expect(queued.map((fact) => fact.causation)).toEqual([
+      `${streamId}:c1:tool.queued:1`,
+      `${streamId}:c1:tool.queued:2`,
+      `${streamId}:c1:tool.queued:3`,
+    ]);
+    // the fold still reports the call as waiting — the watchdog stands down
+    expect(fold(events).queuedCalls).toEqual(["c1"]);
+    expect(tools.count("sh")).toBe(0);
+  });
+
+  test("a call that dequeues, fails retryably and waits again records its second wait", async () => {
+    const store = await h.openStore();
+    const queue = new MemoryQueue();
+    const slots = sandboxSlots(store, { cap: 1 });
+    expect((await slots.acquire({ workspaceId: WORKSPACE, callKey: "run:zz:hold", priority: 1, now: 0 })).granted).toBe(true);
+
+    const streamId = "run:t16-again";
+    const tools = new SlotTools({ sh: { effect: "read", needsSlot: true, throws: new Error("transient tool failure") } });
+    await seed(store, streamId, [runCreated(streamId), toolCalled(streamId, "c1", "read")]);
+    await enqueueToolExec(store, queue, streamId, "c1");
+
+    // first pass: refused, the wait is a fact, the job defers
+    const lease1 = await claimToolExec(queue, streamId, "c1", 5_000);
+    await handleToolExecJob(lease1, { store, queue, tools, slots, now: () => 5_000 });
+    expect(tools.count("sh")).toBe(0);
+
+    // the holder finishes; the retry dequeues with its wait, then the tool
+    // fails — a job-level failure, so the lease fails retryably
+    await slots.release("run:zz:hold");
+    const lease2 = await queue.claim("worker-2", ["tool.exec"], 7_000);
+    expect(lease2?.key).toBe(`${streamId}:c1`);
+    await expect(
+      handleToolExecJob(lease2!, { store, queue, tools, slots, now: () => 7_000 })
+    ).rejects.toThrow("transient tool failure");
+    expect((await queue.get(lease2!.jobId))?.lastError).toBe("transient tool failure");
+
+    // another call takes the freed slot, so the retry (attempt 2) waits again
+    expect(
+      (await slots.acquire({ workspaceId: WORKSPACE, callKey: "run:zz:hold2", priority: 1, now: 36_000 })).granted
+    ).toBe(true);
+    const lease3 = await queue.claim("worker-3", ["tool.exec"], 37_000);
+    expect(lease3?.attempt).toBe(2);
+    await handleToolExecJob(lease3!, { store, queue, tools, slots, now: () => 37_000 });
+
+    const events = await store.readStream(streamId, { workspaceId: WORKSPACE });
+    // the second waiting period is a fact of its own, not a deduplicate of
+    // the first — the fold reports the call waiting, matching its slot row
+    const queued = of(events, "tool.queued");
+    expect(queued.map((fact) => fact.payload)).toEqual([
+      { callId: "c1", reason: "sandbox_slot", position: 1 },
+      { callId: "c1", reason: "sandbox_slot", position: 1 },
+    ]);
+    expect(queued.map((fact) => fact.causation)).toEqual([
+      `${streamId}:c1:tool.queued:1`,
+      `${streamId}:c1:tool.queued:2`,
+    ]);
+    const dequeued = of(events, "tool.dequeued");
+    expect(dequeued).toHaveLength(1);
+    expect(dequeued[0]!.payload).toEqual({ callId: "c1", waitedMs: 2_000 });
+    expect(fold(events).queuedCalls).toEqual(["c1"]);
+    expect(tools.count("sh")).toBe(1); // it ran once, on the granted pass
+  });
+
+  test("a failure recording the dequeue releases the granted slot and fails the job", async () => {
+    const store = await h.openStore();
+    const queue = new MemoryQueue();
+    const slots = sandboxSlots(store, { cap: 1 });
+    expect((await slots.acquire({ workspaceId: WORKSPACE, callKey: "run:zz:hold", priority: 1, now: 0 })).granted).toBe(true);
+
+    const streamId = "run:t16-gate";
+    const tools = new SlotTools({ sh: { effect: "read", needsSlot: true, runs: [{ ok: true, result: "listing" }] } });
+    await seed(store, streamId, [runCreated(streamId), toolCalled(streamId, "c1", "read")]);
+    await enqueueToolExec(store, queue, streamId, "c1");
+
+    // first pass: refused, the job defers past the wait
+    const lease1 = await claimToolExec(queue, streamId, "c1", 5_000);
+    await handleToolExecJob(lease1, { store, queue, tools, slots, now: () => 5_000 });
+    await slots.release("run:zz:hold");
+
+    // second pass: the slot is granted, but the store drops the dequeue fact —
+    // the grant must not outlive the failure, and the job must fail retryably
+    const lease2 = await queue.claim("worker-2", ["tool.exec"], 7_000);
+    expect(lease2?.key).toBe(`${streamId}:c1`);
+    const failingDequeueStore: RuntimeStore = {
+      ...store,
+      transaction: (run) =>
+        store.transaction((tx) =>
+          run({
+            onCommit: tx.onCommit.bind(tx),
+            query: (sql: string, params: readonly unknown[] = []) => {
+              if (sql.includes("insert into events") && params[4] === "tool.dequeued") {
+                throw new Error("dequeue append unavailable");
+              }
+              return tx.query(sql, params);
+            },
+          })
+        ),
+    };
+    await expect(
+      handleToolExecJob(lease2!, { store: failingDequeueStore, queue, tools, slots, now: () => 7_000 })
+    ).rejects.toThrow("dequeue append unavailable");
+
+    // the acquired slot went back: a fresh call walks straight in
+    expect(
+      (await slots.acquire({ workspaceId: WORKSPACE, callKey: "run:zz:probe", priority: 1, now: 7_100 })).granted
+    ).toBe(true);
+    // and the job followed the normal failure path, not a stuck lease
+    const job = await queue.get(lease2!.jobId);
+    expect(job?.status).toBe("pending");
+    expect(job?.runAt).toBe(37_000); // tool.exec's 30 s backoff from the 7 s clock
+    expect(job?.lastError).toBe("dequeue append unavailable");
+    // nothing ran and nothing recorded
+    expect(tools.count("sh")).toBe(0);
+    const events = await store.readStream(streamId, { workspaceId: WORKSPACE });
+    expect(of(events, "tool.dequeued")).toHaveLength(0);
+    expect(of(events, "tool.completed")).toHaveLength(0);
   });
 
   test("a queued rerunnable call that finishes through recovery releases its slot registration", async () => {
