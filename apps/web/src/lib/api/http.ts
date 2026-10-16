@@ -1,12 +1,14 @@
 import {
   ChatStreamLineSchema, ContextSnapshotSchema, OccurrenceSchema, ProjectSchema, RegistrySchema, ReportSchema,
-  RunEventSchema, RunSchema, ScheduleFireSchema, ScheduleSchema, SessionMessagesSchema, TaskSchema,
+  RunEventSchema, RunSchema, ScheduleFireSchema, ScheduleSchema, SessionEventSchema, SessionMessagesSchema, TaskSchema,
   WeaveSnapshotSchema,
-  type ChatRequest, type ChatStreamLine, type ContextSnapshot, type FinalizeResponse, type Occurrence,
+  type CreateSessionRequest, type CreateSessionResponse, type ChatRequest, type ChatStreamLine, type ContextSnapshot, type FinalizeResponse, type FollowSessionOptions, type Occurrence,
+  type PostMessageInput, type PostMessageResponse,
   type Project, type Registry, type Report, type Run, type RunEvent, type Schedule, type ScheduleFire,
-  type ScheduleInput, type SchedulePatch, type SessionMessages, type SpliceResponse, type Task,
+  type ScheduleInput, type SchedulePatch, type SessionEvent, type SessionMessages, type SpliceResponse, type Task,
   type WeaveSnapshot,
 } from "@fabric/contracts";
+import { createSession, followSession, postMessage } from "@fabric/contracts";
 import { z } from "zod";
 
 export const apiBase = (import.meta.env.VITE_API_URL || "http://localhost:8787").replace(/\/$/, "");
@@ -100,4 +102,10 @@ export const httpApi = {
   // Chat (UI-CHAT): Dana's thread. Http mode only; mock mode streams the scripted adapter instead.
   chat: chatStream,
   getSessionMessages: (id: string) => request<SessionMessages>(`/sessions/${encodeURIComponent(id)}/messages`, SessionMessagesSchema),
+  // Sessions (RUNTIME §13): post, then follow the stream. The S12a client over the global fetch.
+  createSession: (req: CreateSessionRequest): Promise<CreateSessionResponse> => createSession(fetch, apiBase, req),
+  postMessage: (id: string, req: PostMessageInput): Promise<PostMessageResponse & { done?: Promise<void> }> =>
+    postMessage(fetch, apiBase, id, req).then((res) => ({ ...res, done: undefined })),
+  followSession: (id: string, opts: FollowSessionOptions): Promise<void> => followSession(fetch, apiBase, id, opts),
+  getSessionEvents: (id: string) => request<SessionEvent[]>(`/sessions/${encodeURIComponent(id)}/events`, z.array(SessionEventSchema)),
 };
