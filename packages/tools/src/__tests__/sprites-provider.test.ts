@@ -25,11 +25,6 @@ import { spriteSandboxes } from "../sprites";
 // the fake Sprites client: a temp dir per sprite, real processes, no network
 // ---------------------------------------------------------------------------
 
-/** Sprite paths are host-relative under the sprite's dir; the longest token
- * first is unnecessary — /workspace and /projects/ never prefix each other. */
-const translate = (value: string): string =>
-  value.replaceAll("/workspace", "workspace").replaceAll("/projects/", "projects/");
-
 class FakeCommand extends EventEmitter {
   stdin = new PassThrough();
   stdout = new PassThrough();
@@ -86,12 +81,19 @@ class FakeSprite {
   ): FakeCommand {
     const record = { argv: [command, ...args], killed: false };
     this.commands.push(record);
-    if (command === "tar") this.client.tarCalls += 1;
+    // Every tar, bare or wrapped in the bash composites, counts.
+    if (command === "tar" || (command === "bash" && /\btar\b/.test(args[1] ?? ""))) {
+      this.client.tarCalls += 1;
+    }
+    // Sprite paths become absolute host paths under the sprite's dir, so a
+    // command's own cwd (the shell tool's /workspace) never rebases them.
+    const abs = (value: string): string =>
+      value
+        .replaceAll("/workspace", join(this.dir, "workspace"))
+        .replaceAll("/projects/", `${join(this.dir, "projects")}/`);
     const cwd =
-      options.cwd === undefined
-        ? this.dir
-        : path.resolve(this.dir, translate(options.cwd));
-    const child = spawnNode(command, args.map(translate), { cwd });
+      options.cwd === undefined ? this.dir : path.resolve(this.dir, abs(options.cwd));
+    const child = spawnNode(command, args.map(abs), { cwd });
     return new FakeCommand(child, record);
   }
 
@@ -319,12 +321,13 @@ test("S6 shell output streams with the exit code, and a timeout kills the proces
   expect(timedOut.timedOut).toBe(true);
   const home = client.sprite(sandbox.id);
   if (home === undefined) throw new Error("sprite missing");
-  expect(home.command("sleep")?.killed).toBe(true);
+  expect(home.command("sleep 5")?.killed).toBe(true);
 });
 
 test("S7 reap writes back and then deletes idle sprites; stopAll clears every sprite", async () => {
+  const p = provider();
   const workspace = await agentDir();
-  const sandbox = await provider().acquire({
+  const sandbox = await p.acquire({
     workspaceId: "ws1",
     agentId: "researcher",
     mounts: [{ hostPath: workspace, containerPath: "/workspace" }],
@@ -334,7 +337,7 @@ test("S7 reap writes back and then deletes idle sprites; stopAll clears every sp
   await writeFile(join(home.dir, "workspace", "late.txt"), "late");
   await new Promise((resolve) => setTimeout(resolve, 5));
 
-  await provider().reap({ idleMs: 0 });
+  await p.reap({ idleMs: 0 });
   expect(await readFile(join(workspace, "late.txt"), "utf8")).toBe("late");
   expect(client.sprite(sandbox.id)).toBeUndefined();
 
