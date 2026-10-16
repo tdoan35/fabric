@@ -82,7 +82,9 @@ function slotPriority(streamId: string): number {
  * counts give each transition its own identity (its causation's ordinal), so
  * a later waiting period — or a return to an earlier position — records
  * instead of deduplicating into an earlier fact, while the fold-position
- * comparison below suppresses repeated observations of the current state. */
+ * comparison below suppresses repeated observations of the current state.
+ * New causations use a `transition` namespace to avoid colliding with older
+ * facts whose numeric suffix represented the position rather than a count. */
 function queuedStateOf(
   rows: readonly EventRow[],
   callId: string
@@ -403,7 +405,7 @@ export async function handleToolExecJob(lease: QueueLease, deps: ToolExecJobDeps
             type: "tool.queued",
             actor: "tool.exec",
             payload: { callId, reason: "sandbox_slot", position: verdict.position },
-            causation: `${key}:tool.queued:${queuedSeq}`,
+            causation: `${key}:tool.queued:transition:${queuedSeq}`,
           });
         }
         await store.transaction(async (tx) => {
@@ -436,7 +438,7 @@ export async function handleToolExecJob(lease: QueueLease, deps: ToolExecJobDeps
                   type: "tool.dequeued",
                   actor: "tool.exec",
                   payload: { callId, waitedMs: Math.max(0, nowMs - verdict.since) },
-                  causation: `${key}:tool.dequeued:${dequeuedSeq}`,
+                  causation: `${key}:tool.dequeued:transition:${dequeuedSeq}`,
                 },
               ],
             },

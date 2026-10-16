@@ -150,7 +150,7 @@ describeDrivers("tool.exec sandbox slots (ANY-92 T16)", (h) => {
     const queued = of(events, "tool.queued");
     expect(queued).toHaveLength(1);
     expect(queued[0]!.payload).toEqual({ callId: "c1", reason: "sandbox_slot", position: 1 });
-    expect(queued[0]!.causation).toBe(`${streamId}:c1:tool.queued:1`);
+    expect(queued[0]!.causation).toBe(`${streamId}:c1:tool.queued:transition:1`);
     // the job is back to pending 2 s out, the attempt untouched by the wait
     const job = await queue.get(lease.jobId);
     expect(job?.status).toBe("pending");
@@ -274,9 +274,9 @@ describeDrivers("tool.exec sandbox slots (ANY-92 T16)", (h) => {
       { callId: "c1", reason: "sandbox_slot", position: 1 },
     ]);
     expect(queued.map((fact) => fact.causation)).toEqual([
-      `${streamId}:c1:tool.queued:1`,
-      `${streamId}:c1:tool.queued:2`,
-      `${streamId}:c1:tool.queued:3`,
+      `${streamId}:c1:tool.queued:transition:1`,
+      `${streamId}:c1:tool.queued:transition:2`,
+      `${streamId}:c1:tool.queued:transition:3`,
     ]);
     // the fold still reports the call as waiting — the watchdog stands down
     expect(fold(events).queuedCalls).toEqual(["c1"]);
@@ -356,8 +356,8 @@ describeDrivers("tool.exec sandbox slots (ANY-92 T16)", (h) => {
       { callId: "c1", reason: "sandbox_slot", position: 1 },
     ]);
     expect(queued.map((fact) => fact.causation)).toEqual([
-      `${streamId}:c1:tool.queued:1`,
-      `${streamId}:c1:tool.queued:2`,
+      `${streamId}:c1:tool.queued:transition:1`,
+      `${streamId}:c1:tool.queued:transition:2`,
     ]);
     const dequeued = of(events, "tool.dequeued");
     expect(dequeued).toHaveLength(1);
