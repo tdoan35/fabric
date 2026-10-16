@@ -331,6 +331,7 @@ export async function handleToolExecJob(lease: QueueLease, deps: ToolExecJobDeps
     return;
   }
   if (staged === null) return; // the recovery branch completed the lease in phase 1
+  const { tool, args, agentId, wantSlot, queuedPos } = staged;
 
   // -- the slot gate (T16): between the read and the run ----------------------
   // The slot is held per tool call — this job's key — never per run, and a
@@ -339,7 +340,7 @@ export async function handleToolExecJob(lease: QueueLease, deps: ToolExecJobDeps
   // attempt untouched; granted to a queued call, it appends `tool.dequeued`
   // with the wait — that re-decides, so the watchdog re-arms (§7).
   let heldSlot = false;
-  if (staged.wantSlot && deps.slots !== undefined) {
+  if (wantSlot && deps.slots !== undefined) {
     const nowMs = (deps.now ?? (() => Date.now()))();
     const verdict = await deps.slots.acquire({
       workspaceId: lease.workspaceId,
@@ -349,7 +350,7 @@ export async function handleToolExecJob(lease: QueueLease, deps: ToolExecJobDeps
     });
     if (!verdict.granted) {
       const events: EventInput[] = [];
-      if (staged.queuedPos !== verdict.position) {
+      if (queuedPos !== verdict.position) {
         events.push({
           type: "tool.queued",
           actor: "tool.exec",
@@ -375,7 +376,7 @@ export async function handleToolExecJob(lease: QueueLease, deps: ToolExecJobDeps
       }
       return; // nothing runs; the job comes back on its own
     }
-    if (staged.queuedPos !== null) {
+    if (queuedPos !== null) {
       await store.transaction(async (tx) => {
         await append(tx, lease.workspaceId, [
           {
@@ -398,7 +399,6 @@ export async function handleToolExecJob(lease: QueueLease, deps: ToolExecJobDeps
   }
 
   // -- phase 2: the run, outside any store transaction ------------------------
-  const { tool, args, agentId } = staged;
   const lines: string[] = [];
   let result: ToolRunResult;
   let doneByOther = false;

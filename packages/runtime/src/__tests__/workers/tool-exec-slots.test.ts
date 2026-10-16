@@ -111,7 +111,8 @@ async function claimToolExec(queue: Queue, streamId: string, callId: string, now
   return lease;
 }
 
-const of = (events: readonly { type: string }[], type: string) => events.filter((event) => event.type === type);
+const of = <T extends { type: string }>(events: readonly T[], type: string) =>
+  events.filter((event) => event.type === type);
 
 /** The fact envelope modulo the stream id — the C10 byte-identity projection. */
 async function factBodies(store: RuntimeStore, streamId: string) {
