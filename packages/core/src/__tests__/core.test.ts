@@ -33,6 +33,8 @@ const ALL_TYPES = [
   "tool.call",
   "tool.completed",
   "tool.interrupted",
+  "tool.queued",
+  "tool.dequeued",
   "tool.denied",
   "delegation.result",
   "step.finished",
