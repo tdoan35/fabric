@@ -206,11 +206,17 @@ describeDrivers("S8a server: the proposal-decision endpoint (ANY-57)", (h) => {
     expect(
       (await postJson(`/api/sessions/${sessionId}/proposals/prop-1/decision`, { decision: "approve" })).status,
     ).toBe(200);
-    const before = (await eventsOf(rt, sessionId)).length;
+
+    // R17: the approve's commit wakes an idle worker at once (Z2), so the loop's
+    // resumed turn — llm.* … message.delivered — can land in the stream while
+    // this case is still running. Those are the first decision's follow-up, not
+    // the 409's: the loop never writes proposal.decided, so pin that count
+    // instead of the stream's total length, which raced the worker and lost.
+    const decided = (await factsOf(rt, sessionId, "proposal.decided")).length;
 
     const second = await postJson(`/api/sessions/${sessionId}/proposals/prop-1/decision`, { decision: "decline" });
     expect(second.status).toBe(409);
-    expect((await eventsOf(rt, sessionId)).length).toBe(before); // nothing appended
+    expect((await factsOf(rt, sessionId, "proposal.decided")).length).toBe(decided); // the 409 appended nothing
     expect(await teamCount(appDb, "Dig Team")).toBe(1); // and no second side effect
   }, 30_000);
 
