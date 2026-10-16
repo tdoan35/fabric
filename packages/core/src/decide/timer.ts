@@ -156,6 +156,9 @@ export function decideTimer(state: AgentState, streamId: string, trigger: TimerT
 
     case "watchdog": {
       if (state.status === "waiting") return EMPTY; // its deadline timer governs the wait
+      // T16: a call waiting for a workspace sandbox slot is a wait, not a
+      // stall — the queued fact and the later dequeue keep the timers armed.
+      if (state.queuedCalls.length > 0) return EMPTY;
       if ((state.head ?? 0) > trigger.armedHead) return EMPTY; // progress since the arm
       if (trigger.strike === 2) {
         return {

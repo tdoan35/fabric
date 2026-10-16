@@ -48,6 +48,9 @@ export type AgentState = {
   pendingInputs: PendingInput[];
   calls: number;
   openToolCalls: Map<string, ToolCall>;
+  /** The calls whose latest fact is `tool.queued` (T16): they wait for a
+   * workspace sandbox slot, so the stall watchdog stands down (section 7). */
+  queuedCalls: string[];
   waits: Map<string, Wait>;
   costUsd: number;
   /** Cost of the `llm.completed`s of the current turn; reset when a turn starts (section 5.1 rule 1). */
@@ -145,6 +148,7 @@ export function fold(events: readonly unknown[], init: FoldInit = {}): AgentStat
   let approvals: Record<string, ApprovalHold> = { ...(init.approvals ?? {}) };
   let pendingInputs: PendingInput[] = (init.pendingInputs ?? []).map((input) => ({ ...input }));
   const openToolCalls = new Map(init.openToolCalls);
+  let queuedCalls: string[] = [...(init.queuedCalls ?? [])];
   const waits = new Map(init.waits);
 
   // Terminal is sticky (R2.9): once set, from the init or a run.* fact, no later fact moves it.
@@ -263,9 +267,20 @@ export function fold(events: readonly unknown[], init: FoldInit = {}): AgentStat
         }
         break;
       }
+      case "tool.queued":
+        // T16: the call waits for a workspace sandbox slot; the wait is a fact.
+        if (!queuedCalls.includes(event.payload.callId)) {
+          queuedCalls = [...queuedCalls, event.payload.callId];
+        }
+        break;
+      case "tool.dequeued":
+        // The slot granted: the call is in flight again, not waiting.
+        queuedCalls = queuedCalls.filter((callId) => callId !== event.payload.callId);
+        break;
       case "tool.completed":
       case "tool.interrupted": {
         openToolCalls.delete(event.payload.callId);
+        queuedCalls = queuedCalls.filter((callId) => callId !== event.payload.callId);
         // A held approval resolves with its call's completion: the record and, when the
         // expiry swept it, the wait itself go with it (T3).
         for (const [waitId, approval] of Object.entries(approvals)) {
@@ -334,6 +349,7 @@ export function fold(events: readonly unknown[], init: FoldInit = {}): AgentStat
     pendingInputs,
     calls,
     openToolCalls,
+    queuedCalls,
     waits,
     costUsd,
     turnCostUsd,

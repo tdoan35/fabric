@@ -126,11 +126,23 @@ set status = 'leased',
 from candidate, cfg c
 where j.id = candidate.id
   and c.type = j.type
-returning j.id, j.type, j.key, j.stream_id, j.workspace_id, j.attempts
+returning j.id, j.type, j.key, j.stream_id, j.workspace_id, j.attempts, j.run_started_at
 `;
 
 function staleMessage(lease: QueueLease): string {
   return `${STALE} ${lease.jobId} is not leased to ${lease.workerId} at attempt ${lease.attempt}`;
+}
+
+/** The lease fence's claim-identity clause (T16): a defer's re-claim hands the
+ * same (worker, attempt) pair back, so only the claim's own instant — this
+ * queue's `run_started_at` — separates the live lease from the one that gave
+ * the job back. Leases without the instant (hand-built in tests) keep the
+ * pair-only fence. `at` is the placeholder index the clause's parameter lands
+ * on, per statement. */
+function claimFence(lease: QueueLease, at: number): { sql: string; params: unknown[] } {
+  return lease.claimAt === undefined
+    ? { sql: "", params: [] }
+    : { sql: ` and run_started_at = $${at}::bigint`, params: [lease.claimAt] };
 }
 
 /** The store's RuntimeTx, structurally: `query` plus the inherited hook seam. */
@@ -338,10 +350,15 @@ export class PgQueue implements Queue {
     ]);
     const row = rows[0];
     if (!row) return null;
+    const startedAt = row.run_started_at;
     return {
       jobId: String(row.id),
       attempt: Number(row.attempts),
       workerId,
+      // The claim's identity (T16): the fence beyond (worker, attempt) — the
+      // defer's re-claim reuses the pair, and the lease that deferred must
+      // read as stale against the job it left.
+      ...(startedAt === null || startedAt === undefined ? {} : { claimAt: Number(startedAt) }),
       type: String(row.type),
       key: String(row.key),
       streamId: row.stream_id === null || row.stream_id === undefined ? null : String(row.stream_id),
@@ -353,14 +370,40 @@ export class PgQueue implements Queue {
     await this.#settle();
     const config = this.#configFor(lease.type);
     const silence = config.heartbeatMs ?? config.maxRunMs;
+    const fence = claimFence(lease, 7);
     const result = await this.#exec(
       `update jobs
        set lease_until = least($1::bigint + $2::bigint, run_started_at + $3::bigint)
-       where id = $4 and status = 'leased' and worker_id = $5 and attempts = $6
+       where id = $4 and status = 'leased' and worker_id = $5 and attempts = $6${fence.sql}
        returning id`,
-      [now, silence, config.maxRunMs, lease.jobId, lease.workerId, lease.attempt]
+      [now, silence, config.maxRunMs, lease.jobId, lease.workerId, lease.attempt, ...fence.params]
     );
     if (result.rows.length === 0) throw new Error(staleMessage(lease));
+  }
+
+  async defer(tx: QueueTx, lease: QueueLease, runAt: number): Promise<void> {
+    await this.#settle();
+    // Call-time check: a lease lost since the caller's claim is a stale error.
+    await this.#requireCurrentLease(lease);
+    if (isRuntimeTx(tx)) {
+      const exec: Exec = async (sql, values) => ({
+        rows: await tx.query(sql, (values ?? []) as readonly unknown[]),
+      });
+      // Inside the caller's transaction: the rollback leaves it leased.
+      await this.#applyDefer(exec, lease, runAt);
+      tx.onCommit(() => void this.#announce());
+      return;
+    }
+    tx.onCommit(() => {
+      this.#intents.push({
+        run: async () => {
+          // Apply-time fence: a lease lost since the call is left as it stands.
+          await this.#applyDefer((sql, values) => this.#exec(sql, values), lease, runAt);
+          await this.#announce();
+        },
+      });
+      this.#kick();
+    });
   }
 
   async complete(tx: QueueTx, lease: QueueLease): Promise<void> {
@@ -396,7 +439,7 @@ export class PgQueue implements Queue {
   ): Promise<void> {
     await this.#settle();
     const config = this.#configFor(lease.type);
-    const fence = [lease.jobId, lease.workerId, lease.attempt];
+    const fence = claimFence(lease, 4);
     if (options.retryable && lease.attempt <= config.maxRetries) {
       const backoff = Math.min(
         config.retryBackoffMs * 2 ** (lease.attempt - 1),
@@ -404,11 +447,11 @@ export class PgQueue implements Queue {
       );
       const result = await this.#exec(
         `update jobs
-         set status = 'pending', last_error = $4, run_at = $5::bigint,
+         set status = 'pending', last_error = $5, run_at = $6::bigint,
              worker_id = null, lease_until = null, run_started_at = null
-         where id = $1 and status = 'leased' and worker_id = $2 and attempts = $3
+         where id = $1 and status = 'leased' and worker_id = $2 and attempts = $3${fence.sql}
          returning id`,
-        [...fence, error.message, now + backoff]
+        [lease.jobId, lease.workerId, lease.attempt, ...fence.params, error.message, now + backoff]
       );
       if (result.rows.length === 0) throw new Error(staleMessage(lease));
       await this.#announce();
@@ -416,10 +459,10 @@ export class PgQueue implements Queue {
     }
     const result = await this.#exec(
       `update jobs
-       set status = 'dead', last_error = $4, worker_id = null, lease_until = null, run_started_at = null
-       where id = $1 and status = 'leased' and worker_id = $2 and attempts = $3
+       set status = 'dead', last_error = $5, worker_id = null, lease_until = null, run_started_at = null
+       where id = $1 and status = 'leased' and worker_id = $2 and attempts = $3${fence.sql}
        returning id`,
-      [...fence, error.message]
+      [lease.jobId, lease.workerId, lease.attempt, ...fence.params, error.message]
     );
     if (result.rows.length === 0) throw new Error(staleMessage(lease));
     await this.#announce();
@@ -591,24 +634,45 @@ export class PgQueue implements Queue {
 
   /** The fenced completion; no rows means the lease was lost since the call. */
   async #applyComplete(exec: Exec, lease: QueueLease): Promise<void> {
+    const fence = claimFence(lease, 4);
     await exec(
       `update jobs
        set status = 'completed', worker_id = null, lease_until = null, run_started_at = null
-       where id = $1 and status = 'leased' and worker_id = $2 and attempts = $3`,
-      [lease.jobId, lease.workerId, lease.attempt]
+       where id = $1 and status = 'leased' and worker_id = $2 and attempts = $3${fence.sql}`,
+      [lease.jobId, lease.workerId, lease.attempt, ...fence.params]
+    );
+  }
+
+  /** The fenced defer (T16): back to pending at `runAt`, the attempt given
+   * back so the next claim re-leases the same one; no failure is recorded. */
+  async #applyDefer(exec: Exec, lease: QueueLease, runAt: number): Promise<void> {
+    const fence = claimFence(lease, 5);
+    await exec(
+      `update jobs
+       set status = 'pending', run_at = $2::bigint, worker_id = null, lease_until = null,
+           run_started_at = null, attempts = greatest(attempts - 1, 0)
+       where id = $1 and status = 'leased' and worker_id = $3 and attempts = $4${fence.sql}`,
+      [lease.jobId, runAt, lease.workerId, lease.attempt, ...fence.params]
     );
   }
 
   async #requireCurrentLease(lease: QueueLease): Promise<void> {
-    const { rows } = await this.#exec(`select status, worker_id, attempts from jobs where id = $1`, [
-      lease.jobId,
-    ]);
+    const { rows } = await this.#exec(
+      `select status, worker_id, attempts, run_started_at from jobs where id = $1`,
+      [lease.jobId]
+    );
     const row = rows[0];
+    const startedAt = row?.run_started_at;
     const current =
       row !== undefined &&
       row.status === "leased" &&
       row.worker_id === lease.workerId &&
-      Number(row.attempts) === lease.attempt;
+      Number(row.attempts) === lease.attempt &&
+      // The claim identity (T16): the defer's re-claim reuses the pair, so
+      // only the claim's own instant separates the live lease from the one
+      // that gave the job back.
+      (lease.claimAt === undefined ||
+        (startedAt !== null && startedAt !== undefined && Number(startedAt) === lease.claimAt));
     if (!current) throw new Error(staleMessage(lease));
   }
 
