@@ -5,17 +5,24 @@
 // does on the pgvector Postgres service. The extension is loaded by the adapter
 // (PgliteAdapter); the runtime's migrations deliberately do not touch it.
 //
-// PG2: a data dir made by the 0.3 line keeps opening — the fixture tarball in
-// fixtures/pglite-0.3/ was produced by 0.3.16 via
-// fixtures/pglite-0.3/make-fixture.ts (the repo's own openStore + append, then
-// PGlite#dumpDataDir); see that file's header for the exact command.
+// PG2 (revised by Ty 2026-10-16): a data dir made by the 0.3 line holds
+// Postgres 17 data, which the pinned PGlite (18.6) cannot open — no migration
+// exists yet, so the store refuses it before constructing PGlite: the message
+// names the dir, both majors and the delete-to-start-fresh way out, and the
+// dir is left byte-identical. The fixture tarball in fixtures/pglite-0.3/ was
+// produced by 0.3.16 via fixtures/pglite-0.3/make-fixture.ts (unchanged).
+//
+// PG2b: the expected-major constant in store/pglite.ts equals the major the
+// pinned PGlite actually embeds, so a future pin bump that forgets to move
+// the constant fails here.
 //
 // PG4: the adapter contract R13 pinned on the new line — nested store
 // transactions join as savepoints, top-level ones serialize on the one
 // connection. Deadlock-prone cases race a 2 s deadline that fails as an
 // assertion, never a test timeout (the R13 precedent).
 import { execFile } from "node:child_process";
-import { mkdtemp, readdir, rm } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { mkdtemp, readdir, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -23,6 +30,7 @@ import { AssertionError } from "node:assert";
 import { promisify } from "node:util";
 import { expect, test } from "vitest";
 import { openStore, type RuntimeStore } from "../index";
+import { EXPECTED_PG_MAJOR } from "../store/pglite";
 import { describeDrivers } from "../testing/drivers";
 
 const untar = promisify(execFile);
@@ -74,39 +82,65 @@ describeDrivers("pgvector through the store (ANY-96 R18)", (h) => {
   });
 });
 
-test("PG2 a data dir made by 0.3.16 opens through openStore; migrations are a no-op and its events read back", async () => {
+/** Every file under `dir` as `relative path → sha256`, the byte-identical check. */
+async function fingerprint(dir: string): Promise<Record<string, string>> {
+  const files: Record<string, string> = {};
+  async function walk(current: string): Promise<void> {
+    for (const entry of await readdir(current, { withFileTypes: true })) {
+      const child = path.join(current, entry.name);
+      if (entry.isDirectory()) await walk(child);
+      else if (entry.isFile()) {
+        files[path.relative(dir, child)] = createHash("sha256")
+          .update(await readFile(child))
+          .digest("hex");
+      }
+    }
+  }
+  await walk(dir);
+  return files;
+}
+
+test("PG2 an old-major data dir (the 0.3.16 fixture, Postgres 17) is refused with a clear error and left byte-identical", async () => {
   const fixtureTar = fileURLToPath(new URL("./fixtures/pglite-0.3/runtime-0.3.16.tar", import.meta.url));
-  const migrationsDir = fileURLToPath(new URL("../../migrations", import.meta.url));
-  const dir = await mkdtemp(path.join(tmpdir(), "r18-fixture-"));
+  // A digit-free prefix: the assertions below check the message contains
+  // "17"/"18", which must come from the message body, not the tmp path.
+  const dir = await mkdtemp(path.join(tmpdir(), "old-major-dir-"));
   try {
     await untar("tar", ["-xf", fixtureTar, "-C", dir]);
-    const store = await openStore({ driver: "pglite", dataDir: dir });
-    try {
-      // No-op migrations: the fixture was made by this repo's own store code, so
-      // opening it must leave every migration applied and none newly recorded.
-      const applied = await store.transaction((tx) =>
-        tx.query("select name from runtime_migrations order by name")
-      );
-      const files = (await readdir(migrationsDir)).filter((name) => name.endsWith(".sql")).sort();
-      expect(applied.map((row) => String(row.name))).toEqual(files);
-
-      const events = await store.readStream("run:fixture", { workspaceId: "ws-fixture" });
-      expect(events.map((event) => event.seq)).toEqual([1, 2, 3]);
-      expect(events.map((event) => event.type)).toEqual([
-        "run.started",
-        "run.started",
-        "run.started",
-      ]);
-      expect(events.map((event) => event.payload)).toEqual([
-        { objective: "fixture-one" },
-        { objective: "fixture-two" },
-        { objective: "fixture-three" },
-      ]);
-    } finally {
-      await store.close();
-    }
+    const before = await fingerprint(dir);
+    const failure = await openStore({ driver: "pglite", dataDir: dir }).then(
+      () => undefined,
+      (error: unknown) => error
+    );
+    // The store's clear refusal — not PGlite's raw `FATAL: database files
+    // are incompatible with server`, and not a successful open: the dir
+    // path, the found major (17), the expected major (18), the way out.
+    expect(failure).toBeInstanceOf(Error);
+    const message = failure instanceof Error ? failure.message : String(failure);
+    expect(message).toContain(dir);
+    expect(message).toContain("17");
+    expect(message).toContain("18");
+    expect(message).toMatch(/delete/i);
+    // Refused before PGlite was constructed: no file in the dir changed.
+    expect(await fingerprint(dir)).toEqual(before);
   } finally {
     await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("PG2b the expected-major constant equals the Postgres major the pinned PGlite embeds", async () => {
+  const store = await openStore({ driver: "pglite" });
+  try {
+    const rows = await store.transaction((tx) =>
+      tx.query("select current_setting('server_version_num') as version_num")
+    );
+    const versionNum = Number(rows[0]?.version_num);
+    expect(Number.isInteger(versionNum)).toBe(true);
+    // server_version_num 180006 → major 18; PG2 pins the refusal, this pins
+    // the constant the refusal compares against.
+    expect(Math.floor(versionNum / 10_000)).toBe(EXPECTED_PG_MAJOR);
+  } finally {
+    await store.close();
   }
 });
 

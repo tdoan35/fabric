@@ -15,7 +15,7 @@
   },
   "dependencies": {
     "@fabric/core": "*",
-    "@electric-sql/pglite": "^0.5.10",
+    "@electric-sql/pglite": "0.5.10",
     "@electric-sql/pglite-pgvector": "0.0.11",
     "pg": "^8.16.0",
     "pg-boss": "^12.37.1"
