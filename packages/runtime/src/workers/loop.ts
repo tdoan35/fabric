@@ -9,6 +9,7 @@
 // a surface — fails loud: the worker's wiring is the caller's, and half a
 // worker silently requeueing forever is worse than an error.
 import type { ModelDeltaCall, ModelPort, SurfacePort, ToolPort } from "../ports";
+import type { SandboxSlots } from "../slots";
 import { DEFAULT_TYPE_CONFIG, DEFAULT_TYPE_CONFIGS } from "../queue/types";
 import type { Queue, QueueLease } from "../queue/types";
 import type { RuntimeStore } from "../store/types";
@@ -26,6 +27,9 @@ export type WorkerPorts = {
   model?: ModelPort;
   tools?: ToolPort;
   surface?: SurfacePort;
+  /** T16: the workspace sandbox slots — wired whenever step-2 tools run
+   * outside the host process; absent on host mode. */
+  slots?: SandboxSlots;
   /** Live-delta sink, handed straight to the model port (§8). The second
    * argument is the call the delta belongs to (R15), worked out by the
    * handler's read phase — the call runs outside any store transaction. */
@@ -74,7 +78,13 @@ async function dispatch(lease: QueueLease, options: WorkerOptions): Promise<void
       });
     case "tool.exec":
       if (ports.tools === undefined) throw new Error("worker cannot run tool.exec: no tool port");
-      return handleToolExecJob(lease, { store, queue, tools: ports.tools, now });
+      return handleToolExecJob(lease, {
+        store,
+        queue,
+        tools: ports.tools,
+        ...(ports.slots !== undefined ? { slots: ports.slots } : {}),
+        now,
+      });
     case "delegate.resolve":
       return handleDelegateResolveJob(lease, deps);
     case "deliver":
@@ -86,12 +96,17 @@ async function dispatch(lease: QueueLease, options: WorkerOptions): Promise<void
 }
 
 /** Heartbeat the lease per its type config while the handler runs; a stale
- * heartbeat (the job completed under us) is none of the loop's business. */
+ * heartbeat (the job completed under us) is none of the loop's business. The
+ * held sandbox slot (T16) beats with the lease — the call key is the job key —
+ * so a long tool call never looks crashed; a beat on a call holding no slot
+ * is a no-op. */
 async function withHeartbeat<T>(lease: QueueLease, options: WorkerOptions, run: () => Promise<T>): Promise<T> {
   const config = DEFAULT_TYPE_CONFIGS[lease.type] ?? DEFAULT_TYPE_CONFIG;
   if (config.heartbeatMs === null || config.heartbeatMs === undefined) return run();
   const timer = setInterval(() => {
-    options.queue.heartbeat(lease, nowOf(options)()).catch(() => {});
+    const now = nowOf(options)();
+    options.queue.heartbeat(lease, now).catch(() => {});
+    options.ports.slots?.heartbeat(lease.key, now).catch(() => {});
   }, config.heartbeatMs);
   (timer as unknown as { unref?: () => void }).unref?.();
   try {

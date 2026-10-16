@@ -113,6 +113,15 @@ export const EVENT_PAYLOAD_SCHEMAS = {
     error: z.string().optional(),
   }),
   "tool.interrupted": z.strictObject({ callId: z.string(), effect, note: z.string() }),
+  /** T16: the call waits for a workspace sandbox slot — one fact per position
+   * change, the job deferred until the slot frees. */
+  "tool.queued": z.strictObject({
+    callId: z.string(),
+    reason: z.string(),
+    position: z.number().int(),
+  }),
+  /** T16: the slot granted; the wait the call made, in ms. */
+  "tool.dequeued": z.strictObject({ callId: z.string(), waitedMs: z.number().int() }),
   "tool.denied": z.strictObject({
     tool: z.string(),
     target: z.string(),
@@ -244,6 +253,8 @@ export const EVENT_CLASSES: Record<EventType, EventClass> = {
   "tool.call": "fact",
   "tool.completed": "fact",
   "tool.interrupted": "fact",
+  "tool.queued": "fact",
+  "tool.dequeued": "fact",
   "tool.denied": "fact",
   "delegation.result": "fact",
   "step.finished": "fact",

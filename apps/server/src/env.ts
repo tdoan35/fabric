@@ -90,6 +90,9 @@ export const env = z.object({
   FABRIC_BROKER_RULES: z.string().optional(),
   /** Idle window (ms) before a sandbox is reaped and its egress token dies. */
   FABRIC_SANDBOX_IDLE_MS: z.coerce.number().int().default(300_000),
+  /** T16: the per-workspace cap on concurrent sandbox (step-2) tool calls.
+   * Wired only when FABRIC_EXECUTION is not host; default 4. */
+  FABRIC_SANDBOX_SLOTS: z.coerce.number().int().min(1).default(4),
 }).parse(process.env);
 
 export const corsOrigins = env.CORS_ORIGINS

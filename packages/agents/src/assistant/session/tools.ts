@@ -114,6 +114,10 @@ export function sessionTools(deps: SessionToolDeps): ToolPort {
     // the session descriptors first, then the registry's (metas give the effect)
     describe: (name) =>
       descriptors[name] ?? registryDescriptor(name, deps.registry),
+    // T16: a tool holds a sandbox slot exactly when the registry's declaration
+    // runs it in the workspace sandbox (step 2); every other tool — the
+    // session's own, the bridges, the MCP discoveries — never queues.
+    needsSlot: (name) => deps.registry?.tools.meta(name)?.step === 2,
   };
 }
 

@@ -126,6 +126,10 @@ export class MemoryQueue implements Queue {
         jobId: job.id,
         attempt: job.attempts,
         workerId,
+        // The claim's identity (T16): the fence beyond (worker, attempt) —
+        // a defer's re-claim hands the same pair back, and the lease that
+        // deferred must read as stale against the job it left.
+        claimAt: now,
         type: job.type,
         key: job.key,
         streamId: job.streamId,
@@ -149,6 +153,21 @@ export class MemoryQueue implements Queue {
         this.clearLease(job);
       }
       this.#wake();
+    });
+  }
+
+  async defer(tx: QueueTx, lease: QueueLease, runAt: number): Promise<void> {
+    const job = this.requireCurrentLease(lease);
+    tx.onCommit(() => {
+      // Re-checked at apply time: the lease may have been lost since.
+      if (this.isCurrentLease(job, lease)) {
+        job.status = "pending";
+        job.runAt = runAt;
+        // The attempt goes back: the run did no work, so the next claim
+        // re-leases the same attempt and no recovery is owed.
+        job.attempts = Math.max(0, job.attempts - 1);
+        this.clearLease(job);
+      }
     });
   }
 
@@ -297,7 +316,12 @@ export class MemoryQueue implements Queue {
     return (
       job.status === "leased" &&
       job.leaseWorkerId === lease.workerId &&
-      job.attempts === lease.attempt
+      job.attempts === lease.attempt &&
+      // The claim identity (T16): a defer's re-claim reuses the worker and
+      // the attempt, so only the claim's own instant separates the live
+      // lease from the one that gave the job back. A lease with no claim
+      // instant (hand-built in tests) keeps the pair-only fence.
+      (lease.claimAt === undefined || job.leaseClaimedAt === lease.claimAt)
     );
   }
 
