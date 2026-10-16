@@ -6,7 +6,7 @@
 // labels, mounts, env), `ps` filters on labels, `rm` drops containers, and
 // `exec` runs the command argv as a real local process — the "container
 // filesystem" is whatever directories the test mounts.
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { dirname } from "node:path";
 
@@ -17,12 +17,17 @@ if (statePath === undefined || statePath === "") {
 }
 
 const load = () => {
-  if (!existsSync(statePath)) return { seq: 0, images: [], containers: [] };
-  return JSON.parse(readFileSync(statePath, "utf8"));
+  if (!existsSync(statePath)) return { seq: 0, images: [], containers: [], networks: [] };
+  return { networks: [], ...JSON.parse(readFileSync(statePath, "utf8")) };
 };
 const save = (state) => {
   mkdirSync(dirname(statePath), { recursive: true });
-  writeFileSync(statePath, `${JSON.stringify(state, null, 2)}\n`);
+  // Atomic rename: concurrent `load()` (every invocation's top level, outside
+  // the mutation lock) must never see a half-written file — a truncated read
+  // crashes the shim and silently drops e.g. one half of a parallel `rm`.
+  const tmp = `${statePath}.${process.pid}.tmp`;
+  writeFileSync(tmp, `${JSON.stringify(state, null, 2)}\n`);
+  renameSync(tmp, statePath);
 };
 
 // The provider removes containers concurrently (reap, stopAll), so state
@@ -105,19 +110,78 @@ switch (command) {
   case "run": {
     const { flags, positionals } = parse(rest);
     const labels = {};
+    let name;
     for (const [flag, value] of flags) {
       if ((flag === "--label") && value !== undefined) {
         const at = value.indexOf("=");
         labels[value.slice(0, at)] = value.slice(at + 1);
       }
+      if ((flag === "--name") && value !== undefined) name = value;
     }
     mutate((state) => {
       const id = `c${String(state.seq + 1).padStart(3, "0")}`;
       state.seq += 1;
-      state.containers.push({ id, labels, argv: ["run", ...rest] });
+      state.containers.push({ id, name: name ?? id, labels, argv: ["run", ...rest] });
       save(state);
       console.log(id);
     });
+    break;
+  }
+
+  case "inspect": {
+    // inspect -f <fmt> <ref>: enough of the real one for the provider's
+    // liveness checks (T18) — a known container is running.
+    const at = rest.indexOf("-f");
+    const ref = rest.at(-1);
+    const container = state.containers.find((c) => c.id === ref || c.name === ref);
+    if (container === undefined) {
+      console.error(`fake-docker: no such container ${ref}`);
+      process.exit(1);
+    }
+    const format = rest[at + 1] ?? "";
+    if (format.includes(".Id")) console.log(container.id);
+    else console.log("true"); // {{.State.Running}} and friends: up.
+    break;
+  }
+
+  case "network": {
+    const sub = rest[0];
+    if (sub === "create") {
+      const name = rest.at(-1);
+      mutate((current) => {
+        if (!current.networks.includes(name)) current.networks.push(name);
+        save(current);
+      });
+    } else if (sub === "inspect") {
+      const name = rest.at(-1);
+      if (!state.networks.includes(name)) {
+        console.error(`fake-docker: no such network ${name}`);
+        process.exit(1);
+      }
+      console.log("true"); // {{.Internal}}: created internal, stays internal.
+    } else if (sub === "connect") {
+      // recorded implicitly: the run argv carries --network
+    } else if (sub === "rm") {
+      const name = rest.at(-1);
+      mutate((current) => {
+        current.networks = current.networks.filter((network) => network !== name);
+        save(current);
+      });
+    } else {
+      console.error(`fake-docker: network ${sub} unsupported`);
+      process.exit(2);
+    }
+    break;
+  }
+
+  case "logs": {
+    const name = rest.at(-1);
+    const container = state.containers.find((c) => c.id === name || c.name === name);
+    if (container === undefined) {
+      console.error(`fake-docker: no such container ${name}`);
+      process.exit(1);
+    }
+    console.log("[egress] listening proxy=:3128 http=:80");
     break;
   }
 
@@ -142,10 +206,10 @@ switch (command) {
   }
 
   case "rm": {
-    const ids = rest.filter((id) => !id.startsWith("-"));
-    const gone = new Set(ids);
+    const refs = rest.filter((id) => !id.startsWith("-"));
+    const gone = new Set(refs);
     mutate((state) => {
-      state.containers = state.containers.filter((c) => !gone.has(c.id));
+      state.containers = state.containers.filter((c) => !gone.has(c.id) && !gone.has(c.name));
       save(state);
     });
     break;
