@@ -279,3 +279,134 @@ export const IncognitoThread: Story = {
     await waitFor(() => expect(canvas.queryByRole("complementary")).toBeNull());
   },
 };
+
+// ---- Session era (ANY-62 S12b): the W cases. Each thread runs on the session
+// protocol (post, then follow); the closing leg of each story re-enters the
+// thread and demands the exchange from the session, which the pre-session
+// mock path (no store, no markSent) cannot satisfy — that leg is the red
+// assertion. The reply texts are the scripted mock's own, so the assertions
+// hold under whichever backend serves the turn.
+
+const W_QUESTION = "What is the capital of France?";
+const W_REPLY_HEAD = "I can answer that direct"; // proper prefix: mid-reply state
+const W_REPLY_TAIL = "placeholder.)"; // only in the complete reply
+const W_ROUTES = (sessionId: string) => [
+  // Keyed by session: a route swap between two threads must remount the screen
+  // (the production HomePage keys the thread by sessionId too), never update
+  // the mounted instance in place with the previous thread's runtime content.
+  { path: "/", element: <ChatScreen key={sessionId} sessionId={sessionId} /> },
+  { path: "/away", element: <p data-testid="away">Away</p> },
+];
+
+/** Leave the thread and come back through the story router (fresh mount, same session). */
+async function roundTrip() {
+  const router = storyRouter();
+  if (!router) throw new Error("W stories: no active story router");
+  await router.navigate("/away");
+  await waitFor(() => expect(within(document.body).getByTestId("away")).toBeInTheDocument());
+  await router.navigate("/");
+}
+
+/** W1 — the turn streams: provisional grows into the final reply, the composer
+ * re-enables, and the finished exchange survives leaving and reopening. */
+export const W1SessionTurn: Story = {
+  name: "W1 session turn streams, settles and persists",
+  parameters: { router: { routes: W_ROUTES("w1-thread") } },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    const user = userEvent.setup();
+
+    await user.type(canvas.getByRole("textbox"), W_QUESTION);
+    await user.click(canvas.getByRole("button", { name: "Send" }));
+
+    // Provisional text first, the complete reply later: the turn streams.
+    await waitFor(() => expect(canvasElement.textContent).toContain(W_REPLY_HEAD), { timeout: 5000, interval: 50 });
+    await waitFor(() => expect(canvasElement.textContent).toContain(W_REPLY_TAIL), { timeout: 5000, interval: 50 });
+
+    // The turn ended: the composer takes the next message (it empties on send,
+    // so the gated Send only exists once a follow-up is typed).
+    await user.type(canvas.getByRole("textbox"), "And Rome?");
+    await waitFor(() => expect(canvas.getByRole("button", { name: "Send" })).toBeEnabled(), { timeout: 5000 });
+
+    // The exchange lives in the session: a fresh mount of the same thread shows it.
+    await roundTrip();
+    const reopened = within(canvasElement);
+    await waitFor(() => expect(reopened.getByRole("textbox")).toBeInTheDocument(), { timeout: 5000 });
+    await waitFor(() => expect(canvasElement.textContent).toContain(W_QUESTION), { timeout: 5000, interval: 50 });
+    await waitFor(() => expect(canvasElement.textContent).toContain(W_REPLY_TAIL), { timeout: 5000, interval: 50 });
+  },
+};
+
+/** W2 — a thread reopened mid-turn shows the provisional text, then the final reply. */
+export const W2ReopenMidTurn: Story = {
+  name: "W2 thread reopened mid-turn shows provisional then final",
+  parameters: { router: { routes: W_ROUTES("w2-thread") } },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    const user = userEvent.setup();
+
+    await user.type(canvas.getByRole("textbox"), W_QUESTION);
+    await user.click(canvas.getByRole("button", { name: "Send" }));
+
+    // Leave while the reply is still streaming.
+    await waitFor(() => expect(canvasElement.textContent).toContain(W_REPLY_HEAD), { timeout: 5000, interval: 50 });
+    await roundTrip();
+
+    // The reopened thread shows the turn: provisional text, then the final reply.
+    await waitFor(() => expect(canvasElement.textContent).toContain(W_REPLY_HEAD), { timeout: 5000, interval: 50 });
+    await waitFor(() => expect(canvasElement.textContent).toContain(W_REPLY_TAIL), { timeout: 5000, interval: 50 });
+    await waitFor(() => expect(canvasElement.textContent).toContain(W_QUESTION), { timeout: 5000, interval: 50 });
+  },
+};
+
+/** W3 — a specialist thread answers as the specialist; an incognito thread keeps
+ * its Not-saved notice after the turn, and both persist across a reopen. */
+export const W3SpecialistAndIncognito: Story = {
+  name: "W3 specialist reply and incognito notice on session threads",
+  parameters: {
+    router: {
+      routes: [
+        ...W_ROUTES("w3-specialist"),
+        { path: "/incognito", element: <ChatScreen key="w3-incognito" sessionId="w3-incognito" /> },
+      ],
+    },
+  },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    const user = userEvent.setup();
+
+    // Specialist leg: wait for the roster, switch off Dana, ask, get Jonah's reply.
+    await waitFor(() => expect(canvas.getByText("Agent 1 of 4")).toBeInTheDocument(), { timeout: 5000 });
+    await user.click(canvas.getByRole("button", { name: "Next agent" }));
+    await waitFor(() => expect(canvas.getByText("Agent 2 of 4")).toBeInTheDocument(), { timeout: 5000 });
+    await user.type(canvas.getByRole("textbox"), W_QUESTION);
+    await user.click(canvas.getByRole("button", { name: "Send" }));
+    await waitFor(() => expect(canvasElement.textContent).toContain("Jonah here."), { timeout: 5000, interval: 50 });
+    await waitFor(() => expect(canvasElement.textContent).toContain(W_REPLY_TAIL), { timeout: 5000, interval: 50 });
+
+    // The specialist exchange survives a reopen too.
+    await roundTrip();
+    await waitFor(() => expect(canvasElement.textContent).toContain("Jonah here."), { timeout: 5000, interval: 50 });
+
+    // Incognito leg: a fresh thread, off the record; the notice stands after the turn.
+    const router = storyRouter();
+    if (!router) throw new Error("W3: no active story router");
+    await router.navigate("/incognito");
+    const incognito = within(canvasElement);
+    await waitFor(() => expect(incognito.getByRole("switch", { name: "Incognito chat" })).toBeInTheDocument(), { timeout: 5000 });
+    await user.click(incognito.getByRole("switch", { name: "Incognito chat" }));
+    // The remount races the click: retry until the switch reads on.
+    await waitFor(async () => {
+      const switchEl = incognito.getByRole("switch", { name: "Incognito chat" });
+      if (switchEl.getAttribute("aria-checked") !== "true") await user.click(switchEl);
+      expect(switchEl).toHaveAttribute("aria-checked", "true");
+    }, { timeout: 5000 });
+    await waitFor(() => expect(incognito.getByText("Not saved to your sessions or used to shape your assistant.")).toBeVisible(), { timeout: 5000 });
+    await user.type(incognito.getByRole("textbox"), W_QUESTION);
+    await user.click(incognito.getByRole("button", { name: "Send" }));
+    await waitFor(() => expect(canvasElement.textContent).toContain(W_REPLY_TAIL), { timeout: 5000, interval: 50 });
+    await user.click(incognito.getByRole("button", { name: "Toggle Dana · incognito's profile" }));
+    const panel = incognito.getByRole("complementary", { name: "Dana's profile" });
+    expect(within(panel).getByText("Not saved")).toBeInTheDocument();
+  },
+};

@@ -20,6 +20,15 @@ import { createRegistry } from "@fabric/tools";
 import { builtinTools } from "@fabric/tools/builtin";
 import { hostTools } from "@fabric/tools/host";
 import {
+  type McpClient,
+  ensureMcpSchema,
+  mcpClient,
+  mcpOAuth,
+  mcpServers,
+  type McpOAuth,
+  type McpServers,
+} from "@fabric/tools/mcp";
+import {
   encryptedTableVault,
   ensureVaultSchema,
   envFallbackVault,
@@ -35,6 +44,7 @@ import {
   definitionAccess,
   danaSessionDef,
   legacyBridges,
+  mcpToolRunner,
   specialistSessionDef,
   sessionTools,
   SKILL_TOOL_DEFAULTS,
@@ -42,9 +52,10 @@ import {
   withSessionContext,
   withSkillsIndex,
   withToolset,
+  withMcpTools,
   type SessionBridgeEngines,
 } from "@fabric/agents/session";
-import type { ProposalActions, SpecialistAgent } from "@fabric/agents/session";
+import type { McpSessionDeps, ProposalActions, SpecialistAgent } from "@fabric/agents/session";
 import { recallFacts } from "@fabric/agents/assistant";
 import { InProcessLiveBus, type LiveBus } from "./live-bus";
 import { createTestModelPort, type TestModelOptions } from "./test-model";
@@ -94,6 +105,9 @@ export type FabricRuntime = {
   /** The skills store (M3): the imported skills behind the tools, the index
    * stamp and the import route, on this runtime's store. */
   skills: SkillsStore;
+  /** The MCP wiring (M6): the workspace's servers and OAuth — M7's routes
+   * take over from here; the stamp and the run hook read the seam. */
+  mcp: { servers: McpServers; oauth: McpOAuth };
   /** Drains the workers, then closes queue and store. Idempotent. */
   stop: () => Promise<void>;
 };
@@ -165,6 +179,14 @@ export async function sessionTurnDefinition(
     stamped = withToolset(def as never, { registry, access }) as Record<string, unknown>;
   }
 
+  // M6: the attached ready MCP servers join the stamp — discovered tools as
+  // fresh `mcp_<server>_` names (no collision with the static set), access
+  // from the attachment. A server that cannot be discovered is skipped with
+  // its status set: creating a session never fails because of MCP.
+  if (sessionMcp !== undefined) {
+    stamped = (await withMcpTools(stamped as never, agentId, sessionMcp)) as Record<string, unknown>;
+  }
+
   // M3: the skills index on the system prompt — role `dana` for Dana,
   // `specialist` for everyone else; empty index (or placeholder def) is the
   // identity, so the byte-stability of a skills-less stamp stands.
@@ -211,6 +233,18 @@ let sessionSkills: SkillsStore | undefined;
  * installs the runtime's store; tests install their own (or `undefined`). */
 export function setSessionSkills(skills: SkillsStore | undefined): void {
   sessionSkills = skills;
+}
+
+// The MCP session deps (M6): the workspace's server records, the client
+// factory (OAuth's fetchFor for oauth servers) and the scope factory, as the
+// stamp's withMcpTools and the port's mcpToolRunner need them. Unset — the
+// unit tests — no mcp_* tools are stamped or run.
+let sessionMcp: McpSessionDeps | undefined;
+
+/** The MCP seam, `setSessionSkills`'s twin: `startRuntime` installs the
+ * workspace's servers; tests install their own (or `undefined`). */
+export function setSessionMcp(deps: McpSessionDeps | undefined): void {
+  sessionMcp = deps;
 }
 
 /** M3: the import route's 404 gate — an id is unknown only under a loaded
@@ -276,8 +310,9 @@ const sessionToolScopeOf =
  * legacy-engine bridges and — T14 — the server's tool registry behind the
  * per-call scope, when the seam is set). The app surface remains a no-op that
  * succeeds — the client reads the stream, the receipt only closes the job.
- * S6: model deltas ride the live bus, attributed by the enclosing transaction's
- * scan (see `wireLiveBus`) — the port's callback carries text only. */
+ * S6/R15: model deltas ride the live bus, attributed by the call the worker
+ * passes (`onDelta`'s second argument) — the model call runs outside any
+ * store transaction, so no enclosing scan survives to it. */
 export function workerPorts(
   env: RuntimeEnv,
   live: LiveBus,
@@ -299,15 +334,13 @@ export function workerPorts(
       ...(sessionToolRegistry !== undefined
         ? { registry: { tools: sessionToolRegistry, scope: sessionToolScopeOf(env, vault) } }
         : {}),
+      ...(sessionMcp !== undefined ? { mcp: mcpToolRunner(sessionMcp) } : {}),
     }),
     surface: {
       send: async () => ({}),
     },
-    onDelta: (delta) => {
-      const scan = liveScan.getStore();
-      if (scan?.stream !== undefined && scan.call !== undefined) {
-        live.delta(scan.stream, { turn: scan.call.turn, callNo: scan.call.callNo, text: delta.text });
-      }
+    onDelta: (delta, call) => {
+      live.delta(call.streamId, { turn: call.turn, callNo: call.callNo, text: delta.text });
     },
   };
 }
@@ -349,16 +382,15 @@ function pgliteQueueBackend(store: RuntimeStore) {
 
 // -- the live bus wiring (S6) -------------------------------------------------
 
-/** One transaction's observed session traffic, for the two S6 seams: the
- * post-commit `appended` notify, and the stream/call attribution the model's
- * `onDelta` needs (the port's callback carries the text only). */
+/** One transaction's observed session traffic, for the post-commit `appended`
+ * notify and the call-end it carries. (Through R14 the scan also attributed
+ * the model's `onDelta`; R15's `ll.call` runs the model outside any
+ * transaction and hands the attribution to the callback itself.) */
 interface LiveScan {
   /** Session streams touched, to the head this transaction leaves them at. */
   heads: Map<string, number>;
   /** Streams whose `ll.completed`/`ll.failed` landed here — end the call. */
   ended: Set<string>;
-  /** The in-flight call: the latest `ll.requested` the transaction read. */
-  call?: { turn: number; callNo: number };
   /** The session stream the transaction last touched. */
   stream?: string;
 }
@@ -368,27 +400,9 @@ const liveScan = new AsyncLocalStorage<LiveScan>();
 const isSession = (value: unknown): value is string =>
   typeof value === "string" && value.startsWith("session:");
 
-function callOf(payload: unknown): { turn: number; callNo: number } | undefined {
-  let value = payload;
-  if (typeof value === "string") {
-    try {
-      value = JSON.parse(value);
-    } catch {
-      return undefined;
-    }
-  }
-  if (value === null || typeof value !== "object") return undefined;
-  const record = value as Record<string, unknown>;
-  const turn = record["turn"];
-  const callNo = record["callNo"];
-  if (typeof turn === "number" && typeof callNo === "number") return { turn, callNo };
-  return undefined;
-}
-
 /** The traffic shapes of one append (store.ts), read off the transaction: the
  * head bump names the stream and its new seq; the event inserts carry the
- * completion that ends a call. Event rows read back in the same transaction
- * carry the `ll.requested` whose turn/callNo the live deltas inherit. */
+ * completion that ends a call. */
 function scanForLive(
   sql: string,
   params: readonly unknown[] | undefined,
@@ -411,16 +425,6 @@ function scanForLive(
     const type = params[4];
     if (isSession(streamId) && (type === "llm.completed" || type === "llm.failed")) {
       scan.ended.add(streamId);
-    }
-  }
-  for (const row of rows) {
-    if (row === null || typeof row !== "object") continue;
-    const record = row as Record<string, unknown>;
-    if (record["type"] !== "llm.requested" || !isSession(record["stream_id"])) continue;
-    const call = callOf(record["payload"]);
-    if (call !== undefined) {
-      scan.call = call;
-      scan.stream = record["stream_id"];
     }
   }
 }
@@ -516,6 +520,51 @@ export async function startRuntime(env: RuntimeEnv, opts: { worker?: boolean } =
   setSessionToolRegistry(
     createRegistry(sendFrom === undefined ? registryDefs.filter((def) => def.name !== "send") : registryDefs),
   );
+
+  // M6: the workspace's MCP servers — connect once per workspace, attach per
+  // agent. ensureMcpSchema is M4's idempotent DDL; the deps the stamp's
+  // withMcpTools and the port's mcpToolRunner read go through the seam, and
+  // M7's routes take over from `runtime.mcp`. One client per (server,
+  // agentId) is cached, so the connection and discover's list_changed watch
+  // survive instead of a new MCP session per call; the cache is dropped (and
+  // closed) when a status changes, an agent detaches or the server goes away.
+  await ensureMcpSchema(store);
+  const servers = mcpServers(store, RUNTIME_WORKSPACE);
+  const oauth = mcpOAuth({ servers, vault, store, workspaceId: RUNTIME_WORKSPACE });
+  const mcpClients = new Map<string, McpClient>();
+  const closeMcpClients = (server: string, keep: readonly string[] = []) => {
+    for (const [key, client] of mcpClients) {
+      const separator = key.indexOf("\u0000");
+      if (key.slice(0, separator) !== server) continue;
+      if (keep.includes(key.slice(separator + 1))) continue;
+      mcpClients.delete(key);
+      void client.close().catch(() => {
+        // Best effort: the entry is dropped either way.
+      });
+    }
+  };
+  const unwatchMcpAgents = servers.onAgentsChanged(({ server, agents, removed }) => {
+    closeMcpClients(server, removed ? [] : agents);
+  });
+  setSessionMcp({
+    servers,
+    clientFor: async (server, agentId) => {
+      const key = `${server}\u0000${agentId}`;
+      const cached = mcpClients.get(key);
+      if (cached !== undefined) return cached;
+      const record = await servers.get(server);
+      if (record === undefined) throw new Error(`unknown mcp server ${server}`);
+      const client = mcpClient({
+        url: record.url,
+        ...(record.auth === "oauth" ? { fetch: oauth.fetchFor(server, agentId) } : {}),
+      });
+      mcpClients.set(key, client);
+      return client;
+    },
+    onStatusChange: (server) => closeMcpClients(server),
+    scope: sessionToolScopeOf(env, vault),
+    log: (line) => console.log(line),
+  });
 
   const concurrency = Math.max(1, env.RUNTIME_CONCURRENCY ?? 4);
   const queue = env.RUNTIME_DATABASE_URL
@@ -623,6 +672,7 @@ export async function startRuntime(env: RuntimeEnv, opts: { worker?: boolean } =
     live,
     vault,
     skills,
+    mcp: { servers, oauth },
     ...(proposals !== undefined ? { proposals } : {}),
     stop: async () => {
       if (stopped) return;
@@ -632,6 +682,13 @@ export async function startRuntime(env: RuntimeEnv, opts: { worker?: boolean } =
       await queue.close();
       await store.close();
       await appDb?.close();
+      // M6: drop the cached MCP clients (and their agent-list listener)
+      // before the store they read closes.
+      unwatchMcpAgents();
+      await Promise.allSettled([...mcpClients.values()].map((client) => client.close()));
+      // M6: the seam's servers sit on this store; a closed store must not
+      // serve another boot's stamps.
+      setSessionMcp(undefined);
     },
   };
   setRuntime(runtime);

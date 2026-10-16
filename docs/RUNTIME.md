@@ -91,7 +91,7 @@ Existing types keep their names and payloads so the web app's read model (`deriv
 | `run.cancel_requested` | fact | **by** | API / parent's cancellation |
 | `run.blocked`, `run.stopped`, `run.finished` | fact | unchanged, plus **result, costUsd** on `run.finished` | decide / `run.finalize` |
 | `artifact.created` | fact | name, artifactId | `tool.exec` |
-| `context.snapshot` | telemetry | snapshotId (the snapshot row is written before the model call; memory and skill sections are stored by reference) | `llm.call` |
+| `context.snapshot` | telemetry | snapshotId (the snapshot row is recorded with the call's result, in the same batch; memory and skill sections are stored by reference) | `llm.call` |
 | `tool.result` (term line) | telemetry | line, kind | `tool.exec`, streamed |
 | `agent.message` | telemetry | text (a copy of `llm.completed.text` for the UI) | decide |
 | `run.progress` | telemetry | **text, milestone** | decide |
@@ -106,7 +106,7 @@ Model token deltas never enter the log: they are pushed live (§8) and the final
 | Job | Idempotency key | Does | Appends |
 |---|---|---|---|
 | `decide` | per-stream serial queue | Fold, decide, append decisions, queue jobs | lifecycle, step, llm, tool, delegation, human facts |
-| `llm.call` | `stream:turn:llm:n` | Assemble context, save snapshot, call the model **once** with tools that have no `execute` (the SDK returns tool calls instead of running them), stream deltas live | `llm.completed` or `llm.failed`, `context.snapshot` |
+| `llm.call` | `stream:turn:llm:n` | Assemble context, save snapshot, call the model **once** with tools that have no `execute` (the SDK returns tool calls instead of running them), stream deltas live. The model is called between a read transaction and a record transaction, and a result that arrives after another runner's is discarded | `llm.completed` or `llm.failed`, `context.snapshot` |
 | `tool.exec` | `stream:callId` | Run one tool with the run's effective access; stream terminal lines | `tool.completed` or `tool.interrupted`, `artifact.created`, `memory.written`, term lines |
 | `delegate.resolve` | `run:<child>:resolve` | When a child run ends, report it to the parent: `tool.completed` (await mode) or `delegation.result` (background mode). Release the unused budget | parent facts |
 | `deliver` | `deliver:<eventId>:<target>` | Send one outbound message to a channel, push or email, with formatting, chunking, rate limits and retries | `message.delivered` |
