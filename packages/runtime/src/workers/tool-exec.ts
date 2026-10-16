@@ -26,6 +26,7 @@
 // lease's workspace and the stream's session agent (S2) in the io.
 import type { Queue, QueueLease } from "../queue/types";
 import type { ToolEffect, ToolPort, ToolRunResult } from "../ports";
+import type { SandboxSlots } from "../slots";
 import { append } from "../store/store";
 import type { EventInput, RuntimeStore, RuntimeTx } from "../store/types";
 import { enqueueReDecides, readEventRows, type EventRow } from "./decide";
@@ -35,6 +36,9 @@ export type ToolExecJobDeps = {
   queue: Queue;
   /** The run-scoped tool port, bound to the run's effective access upstream. */
   tools: ToolPort;
+  /** The workspace's sandbox slots (T16); absent on host mode, whose calls
+   * hold no slot and run exactly as before. */
+  slots?: SandboxSlots;
   /** Injected clock, handed to the queue's retry bookkeeping. */
   now?: () => number;
 };
@@ -44,6 +48,9 @@ const INTERRUPTED_NOTE = "interrupted by a restart; effects may be partial";
 
 /** §6's once escalation: did the first attempt's effects land? */
 const HUMAN_PROMPT = "check whether this happened";
+
+/** T16: a slot-refused job comes back this much later, attempt untouched. */
+const SLOT_DEFER_MS = 2_000;
 
 const EFFECTS: readonly ToolEffect[] = ["read", "idempotent", "rerunnable", "once"];
 const MEMORY_OPS: readonly string[] = ["add", "update", "forget"];
@@ -59,6 +66,33 @@ function callIdFromKey(key: string, streamId: string): string | null {
   if (!key.startsWith(`${streamId}:`)) return null;
   const callId = key.slice(streamId.length + 1);
   return callId.length > 0 ? callId : null;
+}
+
+/** The queue priority of a stream's tool calls (T16): chat turns — `session:`
+ * streams — rank ahead of everything else. */
+function slotPriority(streamId: string): number {
+  return streamId.startsWith("session:") ? 0 : 1;
+}
+
+/** The position the call still waits at, by the fold's `queuedCalls` rule: the
+ * latest `tool.queued`'s position when no later `tool.dequeued`, completion or
+ * interruption for the call follows it; null once the call is not waiting. */
+function queuedPositionOf(rows: readonly EventRow[], callId: string): number | null {
+  for (let index = rows.length - 1; index >= 0; index -= 1) {
+    const row = rows[index]!;
+    if (row.class !== "fact") continue;
+    const payload = isRecord(row.payload) ? row.payload : {};
+    if (payload.callId !== callId) continue;
+    if (row.type === "tool.queued") return Number(payload.position);
+    if (
+      row.type === "tool.dequeued" ||
+      row.type === "tool.completed" ||
+      row.type === "tool.interrupted"
+    ) {
+      return null;
+    }
+  }
+  return null;
 }
 
 /** The latest `tool.call` the job names, payload and all. */
@@ -244,8 +278,15 @@ export async function handleToolExecJob(lease: QueueLease, deps: ToolExecJobDeps
 
   // -- phase 1: read — the done-guard, the recovery, or the call to run ------
   let recorded = false;
-  let staged: { tool: string; args: Record<string, unknown>; agentId: string | undefined } | null =
-    null;
+  let staged: {
+    tool: string;
+    args: Record<string, unknown>;
+    agentId: string | undefined;
+    /** T16: the call holds a workspace sandbox slot before it runs. */
+    wantSlot: boolean;
+    /** T16: the position the call still waits at; null when not queued. */
+    queuedPos: number | null;
+  } | null = null;
   try {
     await store.transaction(async (tx) => {
       // W11b: the result already recorded — an at-least-once re-run. Skip the
@@ -276,7 +317,10 @@ export async function handleToolExecJob(lease: QueueLease, deps: ToolExecJobDeps
         return;
       }
 
-      staged = { tool, args, agentId: sessionAgentId(rows) };
+      // T16: the slot gate opens only when the runtime wired slots and the
+      // tool itself runs in a sandbox — host mode never asks.
+      const wantSlot = deps.slots !== undefined && (tools.needsSlot?.(tool) ?? false);
+      staged = { tool, args, agentId: sessionAgentId(rows), wantSlot, queuedPos: wantSlot ? queuedPositionOf(rows, callId) : null };
     });
   } catch (error) {
     await failRetryably(lease, deps, error);
@@ -287,6 +331,71 @@ export async function handleToolExecJob(lease: QueueLease, deps: ToolExecJobDeps
     return;
   }
   if (staged === null) return; // the recovery branch completed the lease in phase 1
+
+  // -- the slot gate (T16): between the read and the run ----------------------
+  // The slot is held per tool call — this job's key — never per run, and a
+  // chat turn's call ranks ahead of a run's. The wait is a fact: refused, the
+  // handler appends `tool.queued` (once per position) and defers the job 2 s,
+  // attempt untouched; granted to a queued call, it appends `tool.dequeued`
+  // with the wait — that re-decides, so the watchdog re-arms (§7).
+  let heldSlot = false;
+  if (staged.wantSlot && deps.slots !== undefined) {
+    const nowMs = (deps.now ?? (() => Date.now()))();
+    const verdict = await deps.slots.acquire({
+      workspaceId: lease.workspaceId,
+      callKey: key,
+      priority: slotPriority(streamId),
+      now: nowMs,
+    });
+    if (!verdict.granted) {
+      const events: EventInput[] = [];
+      if (staged.queuedPos !== verdict.position) {
+        events.push({
+          type: "tool.queued",
+          actor: "tool.exec",
+          payload: { callId, reason: "sandbox_slot", position: verdict.position },
+          causation: `${key}:tool.queued:${verdict.position}`,
+        });
+      }
+      await store.transaction(async (tx) => {
+        // Another runner may have recorded while this one asked for a slot:
+        // then nothing defers and the waiter row goes back with the tail.
+        const done = await recordedAlready(tx, streamId, lease.workspaceId, key);
+        if (done.length > 0) {
+          recorded = true;
+          return;
+        }
+        if (events.length > 0) await append(tx, lease.workspaceId, [{ streamId, events }]);
+        await queue.defer(tx, lease, nowMs + SLOT_DEFER_MS);
+      });
+      if (recorded) {
+        await deps.slots.release(key).catch(() => {});
+        await completeTolerantly(store, queue, lease);
+        return;
+      }
+      return; // nothing runs; the job comes back on its own
+    }
+    if (staged.queuedPos !== null) {
+      await store.transaction(async (tx) => {
+        await append(tx, lease.workspaceId, [
+          {
+            streamId,
+            events: [
+              {
+                type: "tool.dequeued",
+                actor: "tool.exec",
+                payload: { callId, waitedMs: Math.max(0, nowMs - verdict.since) },
+                causation: `${key}:tool.dequeued`,
+              },
+            ],
+          },
+        ]);
+        // §2: the dequeue re-decides, so the watchdog re-arms past the wait.
+        await enqueueReDecides(tx, queue, lease.workspaceId, [streamId]);
+      });
+    }
+    heldSlot = true;
+  }
 
   // -- phase 2: the run, outside any store transaction ------------------------
   const { tool, args, agentId } = staged;
@@ -320,7 +429,12 @@ export async function handleToolExecJob(lease: QueueLease, deps: ToolExecJobDeps
       await enqueueReDecides(tx, queue, lease.workspaceId, [streamId]);
       await queue.complete(tx, lease);
     });
+    // T16: the record committed — the slot goes back with the completion (or
+    // with the discard, when another runner recorded first).
+    if (heldSlot) await deps.slots?.release(key).catch(() => {});
   } catch (error) {
+    // T16: the failure path releases too — a failed call never holds a slot.
+    if (heldSlot) await deps.slots?.release(key).catch(() => {});
     await failRetryably(lease, deps, error);
   }
 

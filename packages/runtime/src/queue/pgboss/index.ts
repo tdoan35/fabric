@@ -274,6 +274,11 @@ export class PgBossQueue implements Queue {
       key: job.singletonKey ?? "",
       streamId: data?.fabric?.streamId ?? null,
       workspaceId: data?.fabric?.workspaceId ?? "",
+      // The claim's identity (T16): the row's `started_on` — the fence beyond
+      // the attempt, so a lease the same attempt re-claimed reads as stale.
+      ...(job.startedOn !== undefined && job.startedOn !== null
+        ? { claimAt: new Date(job.startedOn).getTime() }
+        : {}),
     };
   }
 
@@ -281,6 +286,20 @@ export class PgBossQueue implements Queue {
     await this.#settle();
     await this.#injectNow(now);
     await this.#ensureQueue(lease.type);
+    // The claim-identity fence (T16) before the touch: a lease the same
+    // attempt re-claimed — the defer's re-claim — is stale, which the
+    // attempt-only touch cannot see.
+    if (lease.claimAt !== undefined) {
+      const schema = this.#options.schema ?? "pgboss";
+      const { rows } = await this.#exec(
+        `SELECT started_on FROM ${schema}.job WHERE id = $1::uuid AND state = 'active'`,
+        [lease.jobId],
+      );
+      const row = rows[0] as { started_on: string | Date } | undefined;
+      if (row === undefined || toMs(row.started_on) !== lease.claimAt) {
+        throw new Error(staleMessage(lease));
+      }
+    }
     // Attempt-fenced touch: a lease lost since the call updates no rows.
     const response = (await this.#boss!.touch(lease.type, {
       id: lease.jobId,
@@ -297,6 +316,30 @@ export class PgBossQueue implements Queue {
         run: async () => {
           // Attempt-fenced at apply: a lease lost since the call is a no-op.
           await this.#boss!.complete(lease.type, { id: lease.jobId, retryCount: lease.attempt - 1 }, null);
+        },
+      });
+      this.#kick();
+    });
+  }
+
+  async defer(tx: QueueTx, lease: QueueLease, runAt: number): Promise<void> {
+    await this.#settle();
+    await this.#requireCurrentLease(lease);
+    const schema = this.#options.schema ?? "pgboss";
+    tx.onCommit(() => {
+      this.#intents.push({
+        run: async () => {
+          // Back to `retry` — the pending state pg-boss refetches past
+          // start_after — with `start_after` at runAt. `started_on` goes too:
+          // the fetch counts a refetch of a started job as the NEXT attempt
+          // (retry_count + 1 when started_on is set), and a queue wait is not
+          // a retry — the refetch must be the SAME attempt.
+          await this.#exec(
+            `UPDATE ${schema}.job
+             SET state = 'retry', start_after = $2::timestamptz, started_on = null
+             WHERE id = $1::uuid AND state = 'active' AND retry_count = $3`,
+            [lease.jobId, new Date(runAt).toISOString(), lease.attempt - 1],
+          );
         },
       });
       this.#kick();
@@ -430,11 +473,19 @@ export class PgBossQueue implements Queue {
 
   async #requireCurrentLease(lease: QueueLease): Promise<void> {
     const schema = this.#options.schema ?? "pgboss";
-    const { rows } = await this.#exec(`SELECT state, retry_count FROM ${schema}.job WHERE id = $1::uuid`, [
-      lease.jobId,
-    ]);
-    const row = rows[0] as { state: string; retry_count: number } | undefined;
+    const { rows } = await this.#exec(
+      `SELECT state, retry_count, started_on FROM ${schema}.job WHERE id = $1::uuid`,
+      [lease.jobId],
+    );
+    const row = rows[0] as
+      | { state: string; retry_count: number; started_on: string | Date | null }
+      | undefined;
     if (!row || row.state !== "active" || row.retry_count !== lease.attempt - 1) {
+      throw new Error(staleMessage(lease));
+    }
+    // The claim-identity fence (T16): a lease whose job left it and came back
+    // on the SAME attempt — the defer's re-claim — is still stale.
+    if (lease.claimAt !== undefined && toMs(row.started_on) !== lease.claimAt) {
       throw new Error(staleMessage(lease));
     }
   }
@@ -515,4 +566,10 @@ export class PgBossQueue implements Queue {
 
 function staleMessage(lease: QueueLease): string {
   return `stale lease: job ${lease.jobId} is not leased to ${lease.workerId} at attempt ${lease.attempt}`;
+}
+
+/** A pg timestamp (Date or ISO string, null when never started) as epoch ms. */
+function toMs(value: string | Date | null | undefined): number | null {
+  if (value === null || value === undefined) return null;
+  return new Date(value).getTime();
 }

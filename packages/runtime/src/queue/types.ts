@@ -52,6 +52,11 @@ export interface QueueLease {
   key: string;
   streamId: string | null;
   workspaceId: string;
+  /** The claim's identity, epoch ms (T16): adapters with no worker column in
+   * their fence — pg-boss — carry the claim's `started_on` so a lease the same
+   * attempt re-claimed is still recognised as stale. Optional: fences that
+   * already discriminate (worker id, attempt) leave it unset. */
+  claimAt?: number;
 }
 
 /** Per-type tuning: RUNTIME §4's second table. */
@@ -137,6 +142,11 @@ export interface Queue {
   /** Extends the lease: heartbeat window from `now`, inside the max-run cap.
    * Throws on a stale lease (job since reclaimed, completed or failed). */
   heartbeat(lease: QueueLease, now: number): Promise<void>;
+  /** Puts the leased job back to pending at `runAt` without failing it (T16):
+   * the attempt is given back, so the next claim re-leases the SAME attempt —
+   * a queue wait never becomes a retry — and the retry bookkeeping is
+   * untouched. Throws on a stale lease, as `complete` does. */
+  defer(tx: QueueTx, lease: QueueLease, runAt: number): Promise<void>;
   /** Marks the job done — buffered into the tx like any other write, so a
    * rollback leaves it leased and later reclaimable. Throws on a stale lease. */
   complete(tx: QueueTx, lease: QueueLease): Promise<void>;

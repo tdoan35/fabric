@@ -139,6 +139,21 @@ export class MemoryQueue implements Queue {
     });
   }
 
+  async defer(tx: QueueTx, lease: QueueLease, runAt: number): Promise<void> {
+    const job = this.requireCurrentLease(lease);
+    tx.onCommit(() => {
+      // Re-checked at apply time: the lease may have been lost since.
+      if (this.isCurrentLease(job, lease)) {
+        job.status = "pending";
+        job.runAt = runAt;
+        // The attempt goes back: the run did no work, so the next claim
+        // re-leases the same attempt and no recovery is owed.
+        job.attempts = Math.max(0, job.attempts - 1);
+        this.clearLease(job);
+      }
+    });
+  }
+
   async fail(
     lease: QueueLease,
     error: Error,

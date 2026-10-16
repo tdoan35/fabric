@@ -363,6 +363,31 @@ export class PgQueue implements Queue {
     if (result.rows.length === 0) throw new Error(staleMessage(lease));
   }
 
+  async defer(tx: QueueTx, lease: QueueLease, runAt: number): Promise<void> {
+    await this.#settle();
+    // Call-time check: a lease lost since the caller's claim is a stale error.
+    await this.#requireCurrentLease(lease);
+    if (isRuntimeTx(tx)) {
+      const exec: Exec = async (sql, values) => ({
+        rows: await tx.query(sql, (values ?? []) as readonly unknown[]),
+      });
+      // Inside the caller's transaction: the rollback leaves it leased.
+      await this.#applyDefer(exec, lease, runAt);
+      tx.onCommit(() => void this.#announce());
+      return;
+    }
+    tx.onCommit(() => {
+      this.#intents.push({
+        run: async () => {
+          // Apply-time fence: a lease lost since the call is left as it stands.
+          await this.#applyDefer((sql, values) => this.#exec(sql, values), lease, runAt);
+          await this.#announce();
+        },
+      });
+      this.#kick();
+    });
+  }
+
   async complete(tx: QueueTx, lease: QueueLease): Promise<void> {
     await this.#settle();
     // Call-time check: a lease lost since the caller's claim is a stale error.
@@ -596,6 +621,18 @@ export class PgQueue implements Queue {
        set status = 'completed', worker_id = null, lease_until = null, run_started_at = null
        where id = $1 and status = 'leased' and worker_id = $2 and attempts = $3`,
       [lease.jobId, lease.workerId, lease.attempt]
+    );
+  }
+
+  /** The fenced defer (T16): back to pending at `runAt`, the attempt given
+   * back so the next claim re-leases the same one; no failure is recorded. */
+  async #applyDefer(exec: Exec, lease: QueueLease, runAt: number): Promise<void> {
+    await exec(
+      `update jobs
+       set status = 'pending', run_at = $2::bigint, worker_id = null, lease_until = null,
+           run_started_at = null, attempts = greatest(attempts - 1, 0)
+       where id = $1 and status = 'leased' and worker_id = $3 and attempts = $4`,
+      [lease.jobId, runAt, lease.workerId, lease.attempt]
     );
   }
 
