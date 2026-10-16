@@ -121,7 +121,7 @@ switch (command) {
     mutate((state) => {
       const id = `c${String(state.seq + 1).padStart(3, "0")}`;
       state.seq += 1;
-      state.containers.push({ id, name: name ?? id, labels, argv: ["run", ...rest] });
+      state.containers.push({ id, name: name ?? id, labels, argv: ["run", ...rest], state: "running" });
       save(state);
       console.log(id);
     });
@@ -187,10 +187,14 @@ switch (command) {
 
   case "ps": {
     const wanted = [];
+    let format;
     for (let index = 0; index < rest.length; index++) {
       if (rest[index] === "--filter") {
         const filter = rest[index + 1];
         if (filter.startsWith("label=")) wanted.push(filter.slice("label=".length));
+        index += 1;
+      } else if (rest[index] === "--format") {
+        format = rest[index + 1];
         index += 1;
       }
     }
@@ -201,7 +205,15 @@ switch (command) {
         return container.labels[label.slice(0, at)] === label.slice(at + 1);
       })
     );
-    for (const container of matching) console.log(container.id);
+    for (const container of matching) {
+      // {{.ID}} {{.State}}: the startup sweep's liveness view; a container
+      // recorded without a state is a `docker create` leftover (not running).
+      if (format === "{{.ID}} {{.State}}") {
+        console.log(`${container.id} ${container.state ?? "created"}`);
+      } else {
+        console.log(container.id);
+      }
+    }
     break;
   }
 
@@ -209,6 +221,10 @@ switch (command) {
     const refs = rest.filter((id) => !id.startsWith("-"));
     const gone = new Set(refs);
     mutate((state) => {
+      // The reaping argv, for the sweep's no-force contract: the crash-recovery
+      // sweep must reap with plain `rm` so a container that starts between the
+      // sweep's `ps` and its `rm` is refused, never force-stopped mid-exec.
+      state.lastRm = ["rm", ...rest];
       state.containers = state.containers.filter((c) => !gone.has(c.id) && !gone.has(c.name));
       save(state);
     });

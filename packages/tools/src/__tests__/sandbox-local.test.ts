@@ -29,12 +29,17 @@ interface FakeContainer {
   name?: string;
   labels: Record<string, string>;
   argv: string[];
+  /** docker ps state (running/created/exited); absent means created. */
+  state?: string;
 }
 
 interface FakeState {
   seq: number;
   images: string[];
   containers: FakeContainer[];
+  /** The last recorded `rm` argv (the shim's rm case); the sweep's no-force
+   * contract reads it. */
+  lastRm?: string[];
 }
 
 let base = "";
@@ -335,6 +340,52 @@ test("a starting provider clears stale sandboxes left by a dead run", async () =
     .map((container) => container.id);
   expect(ids).not.toContain("stale-one");
   expect(ids).toEqual([probe.id]);
+});
+
+test("the startup sweep spares the running sandboxes of a concurrent run", async () => {
+  // CI runs the daemon suites' workers side by side; a starting provider's
+  // crash-recovery sweep must not stop another worker's live sandbox mid-test
+  // (the D8 `cannot exec in a stopped state` bounce). Only stopped leftovers
+  // are reaped; a running sandbox belongs to a live provider until proven else.
+  await seed({
+    seq: 8,
+    images: [IMAGE],
+    containers: [
+      { id: "live-one", state: "running", labels: { "fabric.sandbox": "1" }, argv: [] },
+      { id: "done-one", labels: { "fabric.sandbox": "1" }, argv: [] },
+    ],
+  });
+
+  const provider = fakeProvider();
+  const probe = await provider.acquire({ workspaceId: "w", agentId: "probe", mounts: [] });
+
+  const ids = (await fakeState()).containers
+    .filter((container) => container.labels["fabric.sandbox"] === "1")
+    .map((container) => container.id);
+  expect(ids).not.toContain("done-one");
+  expect(ids).toContain("live-one");
+  expect(ids).toContain(probe.id);
+});
+
+test("the startup sweep reaps without force, so a sandbox that starts during the sweep survives", async () => {
+  // The ps -> rm window: a container the sweep recorded as `created` may be
+  // running by the time the rm lands (CI run 291: E4's first proxyGet and D6's
+  // `id -u` each saw `docker exec` exit 1 after the sandbox vanished; run 285
+  // shows the same assertion at 137, the rm -f stop). A plain `rm` is refused
+  // for a running container, so the race degrades to a no-op instead of
+  // killing a live sandbox between its `docker run` and first exec.
+  await seed({
+    seq: 9,
+    images: [IMAGE],
+    containers: [{ id: "gone-one", labels: { "fabric.sandbox": "1" }, argv: [] }],
+  });
+
+  const provider = fakeProvider();
+  await provider.acquire({ workspaceId: "w", agentId: "probe", mounts: [] });
+
+  const reaping = (await fakeState()).lastRm ?? [];
+  expect(reaping).toContain("gone-one");
+  expect(reaping).not.toContain("-f");
 });
 
 test("available() is false, naming the binary, when docker is missing", async () => {
