@@ -297,10 +297,20 @@ export async function handleLlmCallJob(lease: QueueLease, deps: LlmCallJobDeps):
 
     if (plan !== null) {
       // -- phase 2: the call, outside any store transaction. The delta sink
-      //    gets the call's attribution here — no enclosing scan survives.
+      //    gets the call's attribution here — no enclosing scan survives. The
+      //    port's deltas are INCREMENTS (R16): the worker accumulates them per
+      //    attempt, so the sink — the live bus and the wire with it — carries
+      //    the cumulative text. A new attempt of the same key starts from
+      //    empty: the accumulator lives in this run's closure.
       const sink = deps.onDelta;
+      let accumulated = "";
       const onDelta =
-        sink !== undefined ? (delta: { text: string }) => sink(delta, plan.call) : undefined;
+        sink !== undefined
+          ? (delta: { text: string }) => {
+              accumulated += delta.text;
+              sink({ text: accumulated }, plan.call);
+            }
+          : undefined;
       const result: ModelResult = await model.call({
         ...plan.request,
         ...(onDelta !== undefined ? { onDelta } : {}),
