@@ -7,6 +7,7 @@
   "pendingInputs": [],
   "calls": 1,
   "openToolCalls": [],
+  "queuedCalls": [],
   "waits": [],
   "costUsd": 0.03,
   "turnCostUsd": 0.02,

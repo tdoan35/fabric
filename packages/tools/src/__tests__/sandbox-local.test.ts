@@ -26,14 +26,20 @@ const BUILD_HINT = "npm run sandbox:build -w @fabric/tools";
 
 interface FakeContainer {
   id: string;
+  name?: string;
   labels: Record<string, string>;
   argv: string[];
+  /** docker ps state (running/created/exited); absent means created. */
+  state?: string;
 }
 
 interface FakeState {
   seq: number;
   images: string[];
   containers: FakeContainer[];
+  /** The last recorded `rm` argv (the shim's rm case); the sweep's no-force
+   * contract reads it. */
+  lastRm?: string[];
 }
 
 let base = "";
@@ -92,7 +98,7 @@ test("one live sandbox per workspace and agent, labelled a fabric sandbox", asyn
   expect(researcherB.id).toBe(researcherA.id);
   expect(writer.id).not.toBe(researcherA.id);
 
-  const runs = (await fakeState()).containers;
+  const runs = (await fakeState()).containers.filter((run) => run.labels["fabric.sandbox"] === "1");
   expect(runs).toHaveLength(2);
   for (const run of runs) {
     expect(run.labels["fabric.sandbox"]).toBe("1");
@@ -116,18 +122,59 @@ test("the docker run argv carries the isolation flags, mounts and env", async ()
     ],
   });
 
-  const [run] = (await fakeState()).containers;
-  expect(run.argv).toEqual([
-    "run", "-d", "--init", "--network", "none",
+  // T18: the sandbox runs on the internal network with the proxy env; the
+  // egress gateway container is recorded separately (see its own test).
+  const run = (await fakeState()).containers.find((candidate) => candidate.labels["fabric.sandbox"] === "1");
+  expect(run?.argv).toEqual([
+    "run", "-d", "--init", "--network", "fabric-sbx",
     "--label", "fabric.sandbox=1", "--label", "fabric.agent=researcher", "--label", "fabric.workspace=ws1",
     "--cap-drop", "ALL", "--security-opt", "no-new-privileges", "--pids-limit", "512",
     "--memory", "4g", "--cpus", "2",
+    "-e", "HTTP_PROXY=http://egress:3128",
+    "-e", "HTTPS_PROXY=http://egress:3128",
+    "-e", "http_proxy=http://egress:3128",
+    "-e", "https_proxy=http://egress:3128",
+    "-e", "ALL_PROXY=http://egress:3128",
+    "-e", "NO_PROXY=egress",
+    "-e", "FABRIC_EGRESS_URL=http://egress",
     "-v", "/host/agent:/workspace",
     "-v", "/host/proj:/projects/proj:ro",
     "-e", "FOO=bar",
     "-w", "/workspace",
     IMAGE, "sleep", "infinity",
   ]);
+});
+
+test("the egress gateway container is ensured once per provider and removed by stopAll", async () => {
+  const provider = fakeProvider();
+  await provider.acquire({ workspaceId: "w", agentId: "a", mounts: [] });
+  await provider.acquire({ workspaceId: "w", agentId: "b", mounts: [] });
+
+  const gateways = (await fakeState()).containers.filter((container) => container.labels["fabric.egress"] === "1");
+  expect(gateways).toHaveLength(1);
+  expect(gateways[0]?.labels["fabric.egress.instance"]).toBeTruthy();
+  expect(gateways[0]?.argv).toContain("node");
+  expect(gateways[0]?.argv).toContain("/opt/fabric/egress.mjs");
+  expect(gateways[0]?.argv).toContain("fabric-sbx");
+  expect(gateways[0]?.argv).toContain("--cap-drop");
+  expect(gateways[0]?.argv).toContain("NET_BIND_SERVICE");
+
+  await provider.stopAll();
+  expect((await fakeState()).containers).toEqual([]);
+});
+
+test("a dead gateway is replaced on the next acquire of a live sandbox", async () => {
+  const provider = dockerSandboxes({ image: IMAGE, docker: SHIM, egress: { instance: "t1" } });
+  await provider.acquire({ workspaceId: "w", agentId: "a", mounts: [] });
+
+  // The gateway dies without the provider noticing (E8: `docker rm -f`); the
+  // next acquire — even a cache hit for a live sandbox — must replace it.
+  spawnSync(SHIM, ["rm", "-f", "fabric-egress-t1"], { stdio: "ignore" });
+  await provider.acquire({ workspaceId: "w", agentId: "a", mounts: [] });
+
+  const gateways = (await fakeState()).containers.filter((container) => container.labels["fabric.egress"] === "1");
+  expect(gateways).toHaveLength(1);
+  expect(gateways[0]?.name).toBe("fabric-egress-t1");
 });
 
 test("exec streams lines as they arrive and reports them in the tail", async () => {
@@ -163,7 +210,12 @@ test("exec kills the process group when the timeout lands", async () => {
 
   const started = Date.now();
   const lines: string[] = [];
-  const result = await sandbox.exec("sleep 30 && echo done", {
+  // The command records the session leader's pid: the kill is verified against
+  // that process group, never against a host-wide `ps`. The fake sandbox has
+  // no PID namespace, so a host listing would count unrelated `sleep 30`s —
+  // the daemon suite's parallel execs, any stray host process — as survivors.
+  const pgidFile = join(base, "killed-pgid");
+  const result = await sandbox.exec(`echo $$ > ${pgidFile}; sleep 30 && echo done`, {
     timeoutMs: 300,
     onLine: (line) => lines.push(line),
   });
@@ -173,10 +225,17 @@ test("exec kills the process group when the timeout lands", async () => {
   // on stderr is expected stream traffic.
   expect(lines.includes("done")).toBe(false);
 
-  // A follow-up process listing finds no survivor of the killed group.
-  const procs: string[] = [];
-  await sandbox.exec("ps -ef", { onLine: (line) => procs.push(line) });
-  expect(procs.filter((line) => line.includes("sleep 30"))).toEqual([]);
+  // No survivor of the killed group: the recorded group empties. Bounded
+  // poll — SIGKILL death is quick, a loaded CI runner is not; a silently
+  // no-op killer (the container-side kill exits 0 regardless) keeps the
+  // group alive and fails here.
+  const check = await sandbox.exec(
+    `[ -s ${pgidFile} ] || exit 3; ` +
+      `for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do ` +
+      `kill -0 -- -$(cat ${pgidFile}) 2>/dev/null || exit 0; sleep 0.05; done; exit 1`,
+    { timeoutMs: 5_000 }
+  );
+  expect(check.exitCode).toBe(0);
 });
 
 test("putArchive and getArchive round-trip a tree byte for byte", async () => {
@@ -254,7 +313,8 @@ test("reap keeps sandboxes idle under the threshold", async () => {
   const provider = fakeProvider();
   const sandbox = await provider.acquire({ workspaceId: "w", agentId: "a", mounts: [] });
   await provider.reap({ idleMs: 60_000 });
-  expect((await fakeState()).containers.map((container) => container.id)).toEqual([sandbox.id]);
+  const kept = (await fakeState()).containers.filter((container) => container.labels["fabric.sandbox"] === "1");
+  expect(kept.map((container) => container.id)).toEqual([sandbox.id]);
 });
 
 test("stopAll removes every sandbox the provider started", async () => {
@@ -275,9 +335,57 @@ test("a starting provider clears stale sandboxes left by a dead run", async () =
   const provider = fakeProvider();
   const probe = await provider.acquire({ workspaceId: "w", agentId: "probe", mounts: [] });
 
-  const ids = (await fakeState()).containers.map((container) => container.id);
+  const ids = (await fakeState()).containers
+    .filter((container) => container.labels["fabric.sandbox"] === "1")
+    .map((container) => container.id);
   expect(ids).not.toContain("stale-one");
   expect(ids).toEqual([probe.id]);
+});
+
+test("the startup sweep spares the running sandboxes of a concurrent run", async () => {
+  // CI runs the daemon suites' workers side by side; a starting provider's
+  // crash-recovery sweep must not stop another worker's live sandbox mid-test
+  // (the D8 `cannot exec in a stopped state` bounce). Only stopped leftovers
+  // are reaped; a running sandbox belongs to a live provider until proven else.
+  await seed({
+    seq: 8,
+    images: [IMAGE],
+    containers: [
+      { id: "live-one", state: "running", labels: { "fabric.sandbox": "1" }, argv: [] },
+      { id: "done-one", labels: { "fabric.sandbox": "1" }, argv: [] },
+    ],
+  });
+
+  const provider = fakeProvider();
+  const probe = await provider.acquire({ workspaceId: "w", agentId: "probe", mounts: [] });
+
+  const ids = (await fakeState()).containers
+    .filter((container) => container.labels["fabric.sandbox"] === "1")
+    .map((container) => container.id);
+  expect(ids).not.toContain("done-one");
+  expect(ids).toContain("live-one");
+  expect(ids).toContain(probe.id);
+});
+
+test("the startup sweep reaps without force, so a sandbox that starts during the sweep survives", async () => {
+  // The ps -> rm window: a container the sweep recorded as `created` may be
+  // running by the time the rm lands (CI run 291: E4's first proxyGet and D6's
+  // `id -u` each saw `docker exec` exit 1 after the sandbox vanished; run 285
+  // shows the same assertion at 137, the rm -f stop). A plain `rm` is refused
+  // for a running container, so the race degrades to a no-op instead of
+  // killing a live sandbox between its `docker run` and first exec.
+  await seed({
+    seq: 9,
+    images: [IMAGE],
+    containers: [{ id: "gone-one", labels: { "fabric.sandbox": "1" }, argv: [] }],
+  });
+
+  const provider = fakeProvider();
+  await provider.acquire({ workspaceId: "w", agentId: "probe", mounts: [] });
+
+  const reaping = (await fakeState()).lastRm ?? [];
+  expect(reaping).toContain("gone-one");
+  expect(reaping).not.toContain("-f");
 });
 
 test("available() is false, naming the binary, when docker is missing", async () => {

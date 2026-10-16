@@ -301,3 +301,28 @@ it("R2.14: a later callNo continues the turn — no new turn, calls kept from th
     expect(state.calls).toBe(1);
     expect(state.status).toBe("running");
   });
+
+it("C8: tool.queued puts the callId in queuedCalls, tool.dequeued (or a terminal fact) removes it", () => {
+    const call = evt(1, "tool.call", { tool: "shell", summary: "", callId: "c1", args: {}, effect: "read" });
+    const queued = evt(2, "tool.queued", { callId: "c1", reason: "sandbox_slot", position: 1 });
+    const waiting = fold([call, queued], {});
+    expect(waiting.queuedCalls).toEqual(["c1"]);
+    // a second queued fact for another call joins the list; the stream is still running
+    const two = fold([call, queued, evt(3, "tool.call", { tool: "shell", summary: "", callId: "c2", args: {}, effect: "read" }), evt(4, "tool.queued", { callId: "c2", reason: "sandbox_slot", position: 2 })], {});
+    expect(two.queuedCalls).toEqual(["c1", "c2"]);
+    expect(two.status).toBe("running");
+
+    // the slot frees: the dequeued fact takes the call out
+    const dequeued = fold(
+      [call, queued, evt(3, "tool.dequeued", { callId: "c1", waitedMs: 4_000 })],
+      {}
+    );
+    expect(dequeued.queuedCalls).toEqual([]);
+
+    // a completion while queued (cancellation) also clears it
+    const completed = fold(
+      [call, queued, evt(3, "tool.completed", { callId: "c1", ok: false, error: "cancelled" })],
+      {}
+    );
+    expect(completed.queuedCalls).toEqual([]);
+  });

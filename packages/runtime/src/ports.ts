@@ -27,8 +27,17 @@ export type ModelMessage = {
   toolCalls?: readonly Record<string, unknown>[];
 };
 
-/** A live token delta. Deltas are pushed, never logged (§8). */
+/** A live token delta: ONE text increment since the previous delta — the
+ * natural shape of a provider stream (R16), not the text so far. The `ll.call`
+ * worker accumulates the increments of the current call attempt; the live bus,
+ * the stream route and the wire carry the cumulative text. Deltas are pushed,
+ * never logged (§8). */
 export type ModelDelta = { text: string };
+
+/** The call a live delta belongs to (R15): the worker hands the attribution
+ * alongside the delta, because the model call runs outside any store
+ * transaction — there is no enclosing scope left to read it from. */
+export type ModelDeltaCall = { streamId: string; turn: number; callNo: number };
 
 export type ModelUsage = {
   inputTokens: number;
@@ -126,6 +135,9 @@ export type ToolPort = {
   ): Promise<ToolRunResult>;
   /** The tool's declaration; undefined for a name outside the registry. */
   describe(name: string): ToolDescriptor | undefined;
+  /** T16: true exactly when the tool runs in a workspace sandbox (step 2) and
+   * so holds a sandbox slot before it runs. Optional — absent means never. */
+  needsSlot?(name: string): boolean;
 };
 
 // -- SurfacePort ---------------------------------------------------------------

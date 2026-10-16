@@ -46,6 +46,7 @@ export { ModelError } from "./ports";
 export type {
   ModelCallRequest,
   ModelDelta,
+  ModelDeltaCall,
   ModelMessage,
   ModelPort,
   ModelResult,
@@ -59,6 +60,11 @@ export type {
   ToolPort,
   ToolRunResult,
 } from "./ports";
+
+// The sandbox concurrency slots (ANY-44 D1, T16): the per-workspace cap step-2
+// tool calls hold, one per call, chat turns first.
+export { sandboxSlots, SLOT_STALE_MS } from "./slots";
+export type { SandboxSlots, SlotRequest, SlotVerdict } from "./slots";
 
 // The first job handlers (ANY-35 R9a): `decide` and `ll.call`.
 export {

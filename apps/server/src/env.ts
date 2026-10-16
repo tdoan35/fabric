@@ -57,6 +57,9 @@ export const env = z.object({
   RUNTIME_CONCURRENCY: z.coerce.number().int().min(1).default(4),
   /** `ai` (the real port) | `test` (the echo double; refused when NODE_ENV=production). */
   MODEL_PORT: z.enum(["ai", "test"]).default("ai"),
+  /** Test-model variant: `chunked` (5 increments, 30 ms apart, S6) | `slow`
+   * (20 increments, 50 ms apart, ~1 s per call, R16). */
+  MODEL_VARIANT: z.enum(["chunked", "slow"]).optional(),
   // -- T14 session tools (per-agent tools, vault, work dirs) -----------------
   /** Root of the per-agent work dirs: `agents/<id>` is created under it on
    * first tool call. Defaults to `.data/work`. */
@@ -74,6 +77,19 @@ export const env = z.object({
    * reads its env fallbacks the same lazy way, because this object
    * snapshots at import — and drops any trailing slash. */
   FABRIC_PUBLIC_URL: z.string().url().optional(),
+  // -- T19 execution (the workspace switch, the broker, the sandboxes) --------
+  /** Which execution every agent's tools get: `host` (this machine, the
+   * default), `docker` or `sprites` sandboxes. Read at boot; a sandbox
+   * provider that reports unavailable refuses the start. */
+  FABRIC_EXECUTION: z.enum(["host", "docker", "sprites"]).default("host"),
+  /** The credential broker's rules, a JSON file path. Absent, every broker
+   * request is refused — fail-closed. */
+  FABRIC_BROKER_RULES: z.string().optional(),
+  /** Idle window (ms) before a sandbox is reaped and its egress token dies. */
+  FABRIC_SANDBOX_IDLE_MS: z.coerce.number().int().default(300_000),
+  /** T16: the per-workspace cap on concurrent sandbox (step-2) tool calls.
+   * Wired only when FABRIC_EXECUTION is not host; default 4. */
+  FABRIC_SANDBOX_SLOTS: z.coerce.number().int().min(1).default(4),
 }).parse(process.env);
 
 export const corsOrigins = env.CORS_ORIGINS

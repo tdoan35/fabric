@@ -13,12 +13,13 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import { HTTPException } from "hono/http-exception";
-import { openStore, PgQueue, runWorker } from "@fabric/runtime";
+import { openStore, PgQueue, runWorker, sandboxSlots } from "@fabric/runtime";
 import type { Queue, RuntimeStore, RuntimeTx, WorkerPorts } from "@fabric/runtime";
 import type { ToolRegistry } from "@fabric/tools";
 import { createRegistry } from "@fabric/tools";
 import { builtinTools } from "@fabric/tools/builtin";
 import { hostTools } from "@fabric/tools/host";
+import type { SandboxProvider } from "@fabric/tools/sandbox";
 import {
   type McpClient,
   ensureMcpSchema,
@@ -58,6 +59,7 @@ import {
 import type { McpSessionDeps, ProposalActions, SpecialistAgent } from "@fabric/agents/session";
 import { recallFacts } from "@fabric/agents/assistant";
 import { InProcessLiveBus, type LiveBus } from "./live-bus";
+import { startExecution, type Execution } from "./execution";
 import { createTestModelPort, type TestModelOptions } from "./test-model";
 import { enqueuePurgeOnActivity, runPurgeLoop } from "./purge";
 import { hub } from "../services/hub";
@@ -76,8 +78,9 @@ export type RuntimeEnv = {
   RUNTIME_CONCURRENCY?: number;
   /** `ai` (the real port, default) or `test` (the echo double). */
   MODEL_PORT?: "ai" | "test";
-  /** Test-model variant: `chunked` streams the reply in 5 chunks 30 ms apart (S6). */
-  MODEL_VARIANT?: "chunked";
+  /** Test-model variant: `chunked` streams the reply in 5 increments 30 ms
+   * apart (S6); `slow` in 20 increments 50 ms apart, ~1 s per call (R16). */
+  MODEL_VARIANT?: "chunked" | "slow";
   /** The app database (the proposal read model and the transition's side
    * effects, S8a); absent = the session surface runs without proposals. */
   DATABASE_URL?: string;
@@ -89,6 +92,18 @@ export type RuntimeEnv = {
   FABRIC_MASTER_KEY_FILE?: string;
   /** T14: the inbox `send` sends from; unset leaves `send` out of the registry. */
   FABRIC_SEND_FROM?: string;
+  /** T19: the workspace execution switch — host (the default, this machine),
+   * docker or sprites. Read once at boot; a sandbox provider that reports
+   * unavailable refuses the start. */
+  FABRIC_EXECUTION?: "host" | "docker" | "sprites";
+  /** T19: the credential broker's rules, a JSON file path; absent, every
+   * broker request is refused (fail-closed). */
+  FABRIC_BROKER_RULES?: string;
+  /** T19: idle window (ms) before a sandbox is reaped; default 300000. */
+  FABRIC_SANDBOX_IDLE_MS?: number;
+  /** T16: the per-workspace cap on concurrent sandbox tool calls; default 4.
+   * Wired only when FABRIC_EXECUTION is not host. */
+  FABRIC_SANDBOX_SLOTS?: number;
 };
 
 export type FabricRuntime = {
@@ -108,6 +123,9 @@ export type FabricRuntime = {
   /** The MCP wiring (M6): the workspace's servers and OAuth — M7's routes
    * take over from here; the stamp and the run hook read the seam. */
   mcp: { servers: McpServers; oauth: McpOAuth };
+  /** The execution switch (T19): the workspace's host|docker|sprites choice —
+   * the sandboxed modes' provider plumbing, the broker, the reaper. */
+  execution: Execution;
   /** Drains the workers, then closes queue and store. Idempotent. */
   stop: () => Promise<void>;
 };
@@ -310,8 +328,9 @@ const sessionToolScopeOf =
  * legacy-engine bridges and — T14 — the server's tool registry behind the
  * per-call scope, when the seam is set). The app surface remains a no-op that
  * succeeds — the client reads the stream, the receipt only closes the job.
- * S6: model deltas ride the live bus, attributed by the enclosing transaction's
- * scan (see `wireLiveBus`) — the port's callback carries text only. */
+ * S6/R15: model deltas ride the live bus, attributed by the call the worker
+ * passes (`onDelta`'s second argument) — the model call runs outside any
+ * store transaction, so no enclosing scan survives to it. */
 export function workerPorts(
   env: RuntimeEnv,
   live: LiveBus,
@@ -320,8 +339,16 @@ export function workerPorts(
   vault?: Vault,
 ): WorkerPorts {
   const variant: TestModelOptions | undefined =
-    env.MODEL_VARIANT === "chunked" ? { chunks: 5, intervalMs: 30 } : undefined;
+    env.MODEL_VARIANT === "chunked"
+      ? { chunks: 5, intervalMs: 30 }
+      : env.MODEL_VARIANT === "slow"
+        ? { chunks: 20, intervalMs: 50 }
+        : undefined;
   const model = env.MODEL_PORT === "test" ? createTestModelPort(variant) : createModelPort();
+  // T16: a sandboxed execution caps the workspace's concurrent step-2 tool
+  // calls — the slot is held per tool call, chat turns first. Host mode wires
+  // no slots: its calls hold nothing and run exactly as before.
+  const sandboxed = env.FABRIC_EXECUTION !== undefined && env.FABRIC_EXECUTION !== "host";
   return {
     model: withSessionContext(model, recallFacts),
     tools: sessionTools({
@@ -335,14 +362,14 @@ export function workerPorts(
         : {}),
       ...(sessionMcp !== undefined ? { mcp: mcpToolRunner(sessionMcp) } : {}),
     }),
+    ...(sandboxed
+      ? { slots: sandboxSlots(store, { cap: env.FABRIC_SANDBOX_SLOTS ?? 4 }) }
+      : {}),
     surface: {
       send: async () => ({}),
     },
-    onDelta: (delta) => {
-      const scan = liveScan.getStore();
-      if (scan?.stream !== undefined && scan.call !== undefined) {
-        live.delta(scan.stream, { turn: scan.call.turn, callNo: scan.call.callNo, text: delta.text });
-      }
+    onDelta: (delta, call) => {
+      live.delta(call.streamId, { turn: call.turn, callNo: call.callNo, text: delta.text });
     },
   };
 }
@@ -384,16 +411,15 @@ function pgliteQueueBackend(store: RuntimeStore) {
 
 // -- the live bus wiring (S6) -------------------------------------------------
 
-/** One transaction's observed session traffic, for the two S6 seams: the
- * post-commit `appended` notify, and the stream/call attribution the model's
- * `onDelta` needs (the port's callback carries the text only). */
+/** One transaction's observed session traffic, for the post-commit `appended`
+ * notify and the call-end it carries. (Through R14 the scan also attributed
+ * the model's `onDelta`; R15's `ll.call` runs the model outside any
+ * transaction and hands the attribution to the callback itself.) */
 interface LiveScan {
   /** Session streams touched, to the head this transaction leaves them at. */
   heads: Map<string, number>;
   /** Streams whose `ll.completed`/`ll.failed` landed here — end the call. */
   ended: Set<string>;
-  /** The in-flight call: the latest `ll.requested` the transaction read. */
-  call?: { turn: number; callNo: number };
   /** The session stream the transaction last touched. */
   stream?: string;
 }
@@ -403,27 +429,9 @@ const liveScan = new AsyncLocalStorage<LiveScan>();
 const isSession = (value: unknown): value is string =>
   typeof value === "string" && value.startsWith("session:");
 
-function callOf(payload: unknown): { turn: number; callNo: number } | undefined {
-  let value = payload;
-  if (typeof value === "string") {
-    try {
-      value = JSON.parse(value);
-    } catch {
-      return undefined;
-    }
-  }
-  if (value === null || typeof value !== "object") return undefined;
-  const record = value as Record<string, unknown>;
-  const turn = record["turn"];
-  const callNo = record["callNo"];
-  if (typeof turn === "number" && typeof callNo === "number") return { turn, callNo };
-  return undefined;
-}
-
 /** The traffic shapes of one append (store.ts), read off the transaction: the
  * head bump names the stream and its new seq; the event inserts carry the
- * completion that ends a call. Event rows read back in the same transaction
- * carry the `ll.requested` whose turn/callNo the live deltas inherit. */
+ * completion that ends a call. */
 function scanForLive(
   sql: string,
   params: readonly unknown[] | undefined,
@@ -446,16 +454,6 @@ function scanForLive(
     const type = params[4];
     if (isSession(streamId) && (type === "llm.completed" || type === "llm.failed")) {
       scan.ended.add(streamId);
-    }
-  }
-  for (const row of rows) {
-    if (row === null || typeof row !== "object") continue;
-    const record = row as Record<string, unknown>;
-    if (record["type"] !== "llm.requested" || !isSession(record["stream_id"])) continue;
-    const call = callOf(record["payload"]);
-    if (call !== undefined) {
-      scan.call = call;
-      scan.stream = record["stream_id"];
     }
   }
 }
@@ -511,8 +509,21 @@ export function setRuntime(runtime: FabricRuntime | undefined): void {
  * Open the store, the queue over the same database, and -- unless
  * `opts.worker` is false -- RUNTIME_CONCURRENCY worker loops. Test hook:
  * `worker: false` boots the command surface with the board untouched (B5).
+ * T19 seams: `provider` replaces the mode's own sandbox provider, `brokerHost`
+ * the `brokerBindHost()` probe, `now` the reaper/token clock.
  */
-export async function startRuntime(env: RuntimeEnv, opts: { worker?: boolean } = {}): Promise<FabricRuntime> {
+export async function startRuntime(
+  env: RuntimeEnv,
+  opts: {
+    worker?: boolean;
+    /** T19: the sandbox provider, instead of the execution mode's own. */
+    provider?: SandboxProvider;
+    /** T19: the broker bind host, instead of `brokerBindHost()`. */
+    brokerHost?: string;
+    /** T19: the clock the reaper and the egress-token TTL read. */
+    now?: () => number;
+  } = {},
+): Promise<FabricRuntime> {
   if (env.MODEL_PORT === "test" && process.env.NODE_ENV === "production") {
     throw new Error(
       "MODEL_PORT=test is the CI/smoke echo double, not a production model: the server refuses to start with MODEL_PORT=test when NODE_ENV=production",
@@ -538,14 +549,29 @@ export async function startRuntime(env: RuntimeEnv, opts: { worker?: boolean } =
   const masterKey = await loadOrCreateMasterKey(masterKeyPath);
   const vault = envFallbackVault(encryptedTableVault(store, RUNTIME_WORKSPACE, masterKey), process.env);
 
+  // T19: the workspace execution switch — `host` keeps the path below exactly
+  // as T14 left it; `docker`/`sprites` swap the five host tools for the step-2
+  // sandbox ones and refuse the boot when their provider is unavailable. The
+  // docker broker starts here too, on T18's bind host, fail-closed.
+  const execution = await startExecution({
+    workspace: RUNTIME_WORKSPACE,
+    store,
+    vault,
+    env,
+    provider: opts.provider,
+    brokerHost: opts.brokerHost,
+    now: opts.now,
+  });
+
   // T14: the tool registry — the step-0 set (`send` only when the identity is
   // configured) plus the host tools — installed through the seam, S9-style.
   // M3: M2's skills read tools ride along, so every agent can see and load
-  // its own skills (the toolset's defaults allow them).
+  // its own skills (the toolset's defaults allow them). T19: on a sandboxed
+  // execution the host tools are the step-2 sandbox ones, same names.
   const sendFrom = env.FABRIC_SEND_FROM;
   const registryDefs = [
     ...builtinTools({ sendFrom: sendFrom ?? "" }),
-    ...hostTools(),
+    ...(execution.tools ?? hostTools()),
     ...skillTools(skills),
   ];
   setSessionToolRegistry(
@@ -704,12 +730,15 @@ export async function startRuntime(env: RuntimeEnv, opts: { worker?: boolean } =
     vault,
     skills,
     mcp: { servers, oauth },
+    execution,
     ...(proposals !== undefined ? { proposals } : {}),
     stop: async () => {
       if (stopped) return;
       stopped = true;
       signal.abort();
       await Promise.allSettled(loops); // the pass in flight drains; no new claim starts
+      // T19: the sandboxes, their tokens and the broker go before the stores.
+      await execution.stop();
       await queue.close();
       await store.close();
       await appDb?.close();

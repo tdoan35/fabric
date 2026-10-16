@@ -91,7 +91,7 @@ Existing types keep their names and payloads so the web app's read model (`deriv
 | `run.cancel_requested` | fact | **by** | API / parent's cancellation |
 | `run.blocked`, `run.stopped`, `run.finished` | fact | unchanged, plus **result, costUsd** on `run.finished` | decide / `run.finalize` |
 | `artifact.created` | fact | name, artifactId | `tool.exec` |
-| `context.snapshot` | telemetry | snapshotId (the snapshot row is written before the model call; memory and skill sections are stored by reference) | `llm.call` |
+| `context.snapshot` | telemetry | snapshotId (the snapshot row is recorded with the call's result, in the same batch; memory and skill sections are stored by reference) | `llm.call` |
 | `tool.result` (term line) | telemetry | line, kind | `tool.exec`, streamed |
 | `agent.message` | telemetry | text (a copy of `llm.completed.text` for the UI) | decide |
 | `run.progress` | telemetry | **text, milestone** | decide |
@@ -106,7 +106,7 @@ Model token deltas never enter the log: they are pushed live (§8) and the final
 | Job | Idempotency key | Does | Appends |
 |---|---|---|---|
 | `decide` | per-stream serial queue | Fold, decide, append decisions, queue jobs | lifecycle, step, llm, tool, delegation, human facts |
-| `llm.call` | `stream:turn:llm:n` | Assemble context, save snapshot, call the model **once** with tools that have no `execute` (the SDK returns tool calls instead of running them), stream deltas live | `llm.completed` or `llm.failed`, `context.snapshot` |
+| `llm.call` | `stream:turn:llm:n` | Assemble context, save snapshot, call the model **once** with tools that have no `execute` (the SDK returns tool calls instead of running them), stream deltas live. The model is called between a read transaction and a record transaction, and a result that arrives after another runner's is discarded | `llm.completed` or `llm.failed`, `context.snapshot` |
 | `tool.exec` | `stream:callId` | Run one tool with the run's effective access; stream terminal lines | `tool.completed` or `tool.interrupted`, `artifact.created`, `memory.written`, term lines |
 | `delegate.resolve` | `run:<child>:resolve` | When a child run ends, report it to the parent: `tool.completed` (await mode) or `delegation.result` (background mode). Release the unused budget | parent facts |
 | `deliver` | `deliver:<eventId>:<target>` | Send one outbound message to a channel, push or email, with formatting, chunking, rate limits and retries | `message.delivered` |
@@ -128,6 +128,8 @@ Model token deltas never enter the log: they are pushed live (§8) and the final
 | `deliver` | 30 s | — | backoff up to 24 h, then a failed-delivery fact the UI shows |
 
 Starting values; the spike adjusts them. A job whose heartbeat goes stale is handed to another worker.
+
+**Sandbox slots (T16).** Wherever step-2 tools run (Docker or Sprites), a per-workspace cap on concurrent sandbox tool calls holds one slot **per tool call, never per run**, over a runtime-owned `sandbox_slots` table — `acquire` grants when fewer than the cap are held and no waiter ranks ahead (chat turns — `session:` streams — first, then the older ask), `release` and `heartbeat` ride the call, and a held slot whose heartbeat is older than 60 s is reclaimable, so a crashed worker never leaks one. A refused `tool.exec` appends the fact `tool.queued` — one fact per transition, so a later waiting period (a retry that waits again) or a return to an earlier position records anew, while a repeat of the position the fold still reports appends nothing — and defers its job 2 s — the attempt count untouched, a queue wait is not a retry — and runs nothing; when granted it appends `tool.dequeued` with the wait (one per waiting period), holds the slot through the run heartbeating with the lease, and releases it on completion or on any failure after the grant. Host mode wires no slots.
 
 ## 5. Decide
 
@@ -222,11 +224,11 @@ Outbound messages that are part of a reply (not a `send` tool call) go through `
 - **Waits.** `human.requested` sets status `waiting` and queues a `run.timer` at the deadline, plus reminders per the run's policy. The API appends `human.responded` only if the wait is still open: the check and the append are one transaction, and the API returns `accepted` or `refused` (expired, already answered, run cancelled). The browser booking confirmation becomes exactly this, replacing the `pendingAction` patched into `runs.budget`. Gated waits (merge, deploy, spend, credentials, external send) accept answers only from the app, never from a channel.
 - **Cancellation.** The API appends `run.cancel_requested`; `decide` passes it to every open child run, so cancellation reaches the whole subtree. Workers holding jobs for a cancelled stream get a notification and abort in-flight model calls; late results are refused by the append guard (today's `RunClosedError`).
 - **Budgets.** Cost is folded from `llm.completed.usage` and children's `run.finished.costUsd`, so it survives restarts. A delegation reserves budget from its parent; `delegate.resolve` releases what the child didn't use. Time budgets and step timeouts are `run.timer` jobs.
-- **Stalls.** Every running stream has a watchdog `run.timer`, re-armed by each new fact. When it fires with no progress, `decide` re-queues a lost job if there is one; if the stream is still stuck at the next firing, it appends `run.blocked` with the reason and escalates.
+- **Stalls.** Every running stream has a watchdog `run.timer`, re-armed by each new fact. When it fires with no progress, `decide` re-queues a lost job if there is one; if the stream is still stuck at the next firing, it appends `run.blocked` with the reason and escalates. A stream with a call queued for a sandbox slot (T16) reads `EMPTY` at either strike — the wait is a fact (`tool.queued`/`tool.dequeued` in the fold's `queuedCalls`), and a queue wait is not a stall.
 
 ## 8. Live updates
 
-Every append notifies its streams. API servers read the new events and push them over SSE; clients resume with `Last-Event-ID = seq`. Model token deltas from `llm.call` go out on the same channel, batched about every 100 ms, and never enter the log. This replaces the in-process hub and the 400 ms database poll per stream.
+Every append notifies its streams. API servers read the new events and push them over SSE; clients resume with `Last-Event-ID = seq`. Model token deltas from `llm.call` go out on the same channel, batched about every 100 ms, and never enter the log: the model port emits raw text **increments** — the provider stream's shape — and the `llm.call` worker accumulates them per call attempt, so the frames carry the **cumulative** text of the call (R16). This replaces the in-process hub and the 400 ms database poll per stream.
 
 | | Notify | Token deltas |
 |---|---|---|

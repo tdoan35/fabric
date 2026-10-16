@@ -21,6 +21,10 @@ mnemosyne/
 # local tooling
 chrome-profile/
 .DS_Store
+# runtime state: the server's .data dir (pglite fallback, master key, work dirs)
+# is created at runtime — the master key must be 0600 on first boot, which a git
+# checkout (644) would break (V10's strict mode check).
+.data/
 npm-debug.log*
 # tools: exa result cache (the fallback when Exa is slow or down)
 .cache/
