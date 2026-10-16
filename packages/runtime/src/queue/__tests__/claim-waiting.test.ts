@@ -171,22 +171,31 @@ void queueOptions;
         admin.on("error", () => undefined); // see Z6
         dispose.push(() => admin.end().catch(() => undefined));
 
-        // The reconnect is held open (the test hook) so both claims overlap it
-        // deterministically; init's own LISTEN is not held.
-        let hold: Promise<void> | null = null;
+        // The reconnect is held open between its connect and its LISTEN (the
+        // test hook) so both claims overlap it deterministically; init's own
+        // LISTEN is not a reconnect and is never held.
         let release!: () => void;
-        const listener = makeQueue(url, { beforeRelisten: () => hold ?? Promise.resolve() });
+        const hold = new Promise<void>((resolve) => (release = resolve));
+        let relistens = 0;
+        let reconnecting!: () => void;
+        const reconnectStarted = new Promise<void>((resolve) => (reconnecting = resolve));
+        const listener = makeQueue(url, {
+          beforeRelisten: () => {
+            relistens += 1;
+            reconnecting();
+            return hold;
+          },
+        });
         await listener.get("warm-up");
         await sleep(50);
         const pids = await listenerPids(admin);
         expect(pids.length).toBe(1);
         await admin.query(`select pg_terminate_backend($1)`, [pids[0]]);
-        await sleep(300);
+        await sleep(1_000); // as Z6: the client has seen its connection end
         expect(await listenerPids(admin)).toEqual([]);
         const writer = makeQueue(url); // its own LISTEN comes after the probe
         await writer.get("warm-up");
 
-        hold = new Promise<void>((resolve) => (release = resolve));
         const backstopMs = 600_000;
         const claimedAt: Record<string, number> = {};
         const loop = (workerId: string, type: string) =>
@@ -198,7 +207,11 @@ void queueOptions;
             });
         // Loop A's claim starts the reconnect; loop B's claim finds it in flight.
         const alphaLoop = loop("worker-a", "alpha");
-        await sleep(20);
+        const started = await Promise.race([
+          reconnectStarted.then(() => true),
+          sleep(5_000).then(() => false),
+        ]);
+        expect(started).toBe(true); // A's claim really is re-LISTENing
         const betaLoop = loop("worker-b", "beta");
         await sleep(100);
 
@@ -224,6 +237,7 @@ void queueOptions;
         expect(betaLease?.jobId).toBe(beta.id);
         expect(claimedAt.beta! - betaCommitAt).toBeLessThanOrEqual(100);
         expect(claimedAt.alpha! - alphaCommitAt).toBeLessThanOrEqual(100);
+        expect(relistens).toBe(1); // one shared reconnect, serialized per instance
       });
     }
   );

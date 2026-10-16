@@ -70,8 +70,9 @@ export interface PgQueueOptions extends QueueOptions {
   /** Test hook (R17 Z5): false silences the cross-process NOTIFY leg; the
    * in-process wake and the claim-wait backstop still deliver. */
   wakeNotify?: boolean;
-  /** Test hook (R17 Z6b): awaited by each lazy re-LISTEN before it connects,
-   * so a test can hold a reconnect open while claims overlap it. */
+  /** Test hook (R17 Z6b): awaited by each lazy re-LISTEN after it connects
+   * and before it LISTENs, so a test can hold a reconnect open while claims
+   * overlap it. */
   beforeRelisten?: () => Promise<void>;
 }
 
@@ -237,7 +238,7 @@ export class PgQueue implements Queue {
    * listener lives for the queue's lifetime, and pool.end must never wait on
    * it. A dropped listener marks itself gone and is re-established by the
    * next claim; until then the backstop delivers. Never a crash. */
-  async #listen(): Promise<void> {
+  async #listen(hold?: () => Promise<void>): Promise<void> {
     if (!this.#connectionUrl) return;
     const { Client } = await import("pg");
     const client = new Client({ connectionString: this.#connectionUrl });
@@ -249,6 +250,7 @@ export class PgQueue implements Queue {
     client.on("end", gone);
     try {
       await client.connect();
+      await hold?.();
       await client.query(`listen ${this.#wakeChannel()}`);
       client.on("notification", () => this.#wake());
       // Closed while the reconnect was in flight: drop it, don't leak it.
@@ -270,11 +272,7 @@ export class PgQueue implements Queue {
   async #ensureListener(): Promise<void> {
     if (this.#pool === null || this.#listener !== null) return;
     if (this.#listenerPending === null) {
-      const relisten = async (): Promise<void> => {
-        await this.#options.beforeRelisten?.();
-        await this.#listen();
-      };
-      this.#listenerPending = relisten()
+      this.#listenerPending = this.#listen(this.#options.beforeRelisten)
         .catch(() => undefined) // never a crash; the next claim retries
         .finally(() => {
           this.#listenerPending = null;
