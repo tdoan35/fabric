@@ -163,7 +163,7 @@ void queueOptions;
   );
 
   it(
-    "Z6b (Postgres) a claim that finds a reconnect in flight awaits it before claiming",
+    "Z6b (Postgres) recovery is shared, not skipped: concurrent typed waits await the reconnect",
     { timeout: 20_000 },
     async () => {
       await withSharedDb(async (url) => {
@@ -214,6 +214,9 @@ void queueOptions;
         expect(started).toBe(true); // A's claim really is re-LISTENing
         const betaLoop = loop("worker-b", "beta");
         await sleep(100);
+        // Only the writer is LISTENing; the held reconnect has not installed
+        // the reader's subscription yet, so beta's NOTIFY really can be lost.
+        expect(await listenerPids(admin)).toHaveLength(1);
 
         // B's job commits while the reconnect is still open: its NOTIFY has no
         // listener. Only a claim that ran after the re-LISTEN can see it.
@@ -238,6 +241,7 @@ void queueOptions;
         expect(claimedAt.beta! - betaCommitAt).toBeLessThanOrEqual(100);
         expect(claimedAt.alpha! - alphaCommitAt).toBeLessThanOrEqual(100);
         expect(relistens).toBe(1); // one shared reconnect, serialized per instance
+        expect(await listenerPids(admin)).toHaveLength(2); // reader and writer
       });
     }
   );
