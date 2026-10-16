@@ -7,6 +7,7 @@ import { corsOrigins, env } from "./env";
 import { warmEmbedder } from "@fabric/agents/memory";
 import { chat } from "./routes/chat";
 import { dev } from "./routes/dev";
+import { folders } from "./routes/folders";
 import { memory } from "./routes/memory";
 import { mcp } from "./routes/mcp";
 import { registry } from "./routes/registry";
@@ -25,6 +26,7 @@ const api = new Hono()
   .get("/health", (c) => c.json({ ok: true }))
   .route("/", registry)
   .route("/", work)
+  .route("/", folders)
   .route("/", runs)
   .route("/", schedules)
   .route("/", reports)

@@ -19,6 +19,7 @@ import type { ToolRegistry } from "@fabric/tools";
 import { createRegistry } from "@fabric/tools";
 import { builtinTools } from "@fabric/tools/builtin";
 import { hostTools } from "@fabric/tools/host";
+import type { SandboxProvider } from "@fabric/tools/sandbox";
 import {
   type McpClient,
   ensureMcpSchema,
@@ -58,6 +59,7 @@ import {
 import type { McpSessionDeps, ProposalActions, SpecialistAgent } from "@fabric/agents/session";
 import { recallFacts } from "@fabric/agents/assistant";
 import { InProcessLiveBus, type LiveBus } from "./live-bus";
+import { startExecution, type Execution } from "./execution";
 import { createTestModelPort, type TestModelOptions } from "./test-model";
 import { enqueuePurgeOnActivity, runPurgeLoop } from "./purge";
 import { hub } from "../services/hub";
@@ -93,6 +95,15 @@ export type RuntimeEnv = {
   /** R17: the idle claim-wait backstop in ms; a positive integer, 600 000
    * (10 min) by default. Invalid values fail start-up naming the variable. */
   RUNTIME_IDLE_BACKSTOP_MS?: number | string;
+  /** T19: the workspace execution switch — host (the default, this machine),
+   * docker or sprites. Read once at boot; a sandbox provider that reports
+   * unavailable refuses the start. */
+  FABRIC_EXECUTION?: "host" | "docker" | "sprites";
+  /** T19: the credential broker's rules, a JSON file path; absent, every
+   * broker request is refused (fail-closed). */
+  FABRIC_BROKER_RULES?: string;
+  /** T19: idle window (ms) before a sandbox is reaped; default 300000. */
+  FABRIC_SANDBOX_IDLE_MS?: number;
 };
 
 export type FabricRuntime = {
@@ -112,6 +123,9 @@ export type FabricRuntime = {
   /** The MCP wiring (M6): the workspace's servers and OAuth — M7's routes
    * take over from here; the stamp and the run hook read the seam. */
   mcp: { servers: McpServers; oauth: McpOAuth };
+  /** The execution switch (T19): the workspace's host|docker|sprites choice —
+   * the sandboxed modes' provider plumbing, the broker, the reaper. */
+  execution: Execution;
   /** Drains the workers, then closes queue and store. Idempotent. */
   stop: () => Promise<void>;
 };
@@ -509,8 +523,21 @@ export function runtimeIdleBackstopMs(
  * Open the store, the queue over the same database, and -- unless
  * `opts.worker` is false -- RUNTIME_CONCURRENCY worker loops. Test hook:
  * `worker: false` boots the command surface with the board untouched (B5).
+ * T19 seams: `provider` replaces the mode's own sandbox provider, `brokerHost`
+ * the `brokerBindHost()` probe, `now` the reaper/token clock.
  */
-export async function startRuntime(env: RuntimeEnv, opts: { worker?: boolean } = {}): Promise<FabricRuntime> {
+export async function startRuntime(
+  env: RuntimeEnv,
+  opts: {
+    worker?: boolean;
+    /** T19: the sandbox provider, instead of the execution mode's own. */
+    provider?: SandboxProvider;
+    /** T19: the broker bind host, instead of `brokerBindHost()`. */
+    brokerHost?: string;
+    /** T19: the clock the reaper and the egress-token TTL read. */
+    now?: () => number;
+  } = {},
+): Promise<FabricRuntime> {
   if (env.MODEL_PORT === "test" && process.env.NODE_ENV === "production") {
     throw new Error(
       "MODEL_PORT=test is the CI/smoke echo double, not a production model: the server refuses to start with MODEL_PORT=test when NODE_ENV=production",
@@ -537,14 +564,29 @@ export async function startRuntime(env: RuntimeEnv, opts: { worker?: boolean } =
   const masterKey = await loadOrCreateMasterKey(masterKeyPath);
   const vault = envFallbackVault(encryptedTableVault(store, RUNTIME_WORKSPACE, masterKey), process.env);
 
+  // T19: the workspace execution switch — `host` keeps the path below exactly
+  // as T14 left it; `docker`/`sprites` swap the five host tools for the step-2
+  // sandbox ones and refuse the boot when their provider is unavailable. The
+  // docker broker starts here too, on T18's bind host, fail-closed.
+  const execution = await startExecution({
+    workspace: RUNTIME_WORKSPACE,
+    store,
+    vault,
+    env,
+    provider: opts.provider,
+    brokerHost: opts.brokerHost,
+    now: opts.now,
+  });
+
   // T14: the tool registry — the step-0 set (`send` only when the identity is
   // configured) plus the host tools — installed through the seam, S9-style.
   // M3: M2's skills read tools ride along, so every agent can see and load
-  // its own skills (the toolset's defaults allow them).
+  // its own skills (the toolset's defaults allow them). T19: on a sandboxed
+  // execution the host tools are the step-2 sandbox ones, same names.
   const sendFrom = env.FABRIC_SEND_FROM;
   const registryDefs = [
     ...builtinTools({ sendFrom: sendFrom ?? "" }),
-    ...hostTools(),
+    ...(execution.tools ?? hostTools()),
     ...skillTools(skills),
   ];
   setSessionToolRegistry(
@@ -703,12 +745,15 @@ export async function startRuntime(env: RuntimeEnv, opts: { worker?: boolean } =
     vault,
     skills,
     mcp: { servers, oauth },
+    execution,
     ...(proposals !== undefined ? { proposals } : {}),
     stop: async () => {
       if (stopped) return;
       stopped = true;
       signal.abort();
       await Promise.allSettled(loops); // the pass in flight drains; no new claim starts
+      // T19: the sandboxes, their tokens and the broker go before the stores.
+      await execution.stop();
       await queue.close();
       await store.close();
       await appDb?.close();
