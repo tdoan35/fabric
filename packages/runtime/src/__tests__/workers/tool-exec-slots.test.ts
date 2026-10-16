@@ -233,6 +233,51 @@ describeDrivers("tool.exec sandbox slots (ANY-92 T16)", (h) => {
     expect(of(events, "tool.queued")).toHaveLength(0); // the slot was free; the call never queued
   });
 
+  test("a queued rerunnable call that finishes through recovery releases its slot registration", async () => {
+    const store = await h.openStore();
+    const queue = new MemoryQueue();
+    const slots = sandboxSlots(store, { cap: 1 });
+    // the slot is held elsewhere: the call queues
+    expect((await slots.acquire({ workspaceId: WORKSPACE, callKey: "run:zz:hold", priority: 1, now: 0 })).granted).toBe(
+      true
+    );
+
+    const streamId = "run:t16-rec";
+    const tools = new SlotTools({
+      sh: { effect: "rerunnable", needsSlot: true, runs: [{ ok: true, result: "ran" }] },
+    });
+    await seed(store, streamId, [runCreated(streamId), toolCalled(streamId, "c1", "rerunnable")]);
+    await enqueueToolExec(store, queue, streamId, "c1");
+
+    // attempt 1: refused — the wait is a fact, the job defers, nothing runs
+    const lease1 = await claimToolExec(queue, streamId, "c1", 0);
+    await handleToolExecJob(lease1, { store, queue, tools, slots, now: () => 1_000 });
+    expect(of(await store.readStream(streamId, { workspaceId: WORKSPACE }), "tool.queued")).toHaveLength(1);
+    expect(tools.count("sh")).toBe(0);
+
+    // the job comes back and fails retryably once: the next claim is attempt 2
+    const lease2 = await queue.claim("worker-2", ["tool.exec"], 3_000);
+    expect(lease2?.attempt).toBe(1);
+    await queue.fail(lease2!, new Error("store hiccup"), { retryable: true }, 3_000);
+    const lease3 = await queue.claim("worker-3", ["tool.exec"], 33_000);
+    expect(lease3?.attempt).toBe(2);
+
+    // attempt 2 of a rerunnable call recovers instead of running: the
+    // interruption is the call's terminal fact, the lease completes
+    await handleToolExecJob(lease3!, { store, queue, tools, slots, now: () => 33_500 });
+    expect(tools.count("sh")).toBe(0);
+    const events = await store.readStream(streamId, { workspaceId: WORKSPACE });
+    expect(of(events, "tool.interrupted")).toHaveLength(1);
+    expect((await queue.get(lease3!.jobId))?.status).toBe("completed");
+
+    // the recovery took the call's registration with it: with the holder gone,
+    // a fresh call walks straight in — no phantom waiter ranks ahead of it
+    await slots.release("run:zz:hold");
+    expect(
+      (await slots.acquire({ workspaceId: WORKSPACE, callKey: "run:zz:probe", priority: 1, now: 34_000 })).granted
+    ).toBe(true);
+  });
+
   test("C10 host mode — no slots port, or a tool that needs none — is byte-identical to the R14 run", async () => {
     const store = await h.openStore();
     const queue = new MemoryQueue();

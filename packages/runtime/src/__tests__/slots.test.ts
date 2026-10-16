@@ -84,4 +84,40 @@ describeDrivers("sandbox slots (ANY-92 T16)", (h) => {
     // acquire walks straight in
     expect((await acquire(slots, "run:x:other", 1, 91_000)).granted).toBe(true);
   });
+
+  test("a waiter abandoned past the 60 s cutoff stops ranking ahead of later calls", async () => {
+    const store = await h.openStore();
+    const slots = sandboxSlots(store, { cap: 1 });
+    expect((await acquire(slots, "run:x:held", 1, 0)).granted).toBe(true);
+    // a waiter registers, then its call finishes some other way — a recovery
+    // records the interruption, or the job dies with its retries — so it
+    // never re-acquires and never releases
+    await expect(acquire(slots, "run:x:gone", 1, 1_000)).resolves.toEqual({
+      granted: false,
+      position: 1,
+    });
+
+    // past the stale cutoff the abandoned waiter is gone: the slot frees and
+    // a fresh call walks straight in — no phantom ranks ahead of it forever
+    await slots.release("run:x:held");
+    expect((await acquire(slots, "run:x:fresh", 1, 61_500)).granted).toBe(true);
+
+    // a waiter that keeps re-acquiring (the 2 s defer loop) never goes stale,
+    // however long the wait: it keeps its place and gets in ahead of the
+    // later arrivals
+    await expect(acquire(slots, "run:x:live", 1, 62_000)).resolves.toEqual({
+      granted: false,
+      position: 1,
+    });
+    await expect(acquire(slots, "run:x:live", 1, 63_000)).resolves.toEqual({
+      granted: false,
+      position: 1,
+    });
+    await expect(acquire(slots, "run:x:later", 1, 122_000)).resolves.toEqual({
+      granted: false,
+      position: 2,
+    });
+    await slots.release("run:x:fresh");
+    expect((await acquire(slots, "run:x:live", 1, 122_500)).granted).toBe(true);
+  });
 });

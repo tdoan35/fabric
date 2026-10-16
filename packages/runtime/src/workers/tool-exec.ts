@@ -287,6 +287,10 @@ export async function handleToolExecJob(lease: QueueLease, deps: ToolExecJobDeps
     /** T16: the position the call still waits at; null when not queued. */
     queuedPos: number | null;
   } | null = null;
+  /** T16: the recovery branch finished a call that participates in the slot
+   * protocol — its registration (waiter or crashed holder) goes back after
+   * the read commits, never outliving the call. */
+  let recoveredWithSlot = false;
   try {
     await store.transaction(async (tx) => {
       // W11b: the result already recorded — an at-least-once re-run. Skip the
@@ -314,6 +318,10 @@ export async function handleToolExecJob(lease: QueueLease, deps: ToolExecJobDeps
         // §2: the stream gained facts — the decide loop continues from them.
         await enqueueReDecides(tx, queue, lease.workspaceId, [streamId]);
         await queue.complete(tx, lease);
+        // T16: the recovery is the call's terminal fact — a queued call's
+        // waiter row (or a crashed attempt's held row) must not outlive it,
+        // or the phantom ranks ahead of every later acquire forever.
+        recoveredWithSlot = deps.slots !== undefined && (tools.needsSlot?.(tool) ?? false);
         return;
       }
 
@@ -330,6 +338,7 @@ export async function handleToolExecJob(lease: QueueLease, deps: ToolExecJobDeps
     await completeTolerantly(store, queue, lease);
     return;
   }
+  if (recoveredWithSlot) await deps.slots?.release(key).catch(() => {});
   if (staged === null) return; // the recovery branch completed the lease in phase 1
   const { tool, args, agentId, wantSlot, queuedPos } = staged;
 

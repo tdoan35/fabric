@@ -52,10 +52,11 @@ export interface QueueLease {
   key: string;
   streamId: string | null;
   workspaceId: string;
-  /** The claim's identity, epoch ms (T16): adapters with no worker column in
-   * their fence — pg-boss — carry the claim's `started_on` so a lease the same
-   * attempt re-claimed is still recognised as stale. Optional: fences that
-   * already discriminate (worker id, attempt) leave it unset. */
+  /** The claim's identity, epoch ms (T16): the fence beyond the (worker id,
+   * attempt) pair, which a defer's re-claim hands back unchanged — the lease
+   * that deferred must read as stale against the job it left, on every
+   * adapter. Only leases built by hand in tests may leave it unset; those
+   * keep the pair-only fence. */
   claimAt?: number;
 }
 

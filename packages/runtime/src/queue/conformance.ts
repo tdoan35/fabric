@@ -337,6 +337,23 @@ const cases: QueueConformanceCase[] = [
       // complete throw, as complete throws on any lost lease
       await expect(queue.heartbeat(lease!, 2_100)).rejects.toThrow(/stale/i);
       await expect(queue.complete(memoryTx(), lease!)).rejects.toThrow(/stale/i);
+
+      // and the same with ONE worker: the defer's re-claim hands the same
+      // (worker, attempt) pair back, so the claim's own instant — not the
+      // pair — is what fences the job the deferring lease left behind
+      const deferAgain = memoryTx();
+      await queue.defer?.(deferAgain, again!, 4_000);
+      deferAgain.commit();
+      const third = await queue.claim("worker-2", ["tool.exec"], 4_000);
+      expect(third?.jobId).toBe(job.id);
+      expect(third?.attempt).toBe(1);
+      // the fresh lease is the live one: its heartbeats land
+      await queue.heartbeat(third!, 4_050);
+      // the lease that deferred is stale, though it names the same worker and
+      // the same attempt — its heartbeat and completion cannot touch the run
+      // that superseded it
+      await expect(queue.heartbeat(again!, 4_100)).rejects.toThrow(/stale/i);
+      await expect(queue.complete(memoryTx(), again!)).rejects.toThrow(/stale/i);
     },
   },
 ];
