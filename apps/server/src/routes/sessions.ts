@@ -9,10 +9,13 @@ import {
   CreateSessionRequestSchema,
   encodeFrame,
   PostMessageRequestSchema,
+  RespondWaitRequestSchema,
+  SetApprovalModeRequestSchema,
   type SessionDelta,
   type SessionFrame,
 } from "@fabric/contracts";
-import { append } from "@fabric/runtime";
+import { fold } from "@fabric/core";
+import { append, respond } from "@fabric/runtime";
 import { enqueueDecide, getRuntime, sessionTurnDefinition, RUNTIME_WORKSPACE } from "../runtime/bootstrap";
 
 /** A new session's opening facts: whose agent it hosts (S2) plus the turn
@@ -394,4 +397,96 @@ export const sessions = new Hono()
         ts: event.ts,
       })),
     );
+  })
+
+  // T17 (ANY-82): the wait answer (RUNTIME §7). The answer comes from the app,
+  // so `surface: "app"` — gated waits take app answers only — and R10's
+  // `respond` owns the open-check/append/re-decide transaction and its refusal
+  // reasons. An `approve:` wait takes the decision words only, checked before
+  // anything is touched; every other wait takes any non-empty text.
+  .post("/sessions/:id/waits/:waitId", async (c) => {
+    const runtime = getRuntime();
+    if (runtime === undefined) return c.json({ error: "runtime not started" }, 503);
+    const parsed = RespondWaitRequestSchema.safeParse(await c.req.json().catch(() => null));
+    if (!parsed.success) return c.json({ error: "invalid decision" }, 400);
+
+    const waitId = c.req.param("waitId");
+    const { decision } = parsed.data;
+    if (waitId.startsWith("approve:") && decision !== "approve" && decision !== "deny") {
+      return c.json({ error: "invalid decision for an approve wait" }, 400);
+    }
+
+    const streamId = `session:${c.req.param("id")}`;
+    const known = await runtime.store.transaction((tx) =>
+      tx.query("select 1 from streams where id = $1 and workspace_id = $2", [streamId, RUNTIME_WORKSPACE]),
+    );
+    if (known.length === 0) return c.json({ error: "session not found" }, 404);
+
+    const result = await respond(runtime.store, RUNTIME_WORKSPACE, streamId, waitId, decision, {
+      by: "user",
+      surface: "app",
+      queue: runtime.queue,
+    });
+    return result.outcome === "accepted"
+      ? c.json({ outcome: "accepted" }, 200)
+      : c.json({ outcome: "refused", reason: result.reason }, 409);
+  })
+
+  // T17 (ANY-82): the approval mode (RUNTIME §13, PRODUCT §8.3). One
+  // transaction: fold the stream, append `session.approval_mode_set` only on a
+  // real change. No `decide` job — T3 applies the mode from the next decision
+  // and never retro-approves a held wait.
+  .put("/sessions/:id/approval-mode", async (c) => {
+    const runtime = getRuntime();
+    if (runtime === undefined) return c.json({ error: "runtime not started" }, 503);
+    const parsed = SetApprovalModeRequestSchema.safeParse(await c.req.json().catch(() => null));
+    if (!parsed.success) return c.json({ error: "invalid approval mode" }, 400);
+    const { mode } = parsed.data;
+
+    const streamId = `session:${c.req.param("id")}`;
+    const outcome = await runtime.store.transaction(async (tx) => {
+      const known = await tx.query("select 1 from streams where id = $1 and workspace_id = $2", [
+        streamId,
+        RUNTIME_WORKSPACE,
+      ]);
+      if (known.length === 0) return { kind: "missing" } as const;
+
+      const rows = await tx.query(
+        `select id, workspace_id, stream_id, seq, type, class, v, actor, causation, ts, payload
+         from events where stream_id = $1 and workspace_id = $2 order by seq`,
+        [streamId, RUNTIME_WORKSPACE],
+      );
+      // the log's snake_case rows into the envelope `fold` parses (the same
+      // shape the runtime's own event readers hand it)
+      const state = fold(
+        rows.map((row) => {
+          const ts: unknown = row.ts;
+          return {
+            id: String(row.id),
+            workspaceId: String(row.workspace_id),
+            streamId: String(row.stream_id),
+            seq: Number(row.seq),
+            type: String(row.type),
+            class: String(row.class) as "fact" | "telemetry",
+            v: Number(row.v),
+            actor: String(row.actor),
+            causation: row.causation === null || row.causation === undefined ? null : String(row.causation),
+            ts: ts instanceof Date ? ts.toISOString() : String(ts),
+            payload: row.payload,
+          };
+        }),
+      );
+      if (state.approvalMode !== mode) {
+        await append(tx, RUNTIME_WORKSPACE, [
+          {
+            streamId,
+            events: [{ type: "session.approval_mode_set", actor: "api", payload: { mode } }],
+          },
+        ]);
+      }
+      return { kind: "set", mode } as const;
+    });
+
+    if (outcome.kind === "missing") return c.json({ error: "session not found" }, 404);
+    return c.json({ mode: outcome.mode }, 200);
   });
