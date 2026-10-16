@@ -15,6 +15,7 @@
   },
   "dependencies": {
     "@fabric/runtime": "*",
+    "@fly/sprites": "^0.2.3",
     "@modelcontextprotocol/client": "^2.3.1",
     "agentmail": "^0.5.35",
     "exa-js": "^2.25.0",
