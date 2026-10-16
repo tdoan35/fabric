@@ -310,11 +310,11 @@ test("V9 the broker is docker-mode only and fail-closed with no rules", async ()
 
   // no rules file -> every request refused, token or not
   const token = execution.tokens!.issue({ workspaceId: WORKSPACE, agentId: "researcher", ttlMs: 60_000 });
-  const refused = await fetch(`${execution.broker!.url}/api.github.com/repos/x/y`, {
+  const refused = await fetch(`${execution.broker!.url}/egress/github/repos/x/y`, {
     headers: { authorization: `Bearer ${token}` },
   });
   expect(refused.status).toBe(403);
-  const anonymous = await fetch(`${execution.broker!.url}/api.github.com/repos/x/y`);
+  const anonymous = await fetch(`${execution.broker!.url}/egress/github/repos/x/y`);
   expect(anonymous.status).toBe(403);
   void token;
 

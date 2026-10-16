@@ -78,6 +78,16 @@ export const env = z.object({
    * reads its env fallbacks the same lazy way, because this object
    * snapshots at import — and drops any trailing slash. */
   FABRIC_PUBLIC_URL: z.string().url().optional(),
+  // -- T19 execution (the workspace switch, the broker, the sandboxes) --------
+  /** Which execution every agent's tools get: `host` (this machine, the
+   * default), `docker` or `sprites` sandboxes. Read at boot; a sandbox
+   * provider that reports unavailable refuses the start. */
+  FABRIC_EXECUTION: z.enum(["host", "docker", "sprites"]).default("host"),
+  /** The credential broker's rules, a JSON file path. Absent, every broker
+   * request is refused — fail-closed. */
+  FABRIC_BROKER_RULES: z.string().optional(),
+  /** Idle window (ms) before a sandbox is reaped and its egress token dies. */
+  FABRIC_SANDBOX_IDLE_MS: z.coerce.number().int().default(300_000),
 }).parse(process.env);
 
 export const corsOrigins = env.CORS_ORIGINS
