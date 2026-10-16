@@ -7,7 +7,7 @@
 // tokens, fake clock) and V9 (the broker lives in docker mode only and is
 // fail-closed with no rules). Embedded PGlite; the provider, the broker bind
 // host and the clock are injected.
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { PassThrough } from "node:stream";
@@ -322,4 +322,30 @@ test("V9 the broker is docker-mode only and fail-closed with no rules", async ()
   const hostRuntime = await boot({});
     expect(hostRuntime.execution?.broker).toBeUndefined();
   expect(hostRuntime.execution?.tokens).toBeUndefined();
+});
+
+// -- V11 ----------------------------------------------------------------------
+
+test("V11 the mounted host dirs are writable by the container user (umask-proof 0777)", async () => {
+  setSessionAgents([RESEARCHER]);
+  const fake = fakeProvider();
+  const runtime = await boot({ FABRIC_EXECUTION: "docker" }, {
+    provider: fake.provider,
+    brokerHost: "127.0.0.1",
+  });
+  const execution = runtime.execution!;
+  await execution.grants.grant("alpha", "researcher", "read");
+
+  await runTool(runtime, "write_file", { path: "out.txt", content: "hi" });
+
+  // The container's fabric uid is neither the dir owner nor in its group, so
+  // the umask-masked 0755 mkdir leaves every container-side write denied (the
+  // sandbox D-suite's chmod precedent). Every mount the layer hands the
+  // provider — agent folder and projects alike — carries the other-write bit.
+  const mounts = fake.state.acquires.at(-1)!.mounts ?? [];
+  expect(mounts.length).toBeGreaterThanOrEqual(2);
+  for (const mount of mounts) {
+    const mode = (await stat(mount.hostPath)).mode;
+    expect(mode & 0o777, `${mount.hostPath}: ${(mode & 0o777).toString(8)}`).toBe(0o777);
+  }
 });

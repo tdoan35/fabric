@@ -10,6 +10,7 @@
 // one minute) through the sandbox env. A reaper runs every minute; run
 // folders sweep once at boot and then daily; `stop()` reaps everything.
 import { readFileSync } from "node:fs";
+import { chmod } from "node:fs/promises";
 import path from "node:path";
 import type { ToolDef } from "@fabric/tools";
 import {
@@ -135,14 +136,22 @@ export async function startExecution(options: StartExecutionOptions): Promise<Ex
   sweeper.unref?.();
 
   /** T10 grants -> T8 mounts: the agent folder at /workspace (write) first,
-   * then each granted project at /projects/<name>, read-only for `read`. */
+   * then each granted project at /projects/<name>, read-only for `read`. The
+   * mkdir'd host dirs land umask-masked (022 -> 0755); the container's uid is
+   * neither the owner nor in the group, so every mount dir carries the
+   * other-write bit explicitly (the sandbox D-suite's chmod precedent) —
+   * read mounts are :ro inside, so the extra bit costs nothing there. */
   const mountsFor = async (agentId: string): Promise<SandboxMount[]> =>
     Promise.all(
-      (await grants.mountsFor(agentId)).map(async (mount) => ({
-        hostPath: await folders.path(mount.ref),
-        containerPath: mount.ref.kind === "agent" ? "/workspace" : `/projects/${mount.ref.name}`,
-        readOnly: mount.access === "read",
-      })),
+      (await grants.mountsFor(agentId)).map(async (mount) => {
+        const hostPath = await folders.path(mount.ref);
+        await chmod(hostPath, 0o777);
+        return {
+          hostPath,
+          containerPath: mount.ref.kind === "agent" ? "/workspace" : `/projects/${mount.ref.name}`,
+          readOnly: mount.access === "read",
+        };
+      }),
     );
 
   let inner: SandboxProvider | undefined;
