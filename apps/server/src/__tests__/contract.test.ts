@@ -101,14 +101,40 @@ describe("retired chat path (S14)", () => {
 });
 
 // The legacy history reads, against the live schema: S12/S13 render old threads read-only.
+// The reads serve at /api/sessions/:id(+/messages) — routes/chat.ts is mounted at the API root.
 suite("retired chat path: the legacy history reads survive", () => {
-  it("GET /api/chat/sessions/:id and /messages answer 200 for an existing legacy session", async () => {
-    const rows = (await db.db.execute(sql`select id from sessions order by ord limit 1`)).rows as { id: string }[];
-    if (rows.length === 0) return; // nothing legacy on this database: nothing to assert
-    const id = rows[0]!.id;
-    for (const path of [`/api/chat/sessions/${id}`, `/api/chat/sessions/${id}/messages`]) {
-      const res = await app.request(path, { headers: { Origin: "app://fabric" } });
-      expect(res.status, `GET ${path}`).toBe(200);
+  it("GET /api/sessions/:id and /messages answer 200 for a legacy session", async () => {
+    // A database with no legacy thread still must prove the reads: seed one row
+    // (ours alone, removed below — the running database is never pristine).
+    const existing = (await db.db.execute(sql`select id from sessions order by ord limit 1`)).rows as { id: string }[];
+    const seededId = `contract-legacy-${randomUUID()}`;
+    const seeded = existing.length === 0;
+    let id = existing[0]?.id;
+    if (seeded) {
+      await db.db.execute(sql`insert into sessions (id, title, agent_id) values (${seededId}, ${"contract: legacy reads"}, ${"dana"})`);
+      id = seededId;
+    }
+    try {
+      for (const path of [`/api/sessions/${id}`, `/api/sessions/${id}/messages`]) {
+        const res = await app.request(path, { headers: { Origin: "app://fabric" } });
+        expect(res.status, `GET ${path}`).toBe(200);
+        expect(res.headers.get("access-control-allow-origin"), `CORS on ${path}`).toBe("app://fabric");
+      }
+      const session = (await (await app.request(`/api/sessions/${id}`, { headers: { Origin: "app://fabric" } })).json()) as {
+        id: string; desktop: unknown;
+      };
+      expect(session.id).toBe(id);
+      expect(session.desktop).toBeTruthy();
+      const history = (await (await app.request(`/api/sessions/${id}/messages`, { headers: { Origin: "app://fabric" } })).json()) as {
+        sessionId: string; messages: unknown[];
+      };
+      expect(history.sessionId).toBe(id);
+      expect(Array.isArray(history.messages)).toBe(true);
+    } finally {
+      if (seeded) {
+        await db.db.execute(sql`delete from chat_messages where session_id = ${seededId}`);
+        await db.db.execute(sql`delete from sessions where id = ${seededId}`);
+      }
     }
   });
 });

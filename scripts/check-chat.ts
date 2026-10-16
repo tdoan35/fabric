@@ -82,13 +82,25 @@ const textOf = (event: SessionEvent): string | undefined => {
   return typeof text === "string" ? text : undefined;
 };
 
+// Health answers as soon as the socket listens, but startRuntime (PGlite open
+// + migrate) lands a beat later: session commands 503 `runtime not started`
+// until then — retry the 503s out instead of failing the check on the race.
+const RUNTIME_BOOT_MS = 30_000;
 const post = async (path: string, body: unknown) => {
-  const res = await fetch(`${base}/api${path}`, {
-    method: "POST", headers: { "Content-Type": "application/json", Origin: "app://fabric" },
-    body: JSON.stringify(body),
-  });
-  if (!res.ok) throw new Error(`POST ${path} → ${res.status}: ${(await res.text()).slice(0, 300)}`);
-  return res;
+  const payload = JSON.stringify(body);
+  const deadline = Date.now() + RUNTIME_BOOT_MS;
+  for (;;) {
+    const res = await fetch(`${base}/api${path}`, {
+      method: "POST", headers: { "Content-Type": "application/json", Origin: "app://fabric" },
+      body: payload,
+    });
+    if (res.status === 503 && Date.now() < deadline) {
+      await sleep(250);
+      continue;
+    }
+    if (!res.ok) throw new Error(`POST ${path} → ${res.status}: ${(await res.text()).slice(0, 300)}`);
+    return res;
+  }
 };
 
 /** Follow the session SSE until `until` matches; the connection aborts on the hit. */
@@ -108,23 +120,32 @@ async function followUntil(
     if (!res.ok || !res.body) throw new Error(`${tag}: session stream → ${res.status}`);
     const decoder = new TextDecoder();
     let buf = "";
-    for await (const chunk of res.body) {
-      buf += decoder.decode(chunk as Uint8Array, { stream: true });
-      let i: number;
-      while ((i = buf.indexOf("\n\n")) >= 0) {
-        const frame = buf.slice(0, i);
-        buf = buf.slice(i + 2);
-        const data = frame.split("\n").find((l) => l.startsWith("data: "));
-        if (!data) continue;
-        try { events.push(JSON.parse(data.slice(6)) as SessionEvent); } catch { /* keep-alive noise */ }
-        const hit = until(events);
-        if (hit) {
-          controller.abort(); // the intentional disconnect
-          return hit;
+    let hit: SessionEvent | undefined;
+    try {
+      for await (const chunk of res.body) {
+        buf += decoder.decode(chunk as Uint8Array, { stream: true });
+        let i: number;
+        while ((i = buf.indexOf("\n\n")) >= 0) {
+          const frame = buf.slice(0, i);
+          buf = buf.slice(i + 2);
+          const data = frame.split("\n").find((l) => l.startsWith("data: "));
+          if (!data) continue;
+          try { events.push(JSON.parse(data.slice(6)) as SessionEvent); } catch { /* keep-alive noise */ }
+          hit = until(events);
+          if (hit) {
+            controller.abort(); // the intentional disconnect
+            break;
+          }
         }
+        if (hit) break;
       }
+    } catch (err) {
+      // The disconnect can surface as an AbortError through the iterator close —
+      // that one is the check's own doing, anything else is a real failure.
+      if (!hit) throw err;
     }
-    throw new Error(`${tag}: the stream closed before the expected event`);
+    if (!hit) throw new Error(`${tag}: the stream closed before the expected event`);
+    return hit;
   })();
   let timer: ReturnType<typeof setTimeout> | undefined;
   const timedOut = new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error(`${tag}: nothing arrived in ${timeoutMs / 1000}s`)), timeoutMs); });
@@ -132,14 +153,14 @@ async function followUntil(
   return { hit, events };
 }
 
-/** The event log, polled until an agent.message lands past `afterSeq`. */
+/** The event log, polled until an agent.message lands at `afterSeq` or beyond. */
 const waitAgentMessage = async (sessionId: string, afterSeq: number, timeoutMs = 20_000) => {
   const deadline = Date.now() + timeoutMs;
   for (;;) {
     const res = await fetch(`${base}/api/sessions/${sessionId}/events?after=0`);
     if (!res.ok) throw new Error(`GET events → ${res.status}`);
     const log = (await res.json()) as SessionEvent[];
-    if (log.some((e) => e.type === "agent.message" && e.seq > afterSeq)) return log;
+    if (log.some((e) => e.type === "agent.message" && e.seq >= afterSeq)) return log;
     if (Date.now() > deadline) throw new Error(`no agent.message within ${timeoutMs / 1000}s (log: ${log.map((e) => e.type).join(", ")})`);
     await sleep(250);
   }
