@@ -356,6 +356,67 @@ const cases: QueueConformanceCase[] = [
       await expect(queue.complete(memoryTx(), again!)).rejects.toThrow(/stale/i);
     },
   },
+  {
+    // The staged-write interleaving (T16 rework): complete and defer buffer
+    // into the caller's transaction and apply after it commits. Between the
+    // call and the apply the claim can be lost to a defer and taken again at
+    // the same attempt — the applied write must fence on the claim identity,
+    // or it lands on the replacement claim instead of being a no-op.
+    id: "Q13",
+    name: "Q13 a staged complete or defer whose lease lost the job to a defer's re-claim is a no-op against the replacement claim",
+    run: async (makeQueue) => {
+      const queue = makeQueue();
+      const tx = memoryTx();
+      const job = await queue.enqueue(tx, {
+        type: "tool.exec",
+        key: "run:d1:q13",
+        streamId: "run:q13",
+        workspaceId: "w1",
+      });
+      tx.commit();
+      const old = await queue.claim("worker-1", ["tool.exec"], 0);
+      expect(old?.jobId).toBe(job.id);
+      expect(old?.attempt).toBe(1);
+
+      // Both writes staged while the lease is current, neither committed.
+      const stagedComplete = memoryTx();
+      await queue.complete(stagedComplete, old!);
+      const stagedDefer = memoryTx();
+      await queue.defer(stagedDefer, old!, 4_000);
+
+      // The job is given back — applied now, while the lease still holds —
+      // and re-claimed at once: the same worker, the same attempt, a new
+      // claim identity.
+      const deferTx = memoryTx();
+      await queue.defer(deferTx, old!, 2_000);
+      deferTx.commit();
+      const fresh = await queue.claim("worker-1", ["tool.exec"], 2_000);
+      expect(fresh?.jobId).toBe(job.id);
+      expect(fresh?.attempt).toBe(1);
+      expect(fresh?.claimAt).not.toBe(old!.claimAt);
+
+      // The stale lease is fenced out of the fresh claim: its heartbeat
+      // throws, and the staged completion, applied after the re-claim, must
+      // leave the replacement claim leased instead of completing it.
+      await expect(queue.heartbeat(old!, 2_100)).rejects.toThrow(/stale/i);
+      stagedComplete.commit();
+      expect((await queue.get(job.id))?.status).toBe("leased");
+
+      // The same for the staged defer: applied after the re-claim it must
+      // not send the fresh claim back to pending.
+      stagedDefer.commit();
+      const after = await queue.get(job.id);
+      expect(after?.status).toBe("leased");
+      expect(after?.runAt).toBe(2_000);
+      await expect(queue.claim("worker-2", ["tool.exec"], 4_000)).resolves.toBeNull();
+
+      // the fresh lease is the live one: its completion lands
+      const done = memoryTx();
+      await queue.complete(done, fresh!);
+      done.commit();
+      expect((await queue.get(job.id))?.status).toBe("completed");
+    },
+  },
 ];
 
 export const queueConformanceCases: readonly QueueConformanceCase[] = cases;
