@@ -217,48 +217,59 @@ if (postgresUrlFromEnv() !== undefined) {
       async () => {
         const url = new URL("/postgres", postgresUrlFromEnv()!).toString();
         const admin = new Pool({ connectionString: url });
+
+        // The counter: every statement the daemon issues on this database,
+        // seen at the driver layer (a wrapper on the connections, per the
+        // card's builder choice). Server-side dust — autovacuum, checkpointer,
+        // parallel suites on their own databases — never touches the count.
+        const { Client } = await import("pg");
+        const counted: { t: number; sql: string }[] = [];
+        let counting = false;
+        let countDb: string | undefined;
+        const proto = Client.prototype as unknown as {
+          query: (...a: unknown[]) => unknown;
+        };
+        const clientQuery = proto.query;
+        proto.query = function (...args: unknown[]) {
+          if (
+            counting &&
+            ((this as { connectionParameters?: { database?: string } }).connectionParameters?.database ===
+              countDb ||
+              (this as { options?: { database?: string } }).options?.database === countDb)
+          ) {
+            const raw = args[0];
+            const sql = typeof raw === "string" ? raw : JSON.stringify(raw);
+            counted.push({ t: Date.now(), sql: String(sql).replace(/\s+/g, " ").slice(0, 60) });
+          }
+          return clientQuery.apply(this, args) as never;
+        };
+
         const settleAndQuiet = async (dbUrl: string) => {
-          // The budget counts this database's transactions; the boot window's
-          // vacuum/analyze dust would pollute it, so the tables go quiet and the
-          // window starts late (start-up settles).
+          // The boot's DDL churn would pollute the window; the tables go
+          // quiet and a post-boot analyze pre-empts the launcher's own.
           const db = new Pool({ connectionString: dbUrl });
           try {
-            const tables = (
-              await db.query(`select tablename from pg_tables where schemaname = 'public'`)
-            ).rows.map((row: { tablename: string }) => `"${row.tablename}"`);
-            for (const table of tables) {
-              await db
-                .query(`alter table ${table} set (autovacuum_enabled = off, toast.autovacuum_enabled = off)`)
-                .catch(() => undefined);
-            }
-            // The boot's DDL bumps catalog stats; autovacuum would answer with
-            // an ANALYZE wave (pg_constraint & co) inside the window. Analyze
-            // here instead: the counters reset, the launcher finds nothing.
             await db.query(`analyze`).catch(() => undefined);
-            for (const catalog of ["pg_class", "pg_index", "pg_attribute", "pg_type", "pg_constraint"]) {
-              await db.query(`analyze pg_catalog.${catalog}`).catch(() => undefined);
-            }
           } finally {
             await db.end().catch(() => undefined);
           }
           await sleep(15_000);
         };
+
+        let runtime: FabricRuntime | undefined;
+        let runtimeDefault: FabricRuntime | undefined;
         try {
           const database = `r17_budget_${randomUUID().replace(/-/g, "").slice(0, 8)}`;
           await admin.query(`create database "${database}"`);
+          // Database-level autovacuum off: a background analyze wave landing
+          // inside a window is daemon-indistinguishable dust.
+          await admin.query(`alter database "${database}" set autovacuum = off`).catch(() => undefined);
           const dbUrl = new URL(`/${database}`, postgresUrlFromEnv()!).toString();
-          const xacts = async (): Promise<number> => {
-            const result = await admin.query(
-                `select xact_commit + xact_rollback as n from pg_stat_database where datname = $1`,
-              [database]
-            );
-            return Number(result.rows[0]?.n ?? 0);
-          };
+          countDb = database;
 
           // The full daemon: 4 worker loops plus the purge claim loop, on the
-          // 5 s test backstop, then on the default, measured via the
-          // database's transaction counters (the builder's choice, per card).
-          const runtime = await startRuntime(
+          // 5 s test backstop, then on the default.
+          runtime = await startRuntime(
             {
               RUNTIME_DATABASE_URL: dbUrl,
               MODEL_PORT: "test",
@@ -267,28 +278,48 @@ if (postgresUrlFromEnv() !== undefined) {
             } as RuntimeEnv
           );
           await settleAndQuiet(dbUrl);
-          const before = await xacts();
+          counted.length = 0;
+          counting = true;
           await sleep(30_000);
-          const after = await xacts();
+          counting = false;
           await runtime.stop();
-          const windowed = after - before;
+          const windowed = counted.length;
+          if (windowed < 1 || windowed > 70) {
+            const shapes = new Map<string, number>();
+            for (const { sql } of counted) shapes.set(sql, (shapes.get(sql) ?? 0) + 1);
+            console.log(
+              `[z7] windowed=${windowed} shapes=${JSON.stringify([...shapes.entries()])}`
+            );
+          }
           expect(windowed).toBeGreaterThanOrEqual(1);
           expect(windowed).toBeLessThanOrEqual(70); // 5 loops x 6 cycles x 2 + slack
 
-          const runtimeDefault = await startRuntime({
+          runtimeDefault = await startRuntime({
             RUNTIME_DATABASE_URL: dbUrl,
             MODEL_PORT: "test",
             RUNTIME_CONCURRENCY: 4,
           } as RuntimeEnv);
           await settleAndQuiet(dbUrl);
-          const beforeDefault = await xacts();
+          counted.length = 0;
+          counting = true;
           await sleep(30_000);
-          const afterDefault = await xacts();
+          counting = false;
           await runtimeDefault.stop();
-          expect(afterDefault - beforeDefault).toBeLessThanOrEqual(5);
+          const windowedDefault = counted.length;
+          if (windowedDefault > 5) {
+            const shapes = new Map<string, number>();
+            for (const { sql } of counted) shapes.set(sql, (shapes.get(sql) ?? 0) + 1);
+            console.log(
+              `[z7] default windowed=${windowedDefault} shapes=${JSON.stringify([...shapes.entries()])}`
+            );
+          }
+          expect(windowedDefault).toBeLessThanOrEqual(5);
 
           await admin.query(`drop database if exists "${database}" with (force)`);
         } finally {
+          Client.prototype.query = clientQuery as never;
+          await runtime?.stop().catch?.(() => undefined);
+          await runtimeDefault?.stop().catch?.(() => undefined);
           await admin.end().catch(() => undefined);
         }
       }
