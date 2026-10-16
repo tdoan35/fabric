@@ -31,6 +31,32 @@ export type PostMessageRequest = z.infer<typeof PostMessageRequestSchema>;
 export const PostMessageResponseSchema = z.object({ seq: z.number().int() });
 export type PostMessageResponse = z.infer<typeof PostMessageResponseSchema>;
 
+// -- T17 (ANY-82): the wait answer and the approval mode (RUNTIME §7, §13) ----
+
+/** The body of `POST /sessions/:id/waits/:waitId`: R10's decision. Any
+ * non-empty text; `approve:` waits narrow it to approve/deny at the route. */
+export const RespondWaitRequestSchema = z.object({ decision: z.string().min(1) });
+export type RespondWaitRequest = z.infer<typeof RespondWaitRequestSchema>;
+
+/** R10's `respond` outcome, verbatim: accepted, or refused with its reason. */
+export const RespondWaitResponseSchema = z.union([
+  z.object({ outcome: z.literal("accepted") }),
+  z.object({
+    outcome: z.literal("refused"),
+    reason: z.enum(["expired", "already_answered", "cancelled", "gated"]),
+  }),
+]);
+export type RespondWaitResponse = z.infer<typeof RespondWaitResponseSchema>;
+
+/** The body of `PUT /sessions/:id/approval-mode`: T3's session modes. */
+const ApprovalMode = z.enum(["ask", "auto_edits", "full_auto"]);
+
+export const SetApprovalModeRequestSchema = z.object({ mode: ApprovalMode });
+export type SetApprovalModeRequest = z.infer<typeof SetApprovalModeRequestSchema>;
+
+export const SetApprovalModeResponseSchema = z.object({ mode: ApprovalMode });
+export type SetApprovalModeResponse = z.infer<typeof SetApprovalModeResponseSchema>;
+
 /** One row of the thread list. */
 export const SessionSummarySchema = z.object({
   sessionId: z.string(),
