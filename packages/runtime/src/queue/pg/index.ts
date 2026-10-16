@@ -70,6 +70,9 @@ export interface PgQueueOptions extends QueueOptions {
   /** Test hook (R17 Z5): false silences the cross-process NOTIFY leg; the
    * in-process wake and the claim-wait backstop still deliver. */
   wakeNotify?: boolean;
+  /** Test hook (R17 Z6b): awaited by each lazy re-LISTEN before it connects,
+   * so a test can hold a reconnect open while claims overlap it. */
+  beforeRelisten?: () => Promise<void>;
 }
 
 const DEFAULT_WAKE_CHANNEL = "fabric_queue_wake";
@@ -259,7 +262,11 @@ export class PgQueue implements Queue {
    * dropped. Serialized per instance; a no-op when healthy or closing. */
   async #ensureListener(): Promise<void> {
     if (this.#pool === null || this.#listener !== null || this.#listenerPending !== null) return;
-    this.#listenerPending = this.#listen().finally(() => {
+    const relisten = async (): Promise<void> => {
+      await this.#options.beforeRelisten?.();
+      await this.#listen();
+    };
+    this.#listenerPending = relisten().finally(() => {
       this.#listenerPending = null;
     });
     await this.#listenerPending;

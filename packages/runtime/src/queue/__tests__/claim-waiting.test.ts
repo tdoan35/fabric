@@ -2,7 +2,8 @@
 // cross-process legs live: Z5 pins that a lost wake (the NOTIFY suppressed on
 // the writing queue) still claims within the backstop, Z6 that a dropped
 // LISTEN connection is re-established lazily, on the next claim and never on a
-// timer, after which the wake path works again.
+// timer, after which the wake path works again, and Z6b that a claim finding
+// that reconnect in flight awaits it instead of claiming ahead of the LISTEN.
 import { randomUUID } from "node:crypto";
 import { Pool } from "pg";
 import { afterAll, describe, expect, it } from "vitest";
@@ -157,6 +158,72 @@ void queueOptions;
 
         expect(lease?.jobId).toBe(job.id);
         expect(Date.now() - enqueuedAt).toBeLessThanOrEqual(100);
+      });
+    }
+  );
+
+  it(
+    "Z6b (Postgres) a claim that finds a reconnect in flight awaits it before claiming",
+    { timeout: 20_000 },
+    async () => {
+      await withSharedDb(async (url) => {
+        const admin = new Pool({ connectionString: url });
+        admin.on("error", () => undefined); // see Z6
+        dispose.push(() => admin.end().catch(() => undefined));
+
+        // The reconnect is held open (the test hook) so both claims overlap it
+        // deterministically; init's own LISTEN is not held.
+        let hold: Promise<void> | null = null;
+        let release!: () => void;
+        const listener = makeQueue(url, { beforeRelisten: () => hold ?? Promise.resolve() });
+        await listener.get("warm-up");
+        await sleep(50);
+        const pids = await listenerPids(admin);
+        expect(pids.length).toBe(1);
+        await admin.query(`select pg_terminate_backend($1)`, [pids[0]]);
+        await sleep(300);
+        expect(await listenerPids(admin)).toEqual([]);
+        const writer = makeQueue(url); // its own LISTEN comes after the probe
+        await writer.get("warm-up");
+
+        hold = new Promise<void>((resolve) => (release = resolve));
+        const backstopMs = 600_000;
+        const claimedAt: Record<string, number> = {};
+        const loop = (workerId: string, type: string) =>
+          listener
+            .claimWaiting(workerId, [type], { backstopMs, now: () => Date.now() })
+            .then((lease) => {
+              claimedAt[type] = Date.now();
+              return lease;
+            });
+        // Loop A's claim starts the reconnect; loop B's claim finds it in flight.
+        const alphaLoop = loop("worker-a", "alpha");
+        await sleep(20);
+        const betaLoop = loop("worker-b", "beta");
+        await sleep(100);
+
+        // B's job commits while the reconnect is still open: its NOTIFY has no
+        // listener. Only a claim that ran after the re-LISTEN can see it.
+        const betaTx = nowTx();
+        const beta = await writer.enqueue(betaTx, { type: "beta", key: "beta:z6b", workspaceId: "ws-z6b" });
+        const betaCommitAt = Date.now();
+        betaTx.commit();
+        expect(await writer.get(beta.id)).not.toBeNull(); // inserted and NOTIFYed
+        release();
+
+        // Both loops settle; A parks on the wake. Nothing but A's job wakes B
+        // now, so a B that claimed before the re-LISTEN shows up late here.
+        await sleep(300);
+        const alphaTx = nowTx();
+        const alpha = await writer.enqueue(alphaTx, { type: "alpha", key: "alpha:z6b", workspaceId: "ws-z6b" });
+        const alphaCommitAt = Date.now();
+        alphaTx.commit();
+
+        const [alphaLease, betaLease] = await Promise.all([alphaLoop, betaLoop]);
+        expect(alphaLease?.jobId).toBe(alpha.id);
+        expect(betaLease?.jobId).toBe(beta.id);
+        expect(claimedAt.beta! - betaCommitAt).toBeLessThanOrEqual(100);
+        expect(claimedAt.alpha! - alphaCommitAt).toBeLessThanOrEqual(100);
       });
     }
   );
