@@ -221,6 +221,10 @@ switch (command) {
     const refs = rest.filter((id) => !id.startsWith("-"));
     const gone = new Set(refs);
     mutate((state) => {
+      // The reaping argv, for the sweep's no-force contract: the crash-recovery
+      // sweep must reap with plain `rm` so a container that starts between the
+      // sweep's `ps` and its `rm` is refused, never force-stopped mid-exec.
+      state.lastRm = ["rm", ...rest];
       state.containers = state.containers.filter((c) => !gone.has(c.id) && !gone.has(c.name));
       save(state);
     });

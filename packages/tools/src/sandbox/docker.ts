@@ -299,7 +299,12 @@ export function dockerSandboxes(options: DockerSandboxOptions = {}): SandboxProv
         .filter((line) => line !== "")
         .filter((line) => line.split(/\s+/)[1] !== "running")
         .map((line) => line.split(/\s+/)[0]);
-      if (stale.length > 0) await run(["rm", "-f", ...stale]);
+      // Plain `rm`, never `-f`: a container recorded `created` may be running
+      // by the time this lands (the ps -> rm window), and a force-remove would
+      // stop it mid-exec — the CI run 291 E4/D6 `docker exec` exit 1. A rm
+      // refused for a now-running container is the race landing harmlessly; the
+      // next provider construction reaps it if it exited since.
+      if (stale.length > 0) await run(["rm", ...stale]);
     } catch {
       // A missing daemon or binary surfaces on available()/acquire().
     }

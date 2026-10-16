@@ -37,6 +37,9 @@ interface FakeState {
   seq: number;
   images: string[];
   containers: FakeContainer[];
+  /** The last recorded `rm` argv (the shim's rm case); the sweep's no-force
+   * contract reads it. */
+  lastRm?: string[];
 }
 
 let base = "";
@@ -350,6 +353,27 @@ test("the startup sweep spares the running sandboxes of a concurrent run", async
   expect(ids).not.toContain("done-one");
   expect(ids).toContain("live-one");
   expect(ids).toContain(probe.id);
+});
+
+test("the startup sweep reaps without force, so a sandbox that starts during the sweep survives", async () => {
+  // The ps -> rm window: a container the sweep recorded as `created` may be
+  // running by the time the rm lands (CI run 291: E4's first proxyGet and D6's
+  // `id -u` each saw `docker exec` exit 1 after the sandbox vanished; run 285
+  // shows the same assertion at 137, the rm -f stop). A plain `rm` is refused
+  // for a running container, so the race degrades to a no-op instead of
+  // killing a live sandbox between its `docker run` and first exec.
+  await seed({
+    seq: 9,
+    images: [IMAGE],
+    containers: [{ id: "gone-one", labels: { "fabric.sandbox": "1" }, argv: [] }],
+  });
+
+  const provider = fakeProvider();
+  await provider.acquire({ workspaceId: "w", agentId: "probe", mounts: [] });
+
+  const reaping = (await fakeState()).lastRm ?? [];
+  expect(reaping).toContain("gone-one");
+  expect(reaping).not.toContain("-f");
 });
 
 test("available() is false, naming the binary, when docker is missing", async () => {
