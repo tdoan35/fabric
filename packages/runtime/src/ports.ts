@@ -27,7 +27,11 @@ export type ModelMessage = {
   toolCalls?: readonly Record<string, unknown>[];
 };
 
-/** A live token delta. Deltas are pushed, never logged (§8). */
+/** A live token delta: ONE text increment since the previous delta — the
+ * natural shape of a provider stream (R16), not the text so far. The `ll.call`
+ * worker accumulates the increments of the current call attempt; the live bus,
+ * the stream route and the wire carry the cumulative text. Deltas are pushed,
+ * never logged (§8). */
 export type ModelDelta = { text: string };
 
 /** The call a live delta belongs to (R15): the worker hands the attribution

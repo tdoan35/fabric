@@ -205,7 +205,12 @@ test("exec kills the process group when the timeout lands", async () => {
 
   const started = Date.now();
   const lines: string[] = [];
-  const result = await sandbox.exec("sleep 30 && echo done", {
+  // The command records the session leader's pid: the kill is verified against
+  // that process group, never against a host-wide `ps`. The fake sandbox has
+  // no PID namespace, so a host listing would count unrelated `sleep 30`s —
+  // the daemon suite's parallel execs, any stray host process — as survivors.
+  const pgidFile = join(base, "killed-pgid");
+  const result = await sandbox.exec(`echo $$ > ${pgidFile}; sleep 30 && echo done`, {
     timeoutMs: 300,
     onLine: (line) => lines.push(line),
   });
@@ -215,10 +220,17 @@ test("exec kills the process group when the timeout lands", async () => {
   // on stderr is expected stream traffic.
   expect(lines.includes("done")).toBe(false);
 
-  // A follow-up process listing finds no survivor of the killed group.
-  const procs: string[] = [];
-  await sandbox.exec("ps -ef", { onLine: (line) => procs.push(line) });
-  expect(procs.filter((line) => line.includes("sleep 30"))).toEqual([]);
+  // No survivor of the killed group: the recorded group empties. Bounded
+  // poll — SIGKILL death is quick, a loaded CI runner is not; a silently
+  // no-op killer (the container-side kill exits 0 regardless) keeps the
+  // group alive and fails here.
+  const check = await sandbox.exec(
+    `[ -s ${pgidFile} ] || exit 3; ` +
+      `for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do ` +
+      `kill -0 -- -$(cat ${pgidFile}) 2>/dev/null || exit 0; sleep 0.05; done; exit 1`,
+    { timeoutMs: 5_000 }
+  );
+  expect(check.exitCode).toBe(0);
 });
 
 test("putArchive and getArchive round-trip a tree byte for byte", async () => {
