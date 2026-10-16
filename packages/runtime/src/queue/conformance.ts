@@ -297,6 +297,48 @@ const cases: QueueConformanceCase[] = [
       await expect(queue.claim("deliver-worker", ["deliver"], 0)).resolves.toBeNull();
     },
   },
+  {
+    // ANY-92 T16 C1: the sandbox-slot wait defers a leased job instead of
+    // failing it. The optional call keeps a pre-defer queue failing on the
+    // assertion below (the job is still leased) rather than on the method.
+    id: "C1",
+    name: "C1 defer puts a leased job back to pending at runAt on the same attempt; a stale lease throws",
+    run: async (makeQueue) => {
+      const queue = makeQueue();
+      const tx = memoryTx();
+      const job = await queue.enqueue(tx, {
+        type: "tool.exec",
+        key: "run:d1:c1",
+        streamId: "run:d1",
+        workspaceId: "w1",
+      });
+      tx.commit();
+      const lease = await queue.claim("worker-1", ["tool.exec"], 0);
+      expect(lease?.jobId).toBe(job.id);
+      expect(lease?.attempt).toBe(1);
+
+      // the slot wait: back to pending at runAt, no failure recorded
+      const deferTx = memoryTx();
+      await queue.defer?.(deferTx, lease!, 2_000);
+      deferTx.commit();
+      const deferred = await queue.get(job.id);
+      expect(deferred?.status).toBe("pending");
+      expect(deferred?.runAt).toBe(2_000);
+      expect(deferred?.lastError).toBeNull();
+
+      // not claimable before runAt; claimable after, as the same attempt —
+      // a queue wait is not a retry, so the handler re-enters un-recovered
+      await expect(queue.claim("worker-2", ["tool.exec"], 1_999)).resolves.toBeNull();
+      const again = await queue.claim("worker-2", ["tool.exec"], 2_000);
+      expect(again?.jobId).toBe(job.id);
+      expect(again?.attempt).toBe(1);
+
+      // the deferred lease is stale the moment the job left it: heartbeat and
+      // complete throw, as complete throws on any lost lease
+      await expect(queue.heartbeat(lease!, 2_100)).rejects.toThrow(/stale/i);
+      await expect(queue.complete(memoryTx(), lease!)).rejects.toThrow(/stale/i);
+    },
+  },
 ];
 
 export const queueConformanceCases: readonly QueueConformanceCase[] = cases;

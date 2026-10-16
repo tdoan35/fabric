@@ -240,6 +240,32 @@ test("watchdog strike two, still no progress: run.blocked with reason stall", ()
   expect(fired.events).toEqual([{ type: "run.blocked", payload: { reason: "stall" }, streamId: undefined }]);
 });
 
+test("C9: a queued call is a wait, not a stall — the watchdog returns EMPTY even at strike 2", () => {
+  // the queued fact is the stream's newest: the armed check froze on the head
+  // it produced (6), so only the queue rule can stand the firing down
+  const queued = fold(
+    [
+      ...runningEvents({ tools: ["shell"], stallAfterMs: 30_000 }),
+      evt(6, "tool.queued", { callId: "c1", reason: "sandbox_slot", position: 1 }),
+    ],
+    {}
+  );
+  expect(queued.queuedCalls).toEqual(["c1"]);
+  for (const strike of [1, 2] as const) {
+    expect(decideTimer(queued, STREAM, { kind: "watchdog", armedHead: 6, strike }, NOW)).toEqual({
+      events: [],
+      jobs: [],
+    });
+  }
+
+  // the same stream without the queued call keeps today's behaviour: strike
+  // one requeues the open call and arms the second check
+  const plain = fold(runningEvents({ tools: ["shell"], stallAfterMs: 30_000 }), {});
+  const fired = decideTimer(plain, STREAM, { kind: "watchdog", armedHead: 5, strike: 1 }, NOW);
+  expect(fired.events).toEqual([]);
+  expect(fired.jobs.map((job) => job.type)).toEqual(["tool.exec", "run.timer"]);
+});
+
 test("watchdog with progress since the armed head is a no-op at either strike", () => {
   const events = runningEvents({ tools: ["shell"], stallAfterMs: 30_000 });
   const progressed = fold(
