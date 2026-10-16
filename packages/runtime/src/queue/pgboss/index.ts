@@ -14,22 +14,26 @@
 //   at commit; a completed or dead key re-enqueues as a new job.
 // - `complete`/`defer` are claim-fenced writes buffered into the caller's
 //   commit (the shape of pg-boss's own settle/defer SQL, plus the claim
-//   identity); `heartbeat` is applied at once. A stale lease throws at the
-//   call; a lease lost between call and apply leaves the applied write a
-//   no-op, so it can never land on a replacement claim.
-// - Expiry, retry, dead: native pg-boss. `retryLimit`/`retryDelay` from the type
-//   table; a lapse or retryable failure requeues as attempt+1, retries run out
-//   into `failed` (= dead, `output.message` = lastError).
+//   identity); `heartbeat`, `fail` are applied at once, fenced the same way
+//   in the write's own WHERE — a staleness check beside the write cannot
+//   fence it, for the claim can be lost to a defer's re-claim between the
+//   two. A stale lease throws at the call; a lease lost between call and
+//   apply leaves the applied write a no-op, so it can never land on a
+//   replacement claim (heartbeat, applied at once, throws on its miss).
+// - Expiry: the adapter's own state-guarded pass over pg-boss's two lapse
+//   conditions; a lapse requeues as attempt+1, retries run out into
+//   `failed` (= dead, `output.message` = lastError).
 //
 // Two deliberate deviations, both consequences of pg-boss's shipped behaviour:
 // - Retry delay is the type's `retryBackoffMs` held constant across attempts,
 //   not the doubling schedule: pg-boss's exponential backoff multiplies by a
 //   random factor, and the conformance's exact re-claim instants (Q7) would
 //   flake on a delay sampled above the boundary.
-// - A terminal failure (non-retryable, or retries exhausted) lands through one
-//   attempt-fenced UPDATE mirroring pg-boss's own terminal fail branch (same
-//   id; state/completed_on/output). `fail()` always requeues while
-//   `retryCount < retryLimit` and has no per-call terminal form.
+// - Both `fail` branches land through one UPDATE each, mirroring pg-boss's
+//   own fail outcomes (same id; state/start_after/output) plus the claim
+//   fence. `fail()` always requeues while `retryCount < retryLimit` and has
+//   no per-call terminal form, and its native fence is the attempt pair —
+//   blind to the defer's re-claim of the same pair.
 import { createHash, randomUUID } from "node:crypto";
 import { Pool } from "pg";
 import { PgBoss, fromPglite } from "pg-boss";
@@ -293,26 +297,23 @@ export class PgBossQueue implements Queue {
     await this.#settle();
     await this.#injectNow(now);
     await this.#ensureQueue(lease.type);
-    // The claim-identity fence (T16) before the touch: a lease the same
-    // attempt re-claimed — the defer's re-claim — is stale, which the
-    // attempt-only touch cannot see.
-    if (lease.claimAt !== undefined) {
-      const schema = this.#options.schema ?? "pgboss";
-      const { rows } = await this.#exec(
-        `SELECT started_on FROM ${schema}.job WHERE id = $1::uuid AND state = 'active'`,
-        [lease.jobId],
-      );
-      const row = rows[0] as { started_on: string | Date } | undefined;
-      if (row === undefined || toMs(row.started_on) !== lease.claimAt) {
-        throw new Error(staleMessage(lease));
-      }
-    }
-    // Attempt-fenced touch: a lease lost since the call updates no rows.
-    const response = (await this.#boss!.touch(lease.type, {
-      id: lease.jobId,
-      retryCount: lease.attempt - 1,
-    })) as { affected?: number };
-    if ((response.affected ?? 0) === 0) throw new Error(staleMessage(lease));
+    // The touch in the adapter's own fenced shape (T16 rework): pg-boss's
+    // touch() fences on the attempt pair only, so a check beside it — a
+    // SELECT here, a native call after — leaves the write itself able to
+    // land on a lease the same (worker, attempt) pair re-claimed after a
+    // defer, stamping the replacement claim's heartbeat for a worker that
+    // no longer holds it. The claim identity rides in the WHERE: a miss is
+    // a stale lease, as the touch's own short count always was.
+    const schema = this.#options.schema ?? "pgboss";
+    const fence = claimFence(lease, 3);
+    const { rows } = await this.#exec(
+      `UPDATE ${schema}.job
+       SET heartbeat_on = ${schema}.job_now()
+       WHERE id = $1::uuid AND state = 'active' AND retry_count = $2${fence.sql}
+       RETURNING id`,
+      [lease.jobId, lease.attempt - 1, ...fence.params],
+    );
+    if (rows.length === 0) throw new Error(staleMessage(lease));
   }
 
   async complete(tx: QueueTx, lease: QueueLease): Promise<void> {
@@ -381,9 +382,25 @@ export class PgBossQueue implements Queue {
     await this.#requireCurrentLease(lease);
     const output = { message: error.message };
     if (options.retryable && lease.attempt <= config.maxRetries) {
-      // Native fenced fail: requeues as `retry` with the type's delay; the
-      // next claim is the next attempt.
-      await this.#boss!.fail(lease.type, { id: lease.jobId, retryCount: lease.attempt - 1 }, output);
+      // The retry requeue in the adapter's own fenced shape (T16 rework):
+      // pg-boss's fail() fences on the attempt pair only, so a lease the
+      // same pair re-claimed after a defer would take this write and go back
+      // to pending under its worker. Same row outcome as the native retry
+      // branch: `retry`, one constant retry_delay out (backoff is off), the
+      // failure kept as output, started_on kept so the next fetch counts as
+      // the NEXT attempt, heartbeat cleared. A lease lost in the window
+      // since the check misses, as with every applied write.
+      const schema = this.#options.schema ?? "pgboss";
+      const fence = claimFence(lease, 4);
+      await this.#exec(
+        `UPDATE ${schema}.job
+         SET state = 'retry',
+             start_after = ${schema}.job_now() + retry_delay * interval '1s',
+             output = $2::jsonb,
+             heartbeat_on = null
+         WHERE id = $1::uuid AND state = 'active' AND retry_count = $3${fence.sql}`,
+        [lease.jobId, JSON.stringify(output), lease.attempt - 1, ...fence.params],
+      );
       return;
     }
     // Terminal: retries exhausted, or the failure is not retryable. The same

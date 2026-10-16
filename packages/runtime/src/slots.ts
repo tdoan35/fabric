@@ -63,13 +63,18 @@ const DDL = [
 ];
 
 // The DDL runs once per store instance, chained so concurrent constructions
-// serialize (the `if not exists` check-then-act is not race-free alone).
+// serialize within the store. `create ... if not exists` is check-then-act,
+// and Postgres does not serialize DDL: two stores on separate connections
+// can both see the table missing and the loser dies on a duplicate catalog
+// key. The transaction-scoped advisory lock serializes the DDL across
+// connections — the loser waits, then sees the winner's table and no-ops.
 const schemaReady = new WeakMap<object, Promise<void>>();
 
 function ensureSchema(store: RuntimeStore): Promise<void> {
   let ready = schemaReady.get(store);
   if (ready === undefined) {
     ready = store.transaction(async (tx) => {
+      await tx.query("select pg_advisory_xact_lock(hashtext($1))", ["sandbox_slots:ddl"]);
       for (const statement of DDL) await tx.query(statement);
     });
     schemaReady.set(store, ready);
