@@ -275,8 +275,11 @@ export const sessions = new Hono()
           await tail;
           if (closed) return;
           // Mid-call join: the newest known text, at once; the rest batches.
-          pending.clear();
+          // Read `current` BEFORE clearing pending (R16): a delta landing in
+          // between is strictly newer than the snapshot, so the flush never
+          // re-sends the join frame — the frames keep strictly growing.
           const inFlight = live.current(streamId);
+          pending.clear();
           if (inFlight !== null) send({ event: "delta", data: inFlight });
 
           flushTimer = setInterval(() => {
