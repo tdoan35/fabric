@@ -29,6 +29,8 @@ interface FakeContainer {
   name?: string;
   labels: Record<string, string>;
   argv: string[];
+  /** docker ps state (running/created/exited); absent means created. */
+  state?: string;
 }
 
 interface FakeState {
@@ -323,6 +325,31 @@ test("a starting provider clears stale sandboxes left by a dead run", async () =
     .map((container) => container.id);
   expect(ids).not.toContain("stale-one");
   expect(ids).toEqual([probe.id]);
+});
+
+test("the startup sweep spares the running sandboxes of a concurrent run", async () => {
+  // CI runs the daemon suites' workers side by side; a starting provider's
+  // crash-recovery sweep must not stop another worker's live sandbox mid-test
+  // (the D8 `cannot exec in a stopped state` bounce). Only stopped leftovers
+  // are reaped; a running sandbox belongs to a live provider until proven else.
+  await seed({
+    seq: 8,
+    images: [IMAGE],
+    containers: [
+      { id: "live-one", state: "running", labels: { "fabric.sandbox": "1" }, argv: [] },
+      { id: "done-one", labels: { "fabric.sandbox": "1" }, argv: [] },
+    ],
+  });
+
+  const provider = fakeProvider();
+  const probe = await provider.acquire({ workspaceId: "w", agentId: "probe", mounts: [] });
+
+  const ids = (await fakeState()).containers
+    .filter((container) => container.labels["fabric.sandbox"] === "1")
+    .map((container) => container.id);
+  expect(ids).not.toContain("done-one");
+  expect(ids).toContain("live-one");
+  expect(ids).toContain(probe.id);
 });
 
 test("available() is false, naming the binary, when docker is missing", async () => {
