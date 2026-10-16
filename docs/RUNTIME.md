@@ -127,7 +127,7 @@ Model token deltas never enter the log: they are pushed live (§8) and the final
 | `delegate.resolve`, `run.finalize` | 30 s | — | until done (idempotent) |
 | `deliver` | 30 s | — | backoff up to 24 h, then a failed-delivery fact the UI shows |
 
-Starting values; the spike adjusts them. A job whose heartbeat goes stale is handed to another worker.
+Starting values; the spike adjusts them. A job whose heartbeat goes stale is handed to another worker. Idle worker loops do not poll: they sleep on the queue's wake, the next due time or the lease expiry, and the backstop (`RUNTIME_IDLE_BACKSTOP_MS`, ten minutes) only bounds a lost wake (R17).
 
 ## 5. Decide
 
@@ -314,7 +314,7 @@ Decided: own table (the 2026-10-12 bullet under Decided above). Hermes Agent's h
 
 **Still open**
 1. **Token streaming transport** under load in the cloud: NOTIFY payloads are capped at 8 KB and share one channel.
-2. **Idle database traffic** from the queue's polling, and whether Neon can scale to zero under it.
+2. **Idle database traffic** from the queue's polling, and whether Neon can scale to zero under it — answered by R12's measurement (2026-10-15, ANY-38): the shipped daemon idled at 2 292 statements/min on Neon via `pg_stat_statements`, ~38× the 60/min budget (one claimer alone: 295/min PGlite and local Postgres, 221/min Neon), so a scale-to-zero compute never suspends under a running server (`SELECT 1` held 62–71 ms through a 6-minute idle window). The design (ANY-100 R17): idle loops sleep on the queue's wake, the next due time or the lease expiry, with `RUNTIME_IDLE_BACKSTOP_MS` (600 000 = 10 min) covering only a lost wake, and the LISTEN connection re-established lazily on the next claim. The Neon suspend check after merge is Ty's manual step (ANY-101).
 
 ## 15. Spike
 

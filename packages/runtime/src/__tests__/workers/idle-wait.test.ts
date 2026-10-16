@@ -51,6 +51,10 @@ function pgliteStack(): Promise<Stack> {
       },
       typeConfigs: TYPE_CONFIGS,
     });
+    // Warm the queue before anything else runs (bootstrap's own rule): the
+    // one-time schema init takes the same serialized path as every other
+    // statement, and a concurrent store transaction would queue behind it.
+    await queue.get("warm-up");
     return {
       store,
       queue,
@@ -70,6 +74,7 @@ function postgresStack(url: string): Promise<Stack> {
       connection: { kind: "postgres", connectionString: url },
       typeConfigs: TYPE_CONFIGS,
     });
+    await queue.get("warm-up");
     return {
       store,
       queue,

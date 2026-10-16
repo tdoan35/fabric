@@ -213,10 +213,36 @@ if (postgresUrlFromEnv() !== undefined) {
 
     it(
       "Z7 (Postgres) budget: the idle daemon's statements stay inside the backstop's bound",
-      { timeout: 120_000 },
+      { timeout: 180_000 },
       async () => {
         const url = new URL("/postgres", postgresUrlFromEnv()!).toString();
         const admin = new Pool({ connectionString: url });
+        const settleAndQuiet = async (dbUrl: string) => {
+          // The budget counts this database's transactions; the boot window's
+          // vacuum/analyze dust would pollute it, so the tables go quiet and the
+          // window starts late (start-up settles).
+          const db = new Pool({ connectionString: dbUrl });
+          try {
+            const tables = (
+              await db.query(`select tablename from pg_tables where schemaname = 'public'`)
+            ).rows.map((row: { tablename: string }) => `"${row.tablename}"`);
+            for (const table of tables) {
+              await db
+                .query(`alter table ${table} set (autovacuum_enabled = off, toast.autovacuum_enabled = off)`)
+                .catch(() => undefined);
+            }
+            // The boot's DDL bumps catalog stats; autovacuum would answer with
+            // an ANALYZE wave (pg_constraint & co) inside the window. Analyze
+            // here instead: the counters reset, the launcher finds nothing.
+            await db.query(`analyze`).catch(() => undefined);
+            for (const catalog of ["pg_class", "pg_index", "pg_attribute", "pg_type", "pg_constraint"]) {
+              await db.query(`analyze pg_catalog.${catalog}`).catch(() => undefined);
+            }
+          } finally {
+            await db.end().catch(() => undefined);
+          }
+          await sleep(15_000);
+        };
         try {
           const database = `r17_budget_${randomUUID().replace(/-/g, "").slice(0, 8)}`;
           await admin.query(`create database "${database}"`);
@@ -240,7 +266,7 @@ if (postgresUrlFromEnv() !== undefined) {
               RUNTIME_IDLE_BACKSTOP_MS: "5000",
             } as RuntimeEnv
           );
-          await sleep(3_000); // start-up settles
+          await settleAndQuiet(dbUrl);
           const before = await xacts();
           await sleep(30_000);
           const after = await xacts();
@@ -254,7 +280,7 @@ if (postgresUrlFromEnv() !== undefined) {
             MODEL_PORT: "test",
             RUNTIME_CONCURRENCY: 4,
           } as RuntimeEnv);
-          await sleep(3_000);
+          await settleAndQuiet(dbUrl);
           const beforeDefault = await xacts();
           await sleep(30_000);
           const afterDefault = await xacts();

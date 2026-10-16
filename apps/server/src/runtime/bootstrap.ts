@@ -90,6 +90,9 @@ export type RuntimeEnv = {
   FABRIC_MASTER_KEY_FILE?: string;
   /** T14: the inbox `send` sends from; unset leaves `send` out of the registry. */
   FABRIC_SEND_FROM?: string;
+  /** R17: the idle claim-wait backstop in ms; a positive integer, 600 000
+   * (10 min) by default. Invalid values fail start-up naming the variable. */
+  RUNTIME_IDLE_BACKSTOP_MS?: number | string;
 };
 
 export type FabricRuntime = {
@@ -482,6 +485,27 @@ export function setRuntime(runtime: FabricRuntime | undefined): void {
 }
 
 /**
+ * The parsed RUNTIME_IDLE_BACKSTOP_MS (R17): the idle claim-wait backstop, in
+ * ms, handed to every worker loop and the purge loop. Unset means 600 000 —
+ * ten minutes, the longest sleep the queue's own timers (retry backoffs, the
+ * 24 h purge horizon) never wait out; anything else must be a positive
+ * integer, or start-up fails naming the variable.
+ */
+export function runtimeIdleBackstopMs(
+  env: Pick<RuntimeEnv, "RUNTIME_IDLE_BACKSTOP_MS">
+): number {
+  const raw = env.RUNTIME_IDLE_BACKSTOP_MS;
+  if (raw === undefined) return 600_000;
+  const parsed = typeof raw === "number" ? raw : Number(raw);
+  if (!Number.isInteger(parsed) || parsed <= 0) {
+    throw new Error(
+      `RUNTIME_IDLE_BACKSTOP_MS must be a positive integer (got ${JSON.stringify(raw)})`
+    );
+  }
+  return parsed;
+}
+
+/**
  * Open the store, the queue over the same database, and -- unless
  * `opts.worker` is false -- RUNTIME_CONCURRENCY worker loops. Test hook:
  * `worker: false` boots the command surface with the board untouched (B5).
@@ -492,6 +516,7 @@ export async function startRuntime(env: RuntimeEnv, opts: { worker?: boolean } =
       "MODEL_PORT=test is the CI/smoke echo double, not a production model: the server refuses to start with MODEL_PORT=test when NODE_ENV=production",
     );
   }
+  const idleBackstopMs = runtimeIdleBackstopMs(env);
 
   const store = env.RUNTIME_DATABASE_URL
     ? await openStore({ driver: "postgres", url: env.RUNTIME_DATABASE_URL })
@@ -659,14 +684,14 @@ export async function startRuntime(env: RuntimeEnv, opts: { worker?: boolean } =
             ports: workerPorts(env, live, proposals, store, vault),
             workerId: `fabric-runtime-${process.pid}-${index}-${randomUUID().slice(0, 8)}`,
             signal: signal.signal,
-            pollIntervalMs: 200,
+            idleBackstopMs,
           }),
         );
   // S11: the incognito purge rides its own claim loop — `session.purge` is a
   // server-side job type the runtime worker loop does not dispatch.
   if (opts.worker !== false) {
     loops.push(
-      runPurgeLoop(store, queue, signal.signal, `fabric-purge-${process.pid}-${randomUUID().slice(0, 8)}`),
+      runPurgeLoop(store, queue, signal.signal, `fabric-purge-${process.pid}-${randomUUID().slice(0, 8)}`, 1_000, idleBackstopMs),
     );
   }
 

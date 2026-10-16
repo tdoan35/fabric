@@ -29,6 +29,7 @@ export {
   DEFAULT_TYPE_CONFIGS,
 } from "./queue/types";
 export type {
+  ClaimWaitingOptions,
   Queue,
   QueueFactory,
   QueueJob,

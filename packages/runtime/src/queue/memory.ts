@@ -8,6 +8,7 @@ import {
   DEFAULT_TYPE_CONFIGS,
 } from "./types";
 import type {
+  ClaimWaitingOptions,
   Queue,
   QueueJob,
   QueueJobInput,
@@ -80,11 +81,22 @@ export class MemoryQueue implements Queue {
     tx.onCommit(() => {
       if (this.liveWithKey(record.key)) return;
       this.#jobs.set(record.id, record);
+      this.#wake();
     });
     return publicView(record);
   }
 
   async claim(workerId: string, types: readonly string[], now: number): Promise<QueueLease | null> {
+    const lease = this.claimSync(workerId, types, now);
+    if (lease !== null) {
+      // A new lease moves the idle-wait horizon (its expiry); wake the waiters.
+      this.#wake();
+    }
+    return lease;
+  }
+
+  /** The claim, synchronously: shared by `claim` and the idle wait. */
+  private claimSync(workerId: string, types: readonly string[], now: number): QueueLease | null {
     const wanted = new Set(types);
     const leasedPerWorkspace = new Map<string, number>();
     for (const job of this.#jobs.values()) {
@@ -136,6 +148,7 @@ export class MemoryQueue implements Queue {
         job.status = "completed";
         this.clearLease(job);
       }
+      this.#wake();
     });
   }
 
@@ -160,11 +173,84 @@ export class MemoryQueue implements Queue {
       job.status = "dead";
       this.clearLease(job);
     }
+    this.#wake();
   }
 
   async get(jobId: string): Promise<QueueJob | null> {
     const job = this.#jobs.get(jobId);
     return job ? publicView(job) : null;
+  }
+
+  /** The idle wait (R17): claim; on an empty board sleep until the earliest of
+   * a wake, the backstop, the next due `run_at` or the next lease expiry —
+   * among `types` — then claim again. `signal` aborting returns null
+   * promptly, before or during a wait. */
+  async claimWaiting(
+    workerId: string,
+    types: readonly string[],
+    options: ClaimWaitingOptions
+  ): Promise<QueueLease | null> {
+    const unique = [...new Set(types)];
+    if (unique.length === 0) return null;
+    for (;;) {
+      if (options.signal?.aborted === true) return null;
+      let woken!: () => void;
+      const wake = new Promise<void>((resolve) => (woken = resolve));
+      const done: { value: boolean } = { value: false };
+      const finish = () => {
+        if (done.value) return;
+        done.value = true;
+        this.#wakeWaiters.delete(waiter);
+        options.signal?.removeEventListener("abort", onAbort);
+        woken();
+      };
+      const waiter = () => finish();
+      const onAbort = () => finish();
+      // Registered before the claim: no commit lands unseen.
+      this.#wakeWaiters.add(waiter);
+      options.signal?.addEventListener("abort", onAbort, { once: true });
+      const backstop = setTimeout(() => finish(), options.backstopMs);
+      (backstop as unknown as { unref?: () => void }).unref?.();
+
+      const now = options.now();
+      const lease = await this.claim(workerId, unique, now);
+      if (lease !== null || options.signal?.aborted) {
+        clearTimeout(backstop);
+        finish();
+        return lease;
+      }
+
+      // The horizon: the earliest due time or lease expiry among the types,
+      // capped by the backstop.
+      let horizon: number | undefined;
+      for (const job of this.#jobs.values()) {
+        if (!unique.includes(job.type)) continue;
+        const at =
+          job.status === "pending" && job.runAt > now
+            ? job.runAt
+            : job.status === "leased" && job.leaseExpiresAt !== null && job.leaseExpiresAt > now
+              ? job.leaseExpiresAt
+              : undefined;
+        if (at !== undefined) horizon = horizon === undefined ? at : Math.min(horizon, at);
+      }
+      const backstopAt = now + options.backstopMs;
+      const wakeAt = horizon !== undefined ? Math.min(horizon, backstopAt) : backstopAt;
+      const delay = Math.max(0, wakeAt - options.now());
+      if (delay > 0 && !done.value) {
+        const horizonTimer = setTimeout(() => finish(), delay);
+        (horizonTimer as unknown as { unref?: () => void }).unref?.();
+        await wake;
+        clearTimeout(horizonTimer);
+      }
+      clearTimeout(backstop);
+    }
+  }
+
+  readonly #wakeWaiters = new Set<() => void>();
+  /** In-process wake: any committed change to the claimable set, and any new
+   * lease (its expiry is horizon data). */
+  #wake(): void {
+    for (const waiter of [...this.#wakeWaiters]) waiter();
   }
 
   /** Seam for the mutants: does a second leased run on this serial pair exist?

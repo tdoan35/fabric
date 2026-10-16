@@ -125,6 +125,18 @@ export interface QueueOptions {
 /** Builds a queue for the conformance suite (or production). */
 export type QueueFactory = (options?: QueueOptions) => Queue;
 
+/** The options of `claimWaiting`, the idle wait's single call. */
+export interface ClaimWaitingOptions {
+  /** Longest sleep after an empty claim, when no wake, due time or lease
+   * expiry fires first. The backstop covers a lost wake; it is not the
+   * cadence. */
+  backstopMs: number;
+  /** Injected clock, as everywhere: the queue never reads the clock itself. */
+  now: () => number;
+  /** Aborting returns `null` promptly, before or during the wait. */
+  signal?: AbortSignal;
+}
+
 export interface Queue {
   /** Buffers the job into the tx: it exists once the host commits, and one
    * live job per `key` holds — a duplicate enqueue is a no-op returning the
@@ -151,4 +163,14 @@ export interface Queue {
   ): Promise<void>;
   /** The public view of one job, for ops surfaces and the conformance suite. */
   get(jobId: string): Promise<QueueJob | null>;
+  /** The idle wait (R17), when the implementation supports it: claim once;
+    * on an empty board sleep until the earliest of a wake, the backstop, the
+    * earliest pending `run_at` after now, or the earliest running
+    * `lease_until` — all among `types` — then claim again. Returns `null`
+    * promptly when `signal` aborts. Absent: the caller polls `claim`. */
+  claimWaiting?(
+    workerId: string,
+    types: readonly string[],
+    options: ClaimWaitingOptions,
+  ): Promise<QueueLease | null>;
 }

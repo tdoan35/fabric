@@ -58,6 +58,8 @@ export const env = z.object({
   RUNTIME_CONCURRENCY: z.coerce.number().int().min(1).default(4),
   /** `ai` (the real port) | `test` (the echo double; refused when NODE_ENV=production). */
   MODEL_PORT: z.enum(["ai", "test"]).default("ai"),
+  /** R17: the idle claim-wait backstop in ms; positive integer, 600 000 (10 min) default. */
+  RUNTIME_IDLE_BACKSTOP_MS: z.coerce.number().int().positive().optional(),
   /** Test-model variant: `chunked` (5 increments, 30 ms apart, S6) | `slow`
    * (20 increments, 50 ms apart, ~1 s per call, R16). */
   MODEL_VARIANT: z.enum(["chunked", "slow"]).optional(),
