@@ -1,5 +1,5 @@
 // ANY-92 T16 — the `tool.exec` slot gate (C5–C7, C10): a step-2 call whose
-// workspace slot is taken appends `tool.queued` (once per position), defers
+// workspace slot is taken appends `tool.queued` per transition, defers
 // the job by 2 s — attempt untouched — and runs nothing; a granted call
 // records `tool.dequeued` with its wait, holds the slot through the run and
 // releases it on completion or failure. Host mode — no slots port, or a tool
@@ -261,6 +261,8 @@ describeDrivers("tool.exec sandbox slots (ANY-92 T16)", (h) => {
     // the chat turn goes away: back to position 1
     await slots.release("session:s:cx");
     await pass("worker-3", 9_000);
+    // Observing that same position again must still append nothing.
+    await pass("worker-4", 11_000);
 
     const events = await store.readStream(streamId, { workspaceId: WORKSPACE });
     const queued = of(events, "tool.queued");
@@ -279,6 +281,36 @@ describeDrivers("tool.exec sandbox slots (ANY-92 T16)", (h) => {
     // the fold still reports the call as waiting — the watchdog stands down
     expect(fold(events).queuedCalls).toEqual(["c1"]);
     expect(tools.count("sh")).toBe(0);
+  });
+
+  test("a position change after a legacy queued fact gets a distinct transition identity", async () => {
+    const store = await h.openStore();
+    const queue = new MemoryQueue();
+    const slots = sandboxSlots(store, { cap: 1 });
+    await slots.acquire({ workspaceId: WORKSPACE, callKey: "run:zz:hold", priority: 1, now: 0 });
+    const streamId = "run:t16-legacy";
+    const key = `${streamId}:c1`;
+    // Before the fix, causation's numeric suffix was the position. One fact
+    // at position 2 must not collide with the next transition's ordinal 2.
+    await seed(store, streamId, [runCreated(streamId), toolCalled(streamId, "c1", "read"), {
+      type: "tool.queued",
+      actor: "tool.exec",
+      payload: { callId: "c1", reason: "sandbox_slot", position: 2 },
+      causation: `${key}:tool.queued:2`,
+    }]);
+    await enqueueToolExec(store, queue, streamId, "c1");
+    const tools = new SlotTools({ sh: { effect: "read", needsSlot: true, runs: [{ ok: true }] } });
+    const lease = await claimToolExec(queue, streamId, "c1", 5_000);
+    await handleToolExecJob(lease, { store, queue, tools, slots, now: () => 5_000 });
+
+    const queued = of(await store.readStream(streamId, { workspaceId: WORKSPACE }), "tool.queued");
+    expect(queued.map((event) => event.payload)).toEqual([
+      { callId: "c1", reason: "sandbox_slot", position: 2 },
+      { callId: "c1", reason: "sandbox_slot", position: 1 },
+    ]);
+    expect(new Set(queued.map((event) => event.causation)).size).toBe(2);
+    expect(tools.count("sh")).toBe(0);
+    expect((await queue.get(lease.jobId))?.status).toBe("pending");
   });
 
   test("a call that dequeues, fails retryably and waits again records its second wait", async () => {
@@ -332,6 +364,29 @@ describeDrivers("tool.exec sandbox slots (ANY-92 T16)", (h) => {
     expect(dequeued[0]!.payload).toEqual({ callId: "c1", waitedMs: 2_000 });
     expect(fold(events).queuedCalls).toEqual(["c1"]);
     expect(tools.count("sh")).toBe(1); // it ran once, on the granted pass
+
+    // Repeated observations during this second wait append nothing too.
+    const lease4 = await claimToolExec(queue, streamId, "c1", 39_000);
+    await handleToolExecJob(lease4, { store, queue, tools, slots, now: () => 39_000 });
+    expect(of(await store.readStream(streamId, { workspaceId: WORKSPACE }), "tool.queued")).toHaveLength(2);
+
+    // A second grant must record a second dequeue, or the fold will keep
+    // reporting a live wait after the retry's tool failure.
+    await slots.release("run:zz:hold2");
+    const lease5 = await claimToolExec(queue, streamId, "c1", 41_000);
+    await expect(
+      handleToolExecJob(lease5, { store, queue, tools, slots, now: () => 41_000 })
+    ).rejects.toThrow("transient tool failure");
+    const afterRetry = await store.readStream(streamId, { workspaceId: WORKSPACE });
+    const dequeues = of(afterRetry, "tool.dequeued");
+    expect(dequeues.map((event) => event.payload)).toEqual([
+      { callId: "c1", waitedMs: 2_000 },
+      { callId: "c1", waitedMs: 4_000 },
+    ]);
+    expect(new Set(dequeues.map((event) => event.causation)).size).toBe(2);
+    expect(fold(afterRetry).queuedCalls).toEqual([]);
+    expect(tools.count("sh")).toBe(2);
+    expect((await slots.acquire({ workspaceId: WORKSPACE, callKey: "run:zz:probe", priority: 1, now: 41_100 })).granted).toBe(true);
   });
 
   test("a failure recording the dequeue releases the granted slot and fails the job", async () => {
@@ -387,6 +442,18 @@ describeDrivers("tool.exec sandbox slots (ANY-92 T16)", (h) => {
     const events = await store.readStream(streamId, { workspaceId: WORKSPACE });
     expect(of(events, "tool.dequeued")).toHaveLength(0);
     expect(of(events, "tool.completed")).toHaveLength(0);
+    expect(fold(events).queuedCalls).toEqual(["c1"]);
+
+    // After the transient append fault clears, the same call can finish.
+    await slots.release("run:zz:probe");
+    const retry = await claimToolExec(queue, streamId, "c1", 37_000);
+    await handleToolExecJob(retry, { store, queue, tools, slots, now: () => 37_000 });
+    const recovered = await store.readStream(streamId, { workspaceId: WORKSPACE });
+    expect(of(recovered, "tool.dequeued")).toHaveLength(1);
+    expect(of(recovered, "tool.completed")).toHaveLength(1);
+    expect(fold(recovered).queuedCalls).toEqual([]);
+    expect((await queue.get(retry.jobId))?.status).toBe("completed");
+    expect(tools.count("sh")).toBe(1);
   });
 
   test("a queued rerunnable call that finishes through recovery releases its slot registration", async () => {
