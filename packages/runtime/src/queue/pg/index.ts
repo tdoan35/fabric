@@ -518,7 +518,8 @@ select min(wake_at) as wake_at from (
       const backstop = setTimeout(() => finish(), options.backstopMs);
       (backstop as unknown as { unref?: () => void }).unref?.();
 
-      const lease = await this.claim(workerId, unique, options.now());
+      const now = options.now();
+      const lease = await this.claim(workerId, unique, now);
       if (lease !== null || options.signal?.aborted) {
         clearTimeout(backstop);
         finish();
@@ -527,7 +528,8 @@ select min(wake_at) as wake_at from (
 
       // The horizon: due times and lease expiries among the claimed types,
       // capped by the backstop. A horizon at/before now reclaims at once.
-      const now = options.now();
+      // Measured from the claim's own `now`: a lease lapsing between the
+      // claim and this query is still the horizon, not a 10-minute sleep.
       const backstopAt = now + options.backstopMs;
       const horizon = await this.#nextWakeAt(unique, now);
       const wakeAt = horizon !== undefined ? Math.min(horizon, backstopAt) : backstopAt;

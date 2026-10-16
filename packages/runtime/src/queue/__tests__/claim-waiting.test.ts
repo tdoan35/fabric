@@ -161,3 +161,38 @@ void queueOptions;
     }
   );
 });
+
+// The horizon race behind CI's Z4 timeout: a lease lapsing between the empty
+// claim and the horizon query must still be the horizon. A scripted clock puts
+// the claim before the lease's expiry and every later read after it.
+describe("R17 queue claimWaiting [pglite]", () => {
+  it("Z4b a lease lapsing between the empty claim and the horizon query is reclaimed at once", async () => {
+    const { PGlite } = await import("@electric-sql/pglite");
+    const pglite = new PGlite();
+    try {
+      const queue = new PgQueue({
+        connection: { kind: "pglite", pglite },
+        typeConfigs: { deliver: { heartbeatMs: 300, maxRunMs: 5000 } },
+      });
+      const tx = nowTx();
+      const queued = await queue.enqueue(tx as never, { type: "deliver", key: "z4b", streamId: "s", workspaceId: "ws" });
+      tx.commit();
+      expect(await queue.claim("holder", ["deliver"], 1_000)).not.toBeNull(); // lease_until = 1300
+
+      const reads = [1_100]; // the claim's now; every later read is past the lease
+      const now = () => reads.shift() ?? 1_400;
+      const controller = new AbortController();
+      const bounded = setTimeout(() => controller.abort(), 1_000);
+      const lease = await queue.claimWaiting("reclaimer", ["deliver"], {
+        backstopMs: 600_000,
+        now,
+        signal: controller.signal,
+      });
+      clearTimeout(bounded);
+      expect(lease?.jobId).toBe(queued.id);
+      await queue.close();
+    } finally {
+      await pglite.close();
+    }
+  });
+});
