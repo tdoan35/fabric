@@ -251,6 +251,11 @@ export class PgQueue implements Queue {
       await client.connect();
       await client.query(`listen ${this.#wakeChannel()}`);
       client.on("notification", () => this.#wake());
+      // Closed while the reconnect was in flight: drop it, don't leak it.
+      if (this.#connectionUrl === null) {
+        await client.end().catch(() => undefined);
+        return;
+      }
       this.#listener = client;
     } catch {
       await client.end().catch(() => undefined);
@@ -259,16 +264,22 @@ export class PgQueue implements Queue {
   }
 
   /** The lazy LISTEN leg: on entry to a claim, re-establish the listener if it
-   * dropped. Serialized per instance; a no-op when healthy or closing. */
+   * dropped. Serialized per instance; a no-op when healthy or closing. A claim
+   * that finds the reconnect in flight awaits that same promise: claiming
+   * ahead of the LISTEN would lose a NOTIFY committed in the gap (R17 Z6b). */
   async #ensureListener(): Promise<void> {
-    if (this.#pool === null || this.#listener !== null || this.#listenerPending !== null) return;
-    const relisten = async (): Promise<void> => {
-      await this.#options.beforeRelisten?.();
-      await this.#listen();
-    };
-    this.#listenerPending = relisten().finally(() => {
-      this.#listenerPending = null;
-    });
+    if (this.#pool === null || this.#listener !== null) return;
+    if (this.#listenerPending === null) {
+      const relisten = async (): Promise<void> => {
+        await this.#options.beforeRelisten?.();
+        await this.#listen();
+      };
+      this.#listenerPending = relisten()
+        .catch(() => undefined) // never a crash; the next claim retries
+        .finally(() => {
+          this.#listenerPending = null;
+        });
+    }
     await this.#listenerPending;
   }
 
