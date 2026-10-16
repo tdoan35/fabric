@@ -282,15 +282,29 @@ export function dockerSandboxes(options: DockerSandboxOptions = {}): SandboxProv
       });
     });
 
-  /** Crash recovery: sandboxes labelled by an earlier run go first. */
+  /** Crash recovery: sandboxes labelled by an earlier run go first. Only
+   * stopped ones are reaped: a running sandbox belongs to a live provider —
+   * this process's or a concurrent worker's (CI runs the daemon suites side
+   * by side) — and stopping it mid-test is the D8 `cannot exec in a stopped
+   * state` bounce. Stopped containers cannot serve an exec; leftovers from a
+   * dead run that exited are safe to take now. */
   const clearStale = async (): Promise<void> => {
     try {
-      const out = await run(["ps", "-a", "-q", "--filter", "label=fabric.sandbox=1"]);
-      const ids = out
+      const out = await run([
+        "ps", "-a", "--filter", "label=fabric.sandbox=1", "--format", "{{.ID}} {{.State}}",
+      ]);
+      const stale = out
         .split("\n")
         .map((line) => line.trim())
-        .filter((line) => line !== "");
-      if (ids.length > 0) await run(["rm", "-f", ...ids]);
+        .filter((line) => line !== "")
+        .filter((line) => line.split(/\s+/)[1] !== "running")
+        .map((line) => line.split(/\s+/)[0]);
+      // Plain `rm`, never `-f`: a container recorded `created` may be running
+      // by the time this lands (the ps -> rm window), and a force-remove would
+      // stop it mid-exec — the CI run 291 E4/D6 `docker exec` exit 1. A rm
+      // refused for a now-running container is the race landing harmlessly; the
+      // next provider construction reaps it if it exited since.
+      if (stale.length > 0) await run(["rm", ...stale]);
     } catch {
       // A missing daemon or binary surfaces on available()/acquire().
     }
