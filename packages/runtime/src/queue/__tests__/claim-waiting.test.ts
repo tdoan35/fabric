@@ -62,10 +62,15 @@ void queueOptions;
   };
 
   /** The listener's backend pid via pg_stat_activity (its last statement is
-   * the LISTEN itself, so the marker is unique to that connection). */
+   * the LISTEN itself, so the marker is unique to that connection). Scoped to
+   * this database: pg_stat_activity is cluster-global, and the same channel
+   * name is LISTENed in every other test database (this suite's other cases,
+   * the R8 suite, other lanes on a shared server). */
   const listenerPids = (admin: Pool): Promise<number[]> =>
     admin
-      .query(`select pid from pg_stat_activity where query like 'listen fabric_queue_wake%'`)
+      .query(
+        `select pid from pg_stat_activity where datname = current_database() and query like 'listen fabric_queue_wake%'`,
+      )
       .then((r) => r.rows.map((row: { pid: number }) => Number(row.pid)));
 
   it("Z5 (Postgres) a lost wake still claims within the backstop", async () => {
@@ -109,6 +114,11 @@ void queueOptions;
     async () => {
       await withSharedDb(async (url) => {
         const admin = new Pool({ connectionString: url });
+        // withSharedDb's finally drops this database `with (force)`, which
+        // terminates this pool's idle clients; the Pool re-emits the FATAL as
+        // an `error` event, uncaught without a listener (same guard PgQueue
+        // puts on its own pools).
+        admin.on("error", () => undefined);
         dispose.push(() => admin.end().catch(() => undefined));
 
         const listener = makeQueue(url);
