@@ -129,6 +129,8 @@ Model token deltas never enter the log: they are pushed live (§8) and the final
 
 Starting values; the spike adjusts them. A job whose heartbeat goes stale is handed to another worker.
 
+**Sandbox slots (T16).** Wherever step-2 tools run (Docker or Sprites), a per-workspace cap on concurrent sandbox tool calls holds one slot **per tool call, never per run**, over a runtime-owned `sandbox_slots` table — `acquire` grants when fewer than the cap are held and no waiter ranks ahead (chat turns — `session:` streams — first, then the older ask), `release` and `heartbeat` ride the call, and a held slot whose heartbeat is older than 60 s is reclaimable, so a crashed worker never leaks one. A refused `tool.exec` appends the fact `tool.queued` (once per position), defers its job 2 s — the attempt count untouched, a queue wait is not a retry — and runs nothing; when granted it appends `tool.dequeued` with the wait, holds the slot through the run heartbeating with the lease, and releases it on completion or failure. Host mode wires no slots.
+
 ## 5. Decide
 
 ### 5.1 Agent loop (sessions and agent runs)
@@ -222,7 +224,7 @@ Outbound messages that are part of a reply (not a `send` tool call) go through `
 - **Waits.** `human.requested` sets status `waiting` and queues a `run.timer` at the deadline, plus reminders per the run's policy. The API appends `human.responded` only if the wait is still open: the check and the append are one transaction, and the API returns `accepted` or `refused` (expired, already answered, run cancelled). The browser booking confirmation becomes exactly this, replacing the `pendingAction` patched into `runs.budget`. Gated waits (merge, deploy, spend, credentials, external send) accept answers only from the app, never from a channel.
 - **Cancellation.** The API appends `run.cancel_requested`; `decide` passes it to every open child run, so cancellation reaches the whole subtree. Workers holding jobs for a cancelled stream get a notification and abort in-flight model calls; late results are refused by the append guard (today's `RunClosedError`).
 - **Budgets.** Cost is folded from `llm.completed.usage` and children's `run.finished.costUsd`, so it survives restarts. A delegation reserves budget from its parent; `delegate.resolve` releases what the child didn't use. Time budgets and step timeouts are `run.timer` jobs.
-- **Stalls.** Every running stream has a watchdog `run.timer`, re-armed by each new fact. When it fires with no progress, `decide` re-queues a lost job if there is one; if the stream is still stuck at the next firing, it appends `run.blocked` with the reason and escalates.
+- **Stalls.** Every running stream has a watchdog `run.timer`, re-armed by each new fact. When it fires with no progress, `decide` re-queues a lost job if there is one; if the stream is still stuck at the next firing, it appends `run.blocked` with the reason and escalates. A stream with a call queued for a sandbox slot (T16) reads `EMPTY` at either strike — the wait is a fact (`tool.queued`/`tool.dequeued` in the fold's `queuedCalls`), and a queue wait is not a stall.
 
 ## 8. Live updates
 
