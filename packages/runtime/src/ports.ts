@@ -135,6 +135,9 @@ export type ToolPort = {
   ): Promise<ToolRunResult>;
   /** The tool's declaration; undefined for a name outside the registry. */
   describe(name: string): ToolDescriptor | undefined;
+  /** T16: true exactly when the tool runs in a workspace sandbox (step 2) and
+   * so holds a sandbox slot before it runs. Optional — absent means never. */
+  needsSlot?(name: string): boolean;
 };
 
 // -- SurfacePort ---------------------------------------------------------------

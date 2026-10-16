@@ -13,7 +13,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import { HTTPException } from "hono/http-exception";
-import { openStore, PgQueue, runWorker } from "@fabric/runtime";
+import { openStore, PgQueue, runWorker, sandboxSlots } from "@fabric/runtime";
 import type { Queue, RuntimeStore, RuntimeTx, WorkerPorts } from "@fabric/runtime";
 import type { ToolRegistry } from "@fabric/tools";
 import { createRegistry } from "@fabric/tools";
@@ -101,6 +101,9 @@ export type RuntimeEnv = {
   FABRIC_BROKER_RULES?: string;
   /** T19: idle window (ms) before a sandbox is reaped; default 300000. */
   FABRIC_SANDBOX_IDLE_MS?: number;
+  /** T16: the per-workspace cap on concurrent sandbox tool calls; default 4.
+   * Wired only when FABRIC_EXECUTION is not host. */
+  FABRIC_SANDBOX_SLOTS?: number;
 };
 
 export type FabricRuntime = {
@@ -342,6 +345,10 @@ export function workerPorts(
         ? { chunks: 20, intervalMs: 50 }
         : undefined;
   const model = env.MODEL_PORT === "test" ? createTestModelPort(variant) : createModelPort();
+  // T16: a sandboxed execution caps the workspace's concurrent step-2 tool
+  // calls — the slot is held per tool call, chat turns first. Host mode wires
+  // no slots: its calls hold nothing and run exactly as before.
+  const sandboxed = env.FABRIC_EXECUTION !== undefined && env.FABRIC_EXECUTION !== "host";
   return {
     model: withSessionContext(model, recallFacts),
     tools: sessionTools({
@@ -355,6 +362,9 @@ export function workerPorts(
         : {}),
       ...(sessionMcp !== undefined ? { mcp: mcpToolRunner(sessionMcp) } : {}),
     }),
+    ...(sandboxed
+      ? { slots: sandboxSlots(store, { cap: env.FABRIC_SANDBOX_SLOTS ?? 4 }) }
+      : {}),
     surface: {
       send: async () => ({}),
     },

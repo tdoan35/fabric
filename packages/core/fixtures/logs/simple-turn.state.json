@@ -18,6 +18,7 @@
   ],
   "calls": 1,
   "openToolCalls": [],
+  "queuedCalls": [],
   "waits": [],
   "costUsd": 0.01,
   "turnCostUsd": 0.01,

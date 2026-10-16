@@ -20,6 +20,7 @@
       }
     ]
   ],
+  "queuedCalls": [],
   "waits": [],
   "costUsd": 0.05,
   "turnCostUsd": 0.05,
