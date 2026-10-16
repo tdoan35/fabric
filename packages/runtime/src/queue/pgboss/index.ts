@@ -50,9 +50,14 @@ import type {
   QueueTypeConfig,
 } from "../types";
 
-/** Anything with `query`; `pg`'s Pool and a PGlite instance both qualify. */
+/** Anything pg-boss's pglite adapter and this adapter's own admin SQL run
+ * on: `query` for single statements, `exec` for the parameter-less
+ * multi-statement blocks pg-boss issues (a `pg` Pool never qualifies —
+ * it lacks `exec` and is not a pglite connection). */
 export interface MinimalPg {
-  query(text: string, values?: unknown[]): Promise<{ rows: any[] }>;
+  query(text: string, values?: unknown[]): Promise<{ rows: unknown[] }>;
+  /** One result per statement; PGlite's simple-protocol form. */
+  exec(text: string): Promise<{ rows: unknown[] }[]>;
 }
 
 export type PgBossQueueConnection =

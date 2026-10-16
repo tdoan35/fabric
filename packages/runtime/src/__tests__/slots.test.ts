@@ -2,10 +2,16 @@
 // concurrent sandbox tool calls, held per tool call, chat turns first, a
 // crashed holder reclaimed by the 60 s heartbeat window. The slots store runs
 // on the runtime store, so "both drivers" is the store driver harness — the
-// Postgres leg is mandatory under CI, as everywhere in this package.
+// Postgres leg is mandatory under CI, as everywhere in this package. The
+// concurrent-init case below the harness is Postgres-only by nature: it needs
+// four stores on four connections over one database, which PGlite's single
+// connection cannot give.
+import { randomUUID } from "node:crypto";
 import { expect, test } from "vitest";
-import { sandboxSlots } from "../index";
-import { describeDrivers } from "../testing/drivers";
+import { Pool } from "pg";
+import { openStore, sandboxSlots } from "../index";
+import type { RuntimeStore } from "../store/types";
+import { describeDrivers, postgresUrlFromEnv } from "../testing/drivers";
 
 const WORKSPACE = "ws-t16";
 
@@ -121,3 +127,44 @@ describeDrivers("sandbox slots (ANY-92 T16)", (h) => {
     expect((await acquire(slots, "run:x:live", 1, 122_500)).granted).toBe(true);
   });
 });
+
+const slotsPostgresUrl = postgresUrlFromEnv();
+if (slotsPostgresUrl !== undefined) {
+  test("four stores initializing against one fresh Postgres serialize the schema DDL (T16 rework)", async () => {
+    // The review probe's shape: independent store instances — one pool each —
+    // whose first acquires race the `create table if not exists` on separate
+    // connections against a fresh database. The check-then-act races in the
+    // catalog: two creators both see the table missing and the loser dies on
+    // a duplicate key. The DDL must serialize across connections.
+    const admin = new Pool({ connectionString: slotsPostgresUrl.replace(/\/[^/]*$/, "/postgres") });
+    const database = `runtime_slots_init_${randomUUID().replace(/-/g, "").slice(0, 8)}`;
+    await admin.query(`create database "${database}"`);
+    const stores: RuntimeStore[] = [];
+    try {
+      const url = slotsPostgresUrl.replace(/\/[^/]*$/, `/${database}`);
+      // Opened one by one: the store's own migrations are out of scope here.
+      for (let i = 0; i < 4; i++) {
+        stores.push(await openStore({ driver: "postgres", url }));
+      }
+      const slots = stores.map((store) => sandboxSlots(store, { cap: 2 }));
+      const verdicts = await Promise.all(
+        slots.map((slotStore, i) =>
+          slotStore.acquire({ workspaceId: "ws-init", callKey: `run:x:c${i}`, priority: 1, now: 1_000 })
+        ),
+      );
+      // cap 2 held by two of the four; the other two wait at 1 and 2 —
+      // whichever two won, the queue behind them is ordered and whole
+      expect(verdicts.filter((v) => v.granted).length).toBe(2);
+      expect(
+        verdicts
+          .filter((v): v is Extract<typeof v, { granted: false }> => !v.granted)
+          .map((v) => v.position)
+          .sort((a, b) => a - b),
+      ).toEqual([1, 2]);
+    } finally {
+      await Promise.all(stores.map((store) => store.close()));
+      await admin.query(`drop database if exists "${database}" with (force)`);
+      await admin.end();
+    }
+  });
+}
