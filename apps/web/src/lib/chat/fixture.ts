@@ -1,25 +1,13 @@
-// The fixture hotkey (RUN-12): Ctrl+Shift+F arms scripted Dana for the next turn — the request goes
-// out with `fixture: true`, same stream, same side effects. The demo's fallback when a live
-// proposal doesn't come. One flag for the page; the next turn consumes it.
-import { useSyncExternalStore } from "react";
-
-let armed = false;
-const listeners = new Set<() => void>();
-const set = (next: boolean) => {
-  if (armed === next) return;
-  armed = next;
-  for (const listener of listeners) listener();
+// S14 (ANY-64): scripted Dana is retired — the one-response chat path, its fixture flag and the
+// Ctrl+Shift+F hotkey are gone (RUNTIME §14). Nothing can arm a scripted turn anymore: every
+// export below is an inert stub that exists only so the chat components (outside this card's
+// file scope, unchanged) keep typechecking. The hotkey predicate never matches, the toggles are
+// no-ops, and the armed state is always false, so the "Scripted next turn" chip never renders.
+// A card that owns apps/web/src/components/chat deletes those imports and this module together.
+export const toggleFixture = () => {};
+export const disarmFixture = () => {};
+export const useFixtureArmed = (): boolean => false;
+export const isFixtureHotkey = (event: KeyboardEvent): boolean => {
+  void event; // the hotkey is retired: no key combination matches anymore
+  return false;
 };
-const subscribe = (listener: () => void) => { listeners.add(listener); return () => listeners.delete(listener); };
-
-export const toggleFixture = () => set(!armed);
-export const disarmFixture = () => set(false);
-/** Read by the http adapter as a turn starts: true once, then disarmed. */
-export function takeFixture(): boolean {
-  const was = armed;
-  set(false);
-  return was;
-}
-export const useFixtureArmed = () => useSyncExternalStore(subscribe, () => armed);
-
-export const isFixtureHotkey = (e: KeyboardEvent) => e.ctrlKey && e.shiftKey && !e.altKey && e.code === "KeyF";
