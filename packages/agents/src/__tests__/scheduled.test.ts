@@ -1,9 +1,9 @@
-// SCH unit tests: the scheduled turn's prompt carries Dana's memories and the read-only rules on
-// top of her usual system prompt, and the fixture digest is canned. No network, no database.
+// SCH unit tests: the scheduled turn's prompt carries Dana's memories and the
+// read-only rules on top of her usual system prompt. No network, no database.
 import { describe, expect, it } from "vitest";
 import { fallbackDana } from "../assistant/prompt";
 import type { RegistryBrief } from "../assistant/prompt";
-import { fixtureDigest, scheduledSystem } from "../assistant/scheduled";
+import { scheduledSystem } from "../assistant/scheduled";
 
 const registry: RegistryBrief = { agents: [], teams: [], personaPool: [] };
 
@@ -26,10 +26,3 @@ describe("scheduledSystem", () => {
   });
 });
 
-describe("fixtureDigest", () => {
-  it("is a canned digest that leads with what changed", () => {
-    const digest = fixtureDigest();
-    expect(digest).toContain("Three things since yesterday:");
-    expect(digest.split("\n").filter((l) => /^\d\./.test(l))).toHaveLength(3);
-  });
-});

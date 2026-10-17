@@ -72,7 +72,6 @@ export function runtime(): Runtime {
         team: team() ?? notYetTeam,
         db,
         publish: (e) => hub.publishApp(e),
-        mode: env.DANA_MODE === "fixture" ? "fixture" : "live",
         recordingKey: env.DEMO_RECORDING_KEY,
         // CARD-3/S5: Sana's inbox on specialist approval — only when the flag is on, so dev runs
         // never spend one of the account's three inboxes or any of its 100 daily sends.

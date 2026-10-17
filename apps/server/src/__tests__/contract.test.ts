@@ -12,6 +12,7 @@ import {
 import type { ContextSnapshot, Project, Registry, Report, Run, RunEvent, Schedule, Task, WeaveSnapshot } from "@fabric/contracts";
 import { cors } from "hono/cors";
 import { corsOrigins } from "../env";
+import { chat } from "../routes/chat";
 import { registry } from "../routes/registry";
 import { reports } from "../routes/reports";
 import { runs } from "../routes/runs";
@@ -34,7 +35,7 @@ const app = new Hono()
   .use("/api/*", cors({ origin: (origin) => (corsOrigins.includes(origin) ? origin : null) }))
   .route("/api", new Hono()
     .get("/health", (c) => c.json({ ok: true }))
-    .route("/", registry).route("/", work).route("/", runs).route("/", reports).route("/", weave).route("/", stream));
+    .route("/", registry).route("/", work).route("/", runs).route("/", reports).route("/", weave).route("/", stream).route("/", chat));
 
 const get = async <T>(path: string): Promise<T> => {
   const res = await app.request(path, { headers: { Origin: "app://fabric" } });
@@ -82,6 +83,62 @@ suite("contract: every DATA GET validates", () => {
   });
 
 });
+
+// S14 (ANY-64): the one-response chat turn is retired; the legacy history reads stay
+// so S12/S13 can render old threads read-only. The POST assertions are pure routing
+// (no database); the GET assertions run against the live schema below.
+describe("retired chat path (S14)", () => {
+  const postChat = () =>
+    app.request("/api/chat", {
+      method: "POST", headers: { "content-type": "application/json", Origin: "app://fabric" },
+      body: JSON.stringify({ sessionId: "c1", messages: [{ role: "user", content: [{ type: "text", text: "hi" }] }] }),
+    });
+
+  it("POST /api/chat is gone (404, not a method mismatch on a living route)", async () => {
+    const res = await postChat();
+    expect(res.status).toBe(404);
+  });
+});
+
+// The legacy history reads, against the live schema: S12/S13 render old threads read-only.
+// The reads serve at /api/sessions/:id(+/messages) — routes/chat.ts is mounted at the API root.
+suite("retired chat path: the legacy history reads survive", () => {
+  it("GET /api/sessions/:id and /messages answer 200 for a legacy session", async () => {
+    // A database with no legacy thread still must prove the reads: seed one row
+    // (ours alone, removed below — the running database is never pristine).
+    const existing = (await db.db.execute(sql`select id from sessions order by ord limit 1`)).rows as { id: string }[];
+    const seededId = `contract-legacy-${randomUUID()}`;
+    const seeded = existing.length === 0;
+    let id = existing[0]?.id;
+    if (seeded) {
+      await db.db.execute(sql`insert into sessions (id, title, agent_id) values (${seededId}, ${"contract: legacy reads"}, ${"dana"})`);
+      id = seededId;
+    }
+    try {
+      for (const path of [`/api/sessions/${id}`, `/api/sessions/${id}/messages`]) {
+        const res = await app.request(path, { headers: { Origin: "app://fabric" } });
+        expect(res.status, `GET ${path}`).toBe(200);
+        expect(res.headers.get("access-control-allow-origin"), `CORS on ${path}`).toBe("app://fabric");
+      }
+      const session = (await (await app.request(`/api/sessions/${id}`, { headers: { Origin: "app://fabric" } })).json()) as {
+        id: string; desktop: unknown;
+      };
+      expect(session.id).toBe(id);
+      expect(session.desktop).toBeTruthy();
+      const history = (await (await app.request(`/api/sessions/${id}/messages`, { headers: { Origin: "app://fabric" } })).json()) as {
+        sessionId: string; messages: unknown[];
+      };
+      expect(history.sessionId).toBe(id);
+      expect(Array.isArray(history.messages)).toBe(true);
+    } finally {
+      if (seeded) {
+        await db.db.execute(sql`delete from chat_messages where session_id = ${seededId}`);
+        await db.db.execute(sql`delete from sessions where id = ${seededId}`);
+      }
+    }
+  });
+});
+
 
 // Schedule (SCH, additive under contracts-v1): the new schemas and the event member. Pure — no DB.
 describe("contract: schedule schemas", () => {

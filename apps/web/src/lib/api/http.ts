@@ -1,8 +1,8 @@
 import {
-  ChatStreamLineSchema, ContextSnapshotSchema, OccurrenceSchema, ProjectSchema, RegistrySchema, ReportSchema,
+  ContextSnapshotSchema, OccurrenceSchema, ProjectSchema, RegistrySchema, ReportSchema,
   RunEventSchema, RunSchema, ScheduleFireSchema, ScheduleSchema, SessionEventSchema, SessionMessagesSchema, TaskSchema,
   WeaveSnapshotSchema,
-  type CreateSessionRequest, type CreateSessionResponse, type ChatRequest, type ChatStreamLine, type ContextSnapshot, type FinalizeResponse, type FollowSessionOptions, type Occurrence,
+  type CreateSessionRequest, type CreateSessionResponse, type ContextSnapshot, type FinalizeResponse, type FollowSessionOptions, type Occurrence,
   type PostMessageInput, type PostMessageResponse,
   type Project, type Registry, type Report, type Run, type RunEvent, type Schedule, type ScheduleFire,
   type ScheduleInput, type SchedulePatch, type SessionEvent, type SessionMessages, type SpliceResponse, type Task,
@@ -31,39 +31,6 @@ async function request<T>(path: string, schema: z.ZodType, init?: RequestInit, m
 
 const json = (body: unknown): RequestInit => ({ method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
 
-/** POST /api/chat (§4.3): one cumulative snapshot of the assistant message per NDJSON line. */
-async function* chatStream(body: ChatRequest, signal?: AbortSignal): AsyncGenerator<ChatStreamLine> {
-  const response = await fetch(`${apiBase}/api/chat`, { ...json(body), signal }).catch((err: unknown) => {
-    if (err instanceof Error && err.name === "AbortError") throw err;
-    throw new Error("Can't reach the server. Check that it's running, then send again.");
-  });
-  if (!response.ok || !response.body) {
-    const err = await response.json().catch(() => ({})) as { error?: string };
-    throw new Error(err.error ?? `Dana is unavailable (${response.status})`);
-  }
-  const parse = (line: string) => {
-    const value: unknown = JSON.parse(line);
-    if (dev) {
-      const checked = ChatStreamLineSchema.safeParse(value);
-      if (!checked.success) console.warn("[api] /chat line contract mismatch", checked.error.issues);
-    }
-    return value as ChatStreamLine;
-  };
-  const reader = response.body.pipeThrough(new TextDecoderStream()).getReader();
-  let buffer = "";
-  for (;;) {
-    const { value, done } = await reader.read();
-    if (value) buffer += value;
-    let nl: number;
-    while ((nl = buffer.indexOf("\n")) >= 0) {
-      const line = buffer.slice(0, nl).trim();
-      buffer = buffer.slice(nl + 1);
-      if (line) yield parse(line);
-    }
-    if (done) break;
-  }
-  if (buffer.trim()) yield parse(buffer.trim());
-}
 const spliceSchema = z.object({ run: RunSchema, events: z.array(RunEventSchema) });
 const finalizeSchema = z.object({ reportId: z.string() });
 const okSchema = z.object({ ok: z.boolean() });
@@ -99,8 +66,7 @@ export const httpApi = {
   // MEM: Keep pins a memory, Forget soft-deletes it (POST /memories/:id/decision).
   decideMemory: (id: string, decision: "kept" | "forgotten") =>
     request<{ ok: boolean }>(`/memories/${encodeURIComponent(id)}/decision`, decisionSchema, json({ decision })),
-  // Chat (UI-CHAT): Dana's thread. Http mode only; mock mode streams the scripted adapter instead.
-  chat: chatStream,
+  // Chat: the thread history read; turns go through the session stream (RUNTIME §13).
   getSessionMessages: (id: string) => request<SessionMessages>(`/sessions/${encodeURIComponent(id)}/messages`, SessionMessagesSchema),
   // Sessions (RUNTIME §13): post, then follow the stream. The S12a client over the global fetch.
   createSession: (req: CreateSessionRequest): Promise<CreateSessionResponse> => createSession(fetch, apiBase, req),
