@@ -65,6 +65,10 @@ function trackedDecidePort(queue: PgQueue, workspaceId: string): TrackedPort {
 // ---------------------------------------------------------------------------
 // PGlite: an in-memory database per queue; the queue migrates it on first use.
 // ---------------------------------------------------------------------------
+// The conformance wrappers run all twelve R6 cases in one test; the package-wide
+// 30 s budget is too thin for them on a CI runner (PGlite 0.5 took 31.6 s).
+const CONFORMANCE_TIMEOUT_MS = 120_000;
+
 describe("R8 durable queue [pglite]", () => {
   const dispose: (() => Promise<void>)[] = [];
   afterAll(async () => {
@@ -94,7 +98,7 @@ describe("R8 durable queue [pglite]", () => {
       }
     }
     expect(failed).toEqual([]);
-  });
+  }, CONFORMANCE_TIMEOUT_MS);
 
   it("R8.3 an appended fact and its decide job commit together; a rolled-back append leaves no job", async () => {
     const adapter = new PgliteAdapter();
@@ -231,7 +235,7 @@ describe("R8 durable queue [pglite]", () => {
       }
     }
     expect(failed).toEqual([]);
-  });
+  }, CONFORMANCE_TIMEOUT_MS);
 
   it("R8.3 an appended fact and its decide job commit together; a rolled-back append leaves no job", async () => {
     await withSharedDb(async (url) => {
