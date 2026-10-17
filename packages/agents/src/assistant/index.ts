@@ -16,7 +16,8 @@ import type { Db, RunWriter } from "@fabric/db";
 import { browserTaskInputSchema, createInbox } from "@fabric/integrations";
 import type { LanguageModel, ThinkingLevel } from "../llm";
 import { model } from "../llm";
-import { compileBrief, deterministicBrief } from "../context";
+import { compileBrief } from "../context";
+import { fixtureBrief } from "./fixture";
 import type { BriefInput } from "../context";
 import { recallForDana } from "../memory";
 import type { MemoryRecall } from "../memory";
@@ -291,14 +292,14 @@ export function createAssistant(deps: AssistantDeps): Assistant {
             description: "Hand the work to an approved team: compiles the brief, creates the task and starts the run.",
             inputSchema: handoffSchema,
             // The lane sometimes emits the call twice in one response; one handoff per turn.
-            // compileBrief is an LLM call: if the lane fails it, the deterministic scripted brief
+            // compileBrief is an LLM call: if the lane fails it, the deterministic brief
             // takes over (ARCH §11) so the handoff itself never fails.
             execute: (args) => (handoffDone ??= runHandoff(handoffDeps(async (i: BriefInput) => {
               try {
                 return await compileBrief({ ...i, modelId: dana?.agent.model });
               } catch (err) {
                 console.log(`[assistant] compileBrief failed (${err instanceof Error ? err.message : err}); using the deterministic brief`);
-                return deterministicBrief(i);
+                return fixtureBrief(i);
               }
             }), {
               sessionId, session, teamName: args.teamName, request: args.request, title: args.title,

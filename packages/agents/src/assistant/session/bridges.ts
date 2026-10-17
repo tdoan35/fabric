@@ -18,12 +18,13 @@ import { NotImplementedError } from "@fabric/contracts";
 import type { AppEvent } from "@fabric/contracts";
 import type { Db, RunWriter } from "@fabric/db";
 import type { TeamRuntime } from "../../team";
-import { compileBrief, deterministicBrief } from "../../context";
+import { compileBrief } from "../../context";
 import { model } from "../../llm";
 import { runHandoff } from "../handoff";
 import type { HandoffDeps } from "../handoff";
 import { runErrand } from "../errand";
 import { errandContext } from "../errand-context";
+import { fixtureBrief } from "../fixture";
 import { getSession } from "../store";
 import type { ToolSchema } from "./definition";
 import { sessionOf } from "./proposals";
@@ -220,7 +221,7 @@ export function legacyBridges(legacy: {
         return await compileBrief(input);
       } catch (err) {
         console.log(`[session-bridges] compileBrief failed (${errorText(err)}); using the deterministic brief`);
-        return deterministicBrief(input);
+        return fixtureBrief(input);
       }
     },
   });
