@@ -156,8 +156,6 @@ export const ChatRequestSchema = z.object({
   sessionId: z.string(),
   /** The thread as the web runtime holds it, including human tool results ({decision}). */
   messages: z.array(z.unknown()),
-  /** Scripted Dana for this turn (RUN-12). The `x-fabric-fixture: 1` header does the same. */
-  fixture: z.boolean().optional(),
   /** The composer's model picker, as a display name ("Opus 5.5"). Absent: Dana's registry model. */
   model: z.string().optional(),
   /** The composer's reasoning effort. Absent: off (Dana's latency default). */
