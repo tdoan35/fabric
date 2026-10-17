@@ -44,6 +44,22 @@ const running = async (run: (args: string[]) => Promise<string>, name: string): 
   }
 };
 
+/** Wait until the container is fully gone: a `rm -f` returned while the
+ * engine still tears down network aliases makes the immediate re-`run` with
+ * the same name race (the alias briefly serving a dead endpoint resets the
+ * first proxied connection — the CI E8 curl 56). Bounded; the run's own
+ * error paths are the fallback. */
+const awaitGone = async (run: (args: string[]) => Promise<string>, name: string): Promise<void> => {
+  for (let attempt = 0; attempt < 20; attempt++) {
+    try {
+      await run(["inspect", "-f", "{{.Id}}", name]);
+    } catch {
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+};
+
 /** Wait until the gateway prints its listening line (the bind is fast; the
  * poll only covers the container start), so the first request connects. */
 const awaitListening = async (run: (args: string[]) => Promise<string>, name: string): Promise<void> => {
@@ -70,7 +86,10 @@ export async function ensureEgressGateway(options: EgressGatewayOptions = {}): P
 
   const live = await runningId(run, name);
   if (live !== null && (await running(run, name))) return live;
-  if (live !== null) await run(["rm", "-f", name]).catch(() => {});
+  if (live !== null) {
+    await run(["rm", "-f", name]).catch(() => {});
+    await awaitGone(run, name);
+  }
 
   const argv = [
     "run", "-d", "--name", name,
@@ -88,7 +107,14 @@ export async function ensureEgressGateway(options: EgressGatewayOptions = {}): P
   if (options.brokerPort !== undefined) argv.push("-e", `FABRIC_BROKER_PORT=${options.brokerPort}`);
   argv.push(image, "node", "/opt/fabric/egress.mjs");
 
-  const id = (await run(argv)).trim();
+  const id = (await run(argv).catch(async (error: unknown) => {
+    // One bounded retry: a same-name recreate can still lose the race against
+    // the engine's endpoint cleanup under load.
+    await awaitGone(run, name);
+    return run(argv).catch(() => {
+      throw error;
+    });
+  })).trim();
   // Second leg: the default bridge, for the gateway → broker route.
   await run(["network", "connect", "bridge", id]).catch(() => {});
   await awaitListening(run, name);
