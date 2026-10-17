@@ -34,6 +34,7 @@ import {
   DEFAULT_TYPE_CONFIGS,
 } from "../types";
 import type {
+  ClaimWaitingOptions,
   Queue,
   QueueJob,
   QueueJobInput,
@@ -66,6 +67,13 @@ export interface PgQueueOptions extends QueueOptions {
   generateId?: () => string;
   /** The LISTEN/NOTIFY wake channel; one name per database is enough. */
   wakeChannel?: string;
+  /** Test hook (R17 Z5): false silences the cross-process NOTIFY leg; the
+   * in-process wake and the claim-wait backstop still deliver. */
+  wakeNotify?: boolean;
+  /** Test hook (R17 Z6b): awaited by each lazy re-LISTEN after it connects
+   * and before it LISTENs, so a test can hold a reconnect open while claims
+   * overlap it. */
+  beforeRelisten?: () => Promise<void>;
 }
 
 const DEFAULT_WAKE_CHANNEL = "fabric_queue_wake";
@@ -172,6 +180,9 @@ export class PgQueue implements Queue {
   #intents: Intent[] = [];
   #drain: Promise<void> | null = null;
   #wakeWaiters = new Set<() => void>();
+  /** The listener connection's liveness: null once dropped (error or end); a
+   * claim re-LISTENs lazily — never eagerly, never on a timer (R17). */
+  #listenerPending: Promise<void> | null = null;
   /** Where this queue's staged applies are registered (the database, or the
    * PGlite instance); null only before init. */
   #stagedKey: string | object | null = null;
@@ -225,21 +236,49 @@ export class PgQueue implements Queue {
   /** The wake channel's cross-process leg: a dedicated connection LISTENs and
    * re-broadcasts to in-process waiters. Deliberately NOT a pool client — the
    * listener lives for the queue's lifetime, and pool.end must never wait on
-   * it. A dropped listener degrades to the backstop, never to a crash. */
-  async #listen(): Promise<void> {
+   * it. A dropped listener marks itself gone and is re-established by the
+   * next claim; until then the backstop delivers. Never a crash. */
+  async #listen(hold?: () => Promise<void>): Promise<void> {
     if (!this.#connectionUrl) return;
     const { Client } = await import("pg");
     const client = new Client({ connectionString: this.#connectionUrl });
-    client.on("error", () => undefined);
+    const gone = (): void => {
+      if (this.#listener === client) this.#listener = null;
+      void client.end().catch(() => undefined);
+    };
+    client.on("error", gone);
+    client.on("end", gone);
     try {
       await client.connect();
+      await hold?.();
       await client.query(`listen ${this.#wakeChannel()}`);
       client.on("notification", () => this.#wake());
+      // Closed while the reconnect was in flight: drop it, don't leak it.
+      if (this.#connectionUrl === null) {
+        await client.end().catch(() => undefined);
+        return;
+      }
       this.#listener = client;
     } catch {
       await client.end().catch(() => undefined);
-      // The backstop still delivers.
+      // The backstop still delivers; the next claim retries.
     }
+  }
+
+  /** The lazy LISTEN leg: on entry to a claim, re-establish the listener if it
+   * dropped. Serialized per instance; a no-op when healthy or closing. A claim
+   * that finds the reconnect in flight awaits that same promise: claiming
+   * ahead of the LISTEN would lose a NOTIFY committed in the gap (R17 Z6b). */
+  async #ensureListener(): Promise<void> {
+    if (this.#pool === null || this.#listener !== null) return;
+    if (this.#listenerPending === null) {
+      this.#listenerPending = this.#listen(this.#options.beforeRelisten)
+        .catch(() => undefined) // never a crash; the next claim retries
+        .finally(() => {
+          this.#listenerPending = null;
+        });
+    }
+    await this.#listenerPending;
   }
 
   async #createDatabase(adminUrl: string): Promise<string> {
@@ -330,6 +369,7 @@ export class PgQueue implements Queue {
 
   async claim(workerId: string, types: readonly string[], now: number): Promise<QueueLease | null> {
     await this.#settle();
+    await this.#ensureListener();
     const unique = [...new Set(types)];
     if (unique.length === 0) return null;
     const cfg = unique.map((type) => {
@@ -350,6 +390,8 @@ export class PgQueue implements Queue {
     ]);
     const row = rows[0];
     if (!row) return null;
+    // A new lease changes the idle-wait horizon (its expiry); wake the waiters.
+    void this.#announce().catch(() => undefined);
     const startedAt = row.run_started_at;
     return {
       jobId: String(row.id),
@@ -481,33 +523,84 @@ export class PgQueue implements Queue {
 
   // -- Wake / the consumer side ---------------------------------------------
 
-  /** Claims, on wake or the injected backstop, until something is claimed.
-   * The wake listener registers BEFORE each claim, so a commit landing between
-   * the claim and the wait can never be missed. The `now` provider is the
-   * caller's clock; a backstop of `Infinity` waits for wake only. */
+  /** The earliest instant an idle claim could succeed: the next pending
+   * `run_at` after now, or the next `lease_until`, among `types`. One
+   * statement per idle cycle; null when neither exists. */
+  static readonly NEXT_WAKE_SQL = `
+select min(wake_at) as wake_at from (
+  select min(run_at) as wake_at from jobs
+    where status = 'pending' and run_at > $1::bigint and type = any($2::text[])
+  union all
+  select min(lease_until) as wake_at from jobs
+    where status = 'leased' and lease_until is not null
+      and lease_until > $1::bigint and type = any($2::text[])
+) t
+`;
+
+  async #nextWakeAt(types: readonly string[], now: number): Promise<number | undefined> {
+    const { rows } = await this.#exec(PgQueue.NEXT_WAKE_SQL, [now, [...types]]);
+    const raw = rows[0]?.wake_at;
+    return raw === null || raw === undefined ? undefined : Number(raw);
+  }
+
+  /** Claims, on wake, the next due time, the next lease expiry or the injected
+   * backstop — whichever is earliest — until something is claimed. The wake
+   * listener registers BEFORE each claim, so a commit landing between the
+   * claim and the wait can never be missed. `signal` aborting returns null
+   * promptly, before or during a wait. A backstop of `Infinity` waits for
+   * wake only. */
   async claimWaiting(
     workerId: string,
     types: readonly string[],
-    options: { backstopMs: number; now: () => number }
+    options: ClaimWaitingOptions
   ): Promise<QueueLease | null> {
     await this.#settle();
+    const unique = [...new Set(types)];
+    if (unique.length === 0) return null;
     for (;;) {
+      if (options.signal?.aborted === true) return null;
       let woken!: () => void;
       const wake = new Promise<void>((resolve) => (woken = resolve));
-      const timer = setTimeout(() => woken(), options.backstopMs);
-      const waiter = () => {
-        clearTimeout(timer);
+      const done: { value: boolean } = { value: false };
+      const finish = () => {
+        if (done.value) return;
+        done.value = true;
         this.#wakeWaiters.delete(waiter);
+        options.signal?.removeEventListener("abort", onAbort);
         woken();
       };
+      const waiter = () => finish();
+      const onAbort = () => finish();
+      // Registered before the claim: no commit lands unseen.
       this.#wakeWaiters.add(waiter);
-      const lease = await this.claim(workerId, types, options.now());
-      if (lease) {
-        clearTimeout(timer);
-        this.#wakeWaiters.delete(waiter);
+      options.signal?.addEventListener("abort", onAbort, { once: true });
+      const backstop = setTimeout(() => finish(), options.backstopMs);
+      (backstop as unknown as { unref?: () => void }).unref?.();
+
+      const now = options.now();
+      const lease = await this.claim(workerId, unique, now);
+      if (lease !== null || options.signal?.aborted) {
+        clearTimeout(backstop);
+        finish();
         return lease;
       }
-      await wake;
+
+      // The horizon: due times and lease expiries among the claimed types,
+      // capped by the backstop. A horizon at/before now reclaims at once.
+      // Measured from the claim's own `now`: a lease lapsing between the
+      // claim and this query is still the horizon, not a 10-minute sleep.
+      const backstopAt = now + options.backstopMs;
+      const horizon = await this.#nextWakeAt(unique, now);
+      const wakeAt = horizon !== undefined ? Math.min(horizon, backstopAt) : backstopAt;
+      const delay = Math.max(0, wakeAt - options.now());
+      if (delay > 0 && !done.value) {
+        const horizonTimer = setTimeout(() => finish(), delay);
+        (horizonTimer as unknown as { unref?: () => void }).unref?.();
+        await wake;
+        clearTimeout(horizonTimer);
+      }
+      // done.value is now true however the wait ended; the loop claims again.
+      clearTimeout(backstop);
     }
   }
 
@@ -680,7 +773,7 @@ export class PgQueue implements Queue {
    * path's backstop covers a lost signal. */
   async #announce(): Promise<void> {
     this.#wake();
-    if (this.#pool !== null) {
+    if (this.#pool !== null && this.#options.wakeNotify !== false) {
       await this.#exec(`select pg_notify($1, '')`, [this.#wakeChannel()]).catch(() => undefined);
     }
   }
