@@ -16,7 +16,7 @@ import type { Db, RunWriter } from "@fabric/db";
 import { browserTaskInputSchema, createInbox } from "@fabric/integrations";
 import type { LanguageModel, ThinkingLevel } from "../llm";
 import { model } from "../llm";
-import { compileBrief } from "../context";
+import { compileBrief, deterministicBrief } from "../context";
 import type { BriefInput } from "../context";
 import { recallForDana } from "../memory";
 import type { MemoryRecall } from "../memory";
@@ -24,7 +24,6 @@ import type { TeamRuntime } from "../team";
 import { buildSystemPrompt, fallbackDana } from "./prompt";
 import { runScheduledTurn } from "./scheduled";
 import type { ScheduledInput } from "./scheduled";
-import { fixtureBrief } from "./fixture";
 import { runHandoff } from "./handoff";
 import type { HandoffDeps, HandoffInput } from "./handoff";
 import {
@@ -299,7 +298,7 @@ export function createAssistant(deps: AssistantDeps): Assistant {
                 return await compileBrief({ ...i, modelId: dana?.agent.model });
               } catch (err) {
                 console.log(`[assistant] compileBrief failed (${err instanceof Error ? err.message : err}); using the deterministic brief`);
-                return fixtureBrief(i);
+                return deterministicBrief(i);
               }
             }), {
               sessionId, session, teamName: args.teamName, request: args.request, title: args.title,

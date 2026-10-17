@@ -25,25 +25,15 @@ import { ensureEgressGateway, stopEgressGateway, type EgressGatewayOptions } fro
 /** Where a live sandbox records its process-group id for the timeout kill. */
 const PIDFILE_DIR = "/tmp/.fabric-exec";
 
-/** The gateway's per-instance network alias: sandboxes proxy to their own
- * provider's gateway only. The shared `egress` alias round-robins across
- * every provider's gateway on the network, so a parallel suite's gateway
- * teardown resets a live tunnel mid-TLS (curl 56, CI run 38979873174 E8). */
-export const egressAlias = (instance: string): string => `egress-${instance}`;
-
-/** The proxy environment of T18: the open web only through this provider's
- * gateway, addressed by the per-instance alias. */
-const egressProxyEnv = (instance: string): Record<string, string> => {
-  const host = egressAlias(instance);
-  return {
-    HTTP_PROXY: `http://${host}:3128`,
-    HTTPS_PROXY: `http://${host}:3128`,
-    http_proxy: `http://${host}:3128`,
-    https_proxy: `http://${host}:3128`,
-    ALL_PROXY: `http://${host}:3128`,
-    NO_PROXY: host,
-    FABRIC_EGRESS_URL: `http://${host}`,
-  };
+/** The proxy environment of T18: the open web only through the gateway. */
+const EgressProxyEnv: Record<string, string> = {
+  HTTP_PROXY: "http://egress:3128",
+  HTTPS_PROXY: "http://egress:3128",
+  http_proxy: "http://egress:3128",
+  https_proxy: "http://egress:3128",
+  ALL_PROXY: "http://egress:3128",
+  NO_PROXY: "egress",
+  FABRIC_EGRESS_URL: "http://egress",
 };
 
 /** Single-quotes for bash; the value is data, never re-read as syntax. */
@@ -364,7 +354,7 @@ export function dockerSandboxes(options: DockerSandboxOptions = {}): SandboxProv
           "--cap-drop", "ALL", "--security-opt", "no-new-privileges",
           "--pids-limit", "512", "--memory", "4g", "--cpus", "2",
         ];
-        for (const [name, value] of Object.entries(egressProxyEnv(egressInstance))) {
+        for (const [name, value] of Object.entries(EgressProxyEnv)) {
           argv.push("-e", `${name}=${value}`);
         }
         for (const mount of request.mounts ?? []) {

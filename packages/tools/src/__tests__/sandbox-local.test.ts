@@ -122,28 +122,21 @@ test("the docker run argv carries the isolation flags, mounts and env", async ()
     ],
   });
 
-  // T18: the sandbox runs on the internal network with the proxy env, pointed
-  // at this provider's own gateway alias (never the shared `egress`, whose
-  // round-robin resets tunnels when a parallel suite's gateway dies); the
+  // T18: the sandbox runs on the internal network with the proxy env; the
   // egress gateway container is recorded separately (see its own test).
   const run = (await fakeState()).containers.find((candidate) => candidate.labels["fabric.sandbox"] === "1");
-  const instance = (await fakeState()).containers.find(
-    (candidate) => candidate.labels["fabric.egress"] === "1"
-  )?.labels["fabric.egress.instance"];
-  if (instance === undefined) throw new Error("the gateway must exist before the sandbox acquire resolves");
-  const egressHost = `egress-${instance}`;
   expect(run?.argv).toEqual([
     "run", "-d", "--init", "--network", "fabric-sbx",
     "--label", "fabric.sandbox=1", "--label", "fabric.agent=researcher", "--label", "fabric.workspace=ws1",
     "--cap-drop", "ALL", "--security-opt", "no-new-privileges", "--pids-limit", "512",
     "--memory", "4g", "--cpus", "2",
-    "-e", `HTTP_PROXY=http://${egressHost}:3128`,
-    "-e", `HTTPS_PROXY=http://${egressHost}:3128`,
-    "-e", `http_proxy=http://${egressHost}:3128`,
-    "-e", `https_proxy=http://${egressHost}:3128`,
-    "-e", `ALL_PROXY=http://${egressHost}:3128`,
-    "-e", `NO_PROXY=${egressHost}`,
-    "-e", `FABRIC_EGRESS_URL=http://${egressHost}`,
+    "-e", "HTTP_PROXY=http://egress:3128",
+    "-e", "HTTPS_PROXY=http://egress:3128",
+    "-e", "http_proxy=http://egress:3128",
+    "-e", "https_proxy=http://egress:3128",
+    "-e", "ALL_PROXY=http://egress:3128",
+    "-e", "NO_PROXY=egress",
+    "-e", "FABRIC_EGRESS_URL=http://egress",
     "-v", "/host/agent:/workspace",
     "-v", "/host/proj:/projects/proj:ro",
     "-e", "FOO=bar",

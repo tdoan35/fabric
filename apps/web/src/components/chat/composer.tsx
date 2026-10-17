@@ -2,13 +2,14 @@ import { useState } from "react";
 import { AttachmentPrimitive, ComposerPrimitive, useAuiState } from "@assistant-ui/react";
 import { AnimatePresence, motion } from "motion/react";
 import { ContextMeter } from "./composer-bar";
-import { ArrowUp, AudioLines, Check, ChevronDown, Hand, Mic, Paperclip, Plus, Square, X } from "lucide-react";
+import { ArrowUp, AudioLines, Check, ChevronDown, FlaskConical, Hand, Mic, Paperclip, Plus, Square, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { APPROVALS, MODELS } from "@/lib/mock/options";
 import { demoMode } from "@/lib/chat/demo";
+import { disarmFixture, useFixtureArmed } from "@/lib/chat/fixture";
 import { EFFORT_LABELS, setChatEffort, setChatModel, useModelChoice, type Effort } from "@/lib/chat/model-choice";
 
 // D7: the demo build never offers Full auto.
@@ -87,6 +88,18 @@ function AttachmentChip() {
   );
 }
 
+/** Shown while the fixture hotkey (Ctrl+Shift+F) has scripted Dana armed for the next turn; click to disarm. */
+function FixtureArmed() {
+  const armed = useFixtureArmed();
+  if (!armed) return null;
+  return (
+    <button type="button" onClick={disarmFixture} title="Scripted Dana answers the next turn (Ctrl+Shift+F). Click to cancel."
+      className="flex h-6 shrink-0 items-center gap-1 rounded-full border border-dashed px-2 text-[11px] text-muted-foreground hover:text-foreground">
+      <FlaskConical className="size-3" />Scripted next turn
+    </button>
+  );
+}
+
 /** `showContext` moves the context meter into the toolbar (used once the tray has hidden). */
 export function Composer({ autoFocus, placeholder, showContext }: { autoFocus?: boolean; placeholder: string; showContext?: boolean }) {
   const empty = useAuiState((st) => st.composer.isEmpty);
@@ -107,6 +120,7 @@ export function Composer({ autoFocus, placeholder, showContext }: { autoFocus?: 
           <Button variant="ghost" size="icon" className="size-8 text-muted-foreground hover:text-foreground" aria-label="Attach files"><Plus /></Button>
         </ComposerPrimitive.AddAttachment>
         <ApprovalPicker />
+        <FixtureArmed />
         <div className="mx-2 flex min-w-0 flex-1 items-center">
           <AnimatePresence>
             {showContext && !demoMode && (

@@ -262,9 +262,12 @@ try {
   console.log(`check:errand · live session path · tag ${checkTag}`);
   db = createDb(process.env.DATABASE_URL);
   await startServer();
-  const result = await driveErrand(db);
+  // The SSE stream has no replay: subscribe before the turn starts, or the active-desktop
+  // events are gone by the time we listen. driveErrand sets sessionId before posting the
+  // goal, so the filter in subscribeDesktop only passes this session's events.
   eventPump = await subscribeDesktop();
-  // The turn has run; drain the desktop stream's tail, then assert from the log.
+  const result = await driveErrand(db);
+  // The run has ended; let the stream's tail land (the final desktop goes idle), then assert.
   await sleep(2_000);
   eventPump.assertHealthy();
   const desktops = eventPump.events;
