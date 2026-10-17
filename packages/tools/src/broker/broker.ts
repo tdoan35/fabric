@@ -241,8 +241,18 @@ export async function handleBrokerRequest(
     return refuse(deps, res, identified, "method not allowed");
   }
 
-  // 5. path (normalised first: .. segments and encoded slashes are refused)
-  const decodedPath = normalizePath(rawPath);
+  // 5. path — the final URL is built first and its canonical pathname is
+  // what the rule authorizes, so the check and the forwarded request are
+  // the same path: `..` segments and encoded slashes are refused, and the
+  // WHATWG parse (backslash as separator, `..` resolution) happens here
+  // once, before matching, never again in fetch.
+  let target: URL;
+  try {
+    target = new URL(`${rule.upstream.replace(/\/+$/, "")}${rawPath}${query}`);
+  } catch {
+    return refuse(deps, res, identified, "path not allowed");
+  }
+  const decodedPath = normalizePath(target.pathname);
   if (decodedPath === null || !pathAllowed(rule.paths, decodedPath)) {
     return refuse(deps, res, identified, "path not allowed");
   }
@@ -330,8 +340,8 @@ export async function handleBrokerRequest(
     credential = credentialHeader(rule.auth, secret);
   }
 
-  // forward
-  const target = `${rule.upstream.replace(/\/+$/, "")}${rawPath}${query}`;
+  // forward — the exact canonical URL authorized above
+  const targetString = target.toString();
   // Readable.toWeb returns a web stream structurally identical to undici's
   // body type; the DOM-less typings cannot unify them.
   const init: RequestInit = {
@@ -343,7 +353,7 @@ export async function handleBrokerRequest(
 
   let upstream: Response;
   try {
-    upstream = await fetch(target, init);
+    upstream = await fetch(targetString, init);
   } catch {
     deps.onUse({ ...identified, status: 502, allowed: true, reason: "upstream unreachable" });
     res.writeHead(502, { "content-type": "application/json" });
@@ -372,7 +382,7 @@ export async function handleBrokerRequest(
     if (location !== null) {
       let sameHost = false;
       try {
-        sameHost = new URL(location, target).host === new URL(target).host;
+        sameHost = new URL(location, targetString).host === target.host;
       } catch {
         sameHost = false;
       }

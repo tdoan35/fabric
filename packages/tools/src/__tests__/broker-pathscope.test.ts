@@ -3,7 +3,7 @@
 // (WHATWG resolves `..\\admin` to `/admin`) while `normalizePath` sees the
 // segment `..\\admin`, not `..`. The broker refuses backslash paths and
 // authorizes against the canonical URL it actually forwards.
-import { afterAll, afterEach, beforeAll, beforeEach, expect, test } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from "vitest";
 import { normalizePath } from "../broker";
 import {
   createTokenStore,
