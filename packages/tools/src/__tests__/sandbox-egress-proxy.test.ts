@@ -95,22 +95,25 @@ const viaGateway = (
     });
   });
 
-/** CONNECT through the proxy; resolves once the response head is complete. */
-const viaConnect = (host: string, port: number): Promise<{ head: string; socket: Socket }> =>
+/** CONNECT through the proxy; resolves once the response head is complete,
+ * carrying the body that followed the blank line (the refusal JSON). */
+const viaConnect = (host: string, port: number): Promise<{ head: string; body: string; socket: Socket }> =>
   new Promise((resolve, reject) => {
     const socket = connect({ host: "127.0.0.1", port: proxyPort }, () => {
       socket.write(`CONNECT ${host}:${port} HTTP/1.1\r\nHost: ${host}:${port}\r\n\r\n`);
     });
     let buffer = "";
+    let result: { head: string; body: string } | undefined;
     socket.on("data", function onData(chunk: Buffer): void {
       buffer += chunk.toString("utf8");
       const end = buffer.indexOf("\r\n\r\n");
       if (end === -1) return;
       socket.off("data", onData);
-      resolve({ head: buffer.slice(0, end), socket });
+      result = { head: buffer.slice(0, end), body: buffer.slice(end + 4).trim() };
+      resolve({ ...result, socket });
     });
     socket.on("error", reject);
-    socket.on("close", () => resolve({ head: buffer, socket }));
+    socket.on("close", () => resolve({ head: result?.head ?? buffer, body: result?.body ?? "", socket }));
   });
 
 beforeAll(async () => {
@@ -257,7 +260,7 @@ test("P8 CONNECT to an IPv4-mapped IPv6 loopback literal answers 403 and dials n
     const tunnel = await viaConnect("[::ffff:127.0.0.1]", origin.port);
     expect(tunnel.head).toContain(" 403 ");
     expect(tunnel.head).toContain("application/json");
-    expect(JSON.parse(tunnel.head.split("\r\n\r\n")[1] ?? "{}")).toEqual({ error: "egress: private address" });
+    expect(JSON.parse(tunnel.body || "{}")).toEqual({ error: "egress: private address" });
     tunnel.socket.destroy();
     expect(origin.hits()).toBe(0);
   } finally {
@@ -266,7 +269,8 @@ test("P8 CONNECT to an IPv4-mapped IPv6 loopback literal answers 403 and dials n
 });
 
 test("P9 isPrivateAddress classifies mapped, compatible and NAT64 IPv4-embedded forms per T18", async () => {
-  const { isPrivateAddress } = await import("../../sandbox/egress.mjs");
+  const egress = await import("../../sandbox/egress.mjs" as string);
+  const isPrivateAddress = (egress as { isPrivateAddress: (ip: unknown) => boolean }).isPrivateAddress;
   const privateCases = [
     "::ffff:10.0.0.1",
     "::ffff:a00:1",
