@@ -18,7 +18,7 @@ function tempRoot(prefix: string): Promise<string> {
 
 interface RawEntry {
   path: string;
-  type: "File" | "Directory" | "SymbolicLink";
+  type: "File" | "Directory" | "SymbolicLink" | "Link";
   data?: Buffer;
   linkpath?: string;
 }
