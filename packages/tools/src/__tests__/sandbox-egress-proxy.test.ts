@@ -224,3 +224,65 @@ test("P5 a request body travels through the gateway intact", async () => {
   expect(submitted?.body).toBe("payload-123");
   expect(submitted?.token).toBe("tok-body");
 });
+
+test("P6 an IPv4-mapped IPv6 loopback literal in the absolute URI answers 403 with no origin hit", async () => {
+  const origin = await originOn();
+  try {
+    const result = await viaProxy(`http://[::ffff:127.0.0.1]:${origin.port}/x`);
+    expect(result.status).toBe(403);
+    expect(JSON.parse(result.body)).toEqual({ error: "egress: private address" });
+    expect(origin.hits()).toBe(0);
+  } finally {
+    origin.close();
+  }
+});
+
+test("P7 the hex-mapped and IPv4-compatible loopback literals answer 403 with no origin hit", async () => {
+  const origin = await originOn();
+  try {
+    for (const host of ["::ffff:7f00:1", "::7f00:1"]) {
+      const result = await viaProxy(`http://[${host}]:${origin.port}/x`);
+      expect(result.status, host).toBe(403);
+      expect(JSON.parse(result.body)).toEqual({ error: "egress: private address" });
+    }
+    expect(origin.hits()).toBe(0);
+  } finally {
+    origin.close();
+  }
+});
+
+test("P8 CONNECT to an IPv4-mapped IPv6 loopback literal answers 403 and dials nothing", async () => {
+  const origin = await originOn();
+  try {
+    const tunnel = await viaConnect("[::ffff:127.0.0.1]", origin.port);
+    expect(tunnel.head).toContain(" 403 ");
+    expect(tunnel.head).toContain("application/json");
+    expect(JSON.parse(tunnel.head.split("\r\n\r\n")[1] ?? "{}")).toEqual({ error: "egress: private address" });
+    tunnel.socket.destroy();
+    expect(origin.hits()).toBe(0);
+  } finally {
+    origin.close();
+  }
+});
+
+test("P9 isPrivateAddress classifies mapped, compatible and NAT64 IPv4-embedded forms per T18", async () => {
+  const { isPrivateAddress } = await import("../../sandbox/egress.mjs");
+  const privateCases = [
+    "::ffff:10.0.0.1",
+    "::ffff:a00:1",
+    "::ffff:c0a8:101",
+    "::ffff:a9fe:a9fe",
+    "::ffff:6440:1",
+    "::ffff:0:0",
+    "::a00:1",
+    "64:ff9b::a00:1",
+    "::",
+    "::1",
+    "fd00::1",
+    "fe80::1",
+  ];
+  for (const address of privateCases) expect(isPrivateAddress(address), address).toBe(true);
+  const publicCases = ["8.8.8.8", "::ffff:808:808", "2606:4700::1111"];
+  for (const address of publicCases) expect(isPrivateAddress(address), address).toBe(false);
+  expect(isPrivateAddress("not-an-ip")).toBe(true);
+});

@@ -174,6 +174,20 @@ docker("E4 loopback, link-local and LAN destinations are refused 403; the server
   }
 });
 
+docker("E10 an IPv4-mapped IPv6 form of the LAN address is refused 403; the server sees nothing", async () => {
+  const lan = lanIPv4();
+  const lanServer = await httpOn(lan);
+  try {
+    const sandbox = await acquireWith("e10");
+    const mapped = `::ffff:${lan.split(".").map(Number).map((o) => o.toString(16)).join(":")}`;
+    const body = await proxyGet(sandbox, "egress-e10", `http://[${mapped}]:${lanServer.port}/ping`);
+    expect(JSON.parse(body)).toEqual({ error: "egress: private address" });
+    expect(lanServer.hits()).toBe(0);
+  } finally {
+    lanServer.server.close();
+  }
+});
+
 docker("E5 a host resolving to a private address via extra-hosts is refused before dialing", async () => {
   const sandbox = await acquireWith("e5", { extraHosts: { "private.test": "10.255.255.1" } });
   const body = await proxyGet(sandbox, "egress-e5", "http://private.test/ping");
