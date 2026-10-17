@@ -225,21 +225,36 @@ function noInnerTranscript(value: unknown): boolean {
     !/^(?:dom|elements|observations?|actions?|actionHistory|screenshotBase64|steps|pendingAction)$/i.test(key) && noInnerTranscript(item));
 }
 
+/** /api/health answers before the runtime accepts sessions, so a fresh server can still 503.
+ * Retry transient failures (network errors, 502/503/504) with backoff, bounded to ~60s; any other
+ * non-OK status fails at once. */
+async function postWhenReady(path: string, body: unknown): Promise<Response> {
+  const limit = Date.now() + 60_000;
+  let delay = 250;
+  for (let attempt = 1; ; attempt++) {
+    const response = await fetch(`${base}${path}`, {
+      method: "POST", headers: { "Content-Type": "application/json", Origin: "app://fabric" },
+      body: JSON.stringify(body), signal: AbortSignal.timeout(10_000),
+    }).catch((error: unknown) => error as Error);
+    if (response instanceof Response && response.ok) return response;
+    const transient = !(response instanceof Response) || [502, 503, 504].includes(response.status);
+    const detail = response instanceof Response ? `${response.status}: ${(await response.text()).slice(0, 200)}` : response.message;
+    if (serverError) throw serverError;
+    if (!transient || attempt >= 12 || Date.now() + delay > limit) throw new Error(`POST ${path} → ${detail} (attempt ${attempt})`);
+    await sleep(delay);
+    delay = Math.min(delay * 2, 5_000);
+  }
+}
+
 /** One live errand, over the session path: post the goal, then wait for the bridge's run.
  * The session loop routes handle_directly, recalls and calls browser_task (S8b); the errand's
  * own dedupe keys the bridge call, so a redelivered turn cannot start a second errand. */
 async function driveErrand(db: Db): Promise<BrowserResult> {
-  const created = (await (await fetch(`${base}/api/sessions`, {
-    method: "POST", headers: { "Content-Type": "application/json", Origin: "app://fabric" },
-    body: JSON.stringify({ agentId: "dana" }),
-  })).json()) as { sessionId: string };
+  const created = (await (await postWhenReady("/api/sessions", { agentId: "dana" })).json()) as { sessionId: string };
   if (!created.sessionId) throw new Error("session creation returned no id");
   sessionId = created.sessionId;
-  const posted = await fetch(`${base}/api/sessions/${sessionId}/messages`, {
-    method: "POST", headers: { "Content-Type": "application/json", Origin: "app://fabric" },
-    body: JSON.stringify({ clientMessageId: randomUUID(), text: goal }),
-  });
-  if (!posted.ok) throw new Error(`session message → ${posted.status}: ${(await posted.text()).slice(0, 200)}`);
+  // One clientMessageId across retries: the session dedupes on it, so a retry never posts the goal twice.
+  await postWhenReady(`/api/sessions/${sessionId}/messages`, { clientMessageId: randomUUID(), text: goal });
 
   // The bridge's errand run, then its terminal state. The budget row carries the
   // compact result; the SSE desktop (subscribed above) observes it live.
