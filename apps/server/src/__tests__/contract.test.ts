@@ -94,7 +94,7 @@ describe("retired chat path (S14)", () => {
       body: JSON.stringify({ sessionId: "c1", messages: [{ role: "user", content: [{ type: "text", text: "hi" }] }] }),
     });
 
-  it("POST /api/chat is gone (404, not a method mismatch on a living route)", async () => {
+  it("X2 POST /api/chat is gone (404, not a method mismatch on a living route)", async () => {
     const res = await postChat();
     expect(res.status).toBe(404);
   });
@@ -103,7 +103,7 @@ describe("retired chat path (S14)", () => {
 // The legacy history reads, against the live schema: S12/S13 render old threads read-only.
 // The reads serve at /api/sessions/:id(+/messages) — routes/chat.ts is mounted at the API root.
 suite("retired chat path: the legacy history reads survive", () => {
-  it("GET /api/sessions/:id and /messages answer 200 for a legacy session", async () => {
+  it("X2 GET /api/sessions/:id and /messages answer 200 for a legacy session", async () => {
     // A database with no legacy thread still must prove the reads: seed one row
     // (ours alone, removed below — the running database is never pristine).
     const existing = (await db.db.execute(sql`select id from sessions order by ord limit 1`)).rows as { id: string }[];
