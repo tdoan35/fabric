@@ -127,7 +127,7 @@ Model token deltas never enter the log: they are pushed live (§8) and the final
 | `delegate.resolve`, `run.finalize` | 30 s | — | until done (idempotent) |
 | `deliver` | 30 s | — | backoff up to 24 h, then a failed-delivery fact the UI shows |
 
-Starting values; the spike adjusts them. A job whose heartbeat goes stale is handed to another worker.
+Starting values; the spike adjusts them. A job whose heartbeat goes stale is handed to another worker. Idle worker loops do not poll: they sleep on the queue's wake, the next due time or the lease expiry, and the backstop (`RUNTIME_IDLE_BACKSTOP_MS`, ten minutes) only bounds a lost wake (R17).
 
 **Sandbox slots (T16).** Wherever step-2 tools run (Docker or Sprites), a per-workspace cap on concurrent sandbox tool calls holds one slot **per tool call, never per run**, over a runtime-owned `sandbox_slots` table — `acquire` grants when fewer than the cap are held and no waiter ranks ahead (chat turns — `session:` streams — first, then the older ask), `release` and `heartbeat` ride the call, and a held slot whose heartbeat is older than 60 s is reclaimable, so a crashed worker never leaks one. A refused `tool.exec` appends the fact `tool.queued` — one fact per transition, so a later waiting period (a retry that waits again) or a return to an earlier position records anew, while a repeat of the position the fold still reports appends nothing — and defers its job 2 s — the attempt count untouched, a queue wait is not a retry — and runs nothing; when granted it appends `tool.dequeued` with the wait (one per waiting period), holds the slot through the run heartbeating with the lease, and releases it on completion or on any failure after the grant. Host mode wires no slots.
 
@@ -316,7 +316,7 @@ Decided: own table (the 2026-10-12 bullet under Decided above). Hermes Agent's h
 
 **Still open**
 1. **Token streaming transport** under load in the cloud: NOTIFY payloads are capped at 8 KB and share one channel.
-2. **Idle database traffic** from the queue's polling, and whether Neon can scale to zero under it.
+2. **Idle database traffic** from the queue's polling, and whether Neon can scale to zero under it — answered by R12's measurement (2026-10-15, ANY-38): the shipped daemon idled at 2 292 statements/min on Neon via `pg_stat_statements`, ~38× the 60/min budget (one claimer alone: 295/min PGlite and local Postgres, 221/min Neon), so a scale-to-zero compute never suspends under a running server (`SELECT 1` held 62–71 ms through a 6-minute idle window). The design (ANY-100 R17): idle loops sleep on the queue's wake, the next due time or the lease expiry, with `RUNTIME_IDLE_BACKSTOP_MS` (600 000 = 10 min) covering only a lost wake, and the LISTEN connection re-established lazily on the next claim. The Neon suspend check after merge is Ty's manual step (ANY-101).
 
 ## 15. Spike
 

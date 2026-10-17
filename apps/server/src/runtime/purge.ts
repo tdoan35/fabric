@@ -133,23 +133,47 @@ const sleep = (ms: number): Promise<void> =>
 /**
  * The daemon side: claim `session.purge` and run it, the worker loop's shape
  * for the one type the runtime loop does not dispatch. Never throws for long.
+ * With `idleBackstopMs` and a queue that has `claimWaiting` (R17), the idle
+ * wait is the claim: the loop sleeps on the wake, the next due time or the
+ * lease expiry, bounded by the backstop; the signal aborts the wait. Otherwise
+ * it polls `pollIntervalMs` as before.
  */
 export async function runPurgeLoop(
   store: RuntimeStore,
   queue: Queue,
   signal: AbortSignal | undefined,
   workerId: string,
-  pollIntervalMs = 1_000
+  pollIntervalMs = 1_000,
+  idleBackstopMs?: number
 ): Promise<void> {
+  const claimWaiting = queue.claimWaiting?.bind(queue);
+  const waiting =
+    claimWaiting !== undefined && idleBackstopMs !== undefined
+      ? {
+          backstopMs: idleBackstopMs,
+          now: (): number => Date.now(),
+          ...(signal !== undefined ? { signal } : {}),
+        }
+      : undefined;
   while (signal?.aborted !== true) {
     let lease: Awaited<ReturnType<Queue["claim"]>> = null;
-    try {
-      lease = await queue.claim(workerId, ["session.purge"], Date.now());
-    } catch {
-      lease = null;
+    if (waiting !== undefined && claimWaiting !== undefined) {
+      try {
+        lease = await claimWaiting(workerId, ["session.purge"], waiting);
+      } catch {
+        lease = null;
+        await sleep(pollIntervalMs);
+        continue;
+      }
+    } else {
+      try {
+        lease = await queue.claim(workerId, ["session.purge"], Date.now());
+      } catch {
+        lease = null;
+      }
     }
     if (lease === null) {
-      await sleep(pollIntervalMs);
+      if (waiting === undefined) await sleep(pollIntervalMs);
       continue;
     }
     try {

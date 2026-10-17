@@ -45,8 +45,14 @@ export type WorkerOptions = {
   types?: readonly string[];
   /** Injected clock for claims, heartbeats and failure bookkeeping. */
   now?: () => number;
-  /** Idle-poll interval of the daemon; 1s when unset. */
+  /** Idle-poll interval of the daemon; 1s when unset. Ignored when the queue
+   * has `claimWaiting` — see `idleBackstopMs`. */
   pollIntervalMs?: number;
+  /** R17: the idle claim-wait's backstop (ms) when the queue has
+   * `claimWaiting` — the loop sleeps on the wake, the next due time or the
+   * lease expiry, and the backstop only bounds a lost wake. A queue without
+   * `claimWaiting` keeps the `pollIntervalMs` poll. */
+  idleBackstopMs?: number;
   /** Stops the daemon when aborted. */
   signal?: AbortSignal;
 };
@@ -110,6 +116,18 @@ async function withHeartbeat<T>(lease: QueueLease, options: WorkerOptions, run: 
   }
 }
 
+/** One claimed lease, run to its handler's outcome; errors are the handler's
+ * bookkeeping (retry backoff, lease reclaim) — never the loop's. */
+async function runLease(lease: QueueLease, options: WorkerOptions): Promise<void> {
+  try {
+    await withHeartbeat(lease, options, () => dispatch(lease, options));
+  } catch {
+    // the handler recorded the failure and the retry is backed off; the next
+    // pass claims past it. A lease whose handler died before failing is
+    // reclaimed once its window lapses — never spun on this instant.
+  }
+}
+
 /** One claim-and-run pass; false when nothing was claimable. */
 async function runOnce(options: WorkerOptions): Promise<boolean> {
   const lease = await options.queue.claim(
@@ -118,13 +136,7 @@ async function runOnce(options: WorkerOptions): Promise<boolean> {
     nowOf(options)()
   );
   if (lease === null) return false;
-  try {
-    await withHeartbeat(lease, options, () => dispatch(lease, options));
-  } catch {
-    // the handler recorded the failure and the retry is backed off; the next
-    // pass claims past it. A lease whose handler died before failing is
-    // reclaimed once its window lapses — never spun on this instant.
-  }
+  await runLease(lease, options);
   return true;
 }
 
@@ -146,11 +158,27 @@ export async function runUntilIdle(options: WorkerOptions, maxPasses = 1000): Pr
 }
 
 /**
- * The daemon: claim and run, idling `pollIntervalMs` between empty passes,
- * until the signal aborts. Errors never kill it — a failed job is the
- * handler's retry bookkeeping, a crashed one the lease's reclaim.
+ * The daemon: claim and run until the signal aborts. When the queue has
+ * `claimWaiting` the idle wait is the claim itself — the loop sleeps on the
+ * wake, the next due time or the lease expiry, bounded by `idleBackstopMs`
+ * (R17); otherwise it polls `pollIntervalMs` as before. Errors never kill it —
+ * a failed job is the handler's retry bookkeeping, a crashed one the lease's
+ * reclaim.
  */
 export async function runWorker(options: WorkerOptions): Promise<void> {
+  const claimWaiting = options.queue.claimWaiting?.bind(options.queue);
+  if (claimWaiting !== undefined) {
+    const waiting = {
+      backstopMs: options.idleBackstopMs ?? options.pollIntervalMs ?? 1_000,
+      now: nowOf(options),
+      ...(options.signal !== undefined ? { signal: options.signal } : {}),
+    };
+    while (options.signal?.aborted !== true) {
+      const lease = await claimWaiting(options.workerId, options.types ?? WORKER_JOB_TYPES, waiting);
+      if (lease !== null) await runLease(lease, options);
+    }
+    return;
+  }
   const pollMs = options.pollIntervalMs ?? 1_000;
   while (options.signal?.aborted !== true) {
     if (await runOnce(options)) continue;
