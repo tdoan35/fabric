@@ -4,6 +4,8 @@
   "version": "1.0.0",
   "dependencies": {
     "@fabric/contracts": "file:../../packages/contracts",
+    "eslint": "^9.39.5",
+    "eslint-config-expo": "~57.0.2",
     "expo": "~57.0.26",
     "expo-constants": "~57.0.20",
     "expo-font": "~57.0.4",
@@ -33,6 +35,7 @@
     "android": "expo start --android",
     "ios": "expo start --ios",
     "web": "expo start --web",
+    "lint": "expo lint",
     "typecheck": "tsc --noEmit"
   },
   "private": true
