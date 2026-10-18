@@ -179,7 +179,13 @@ docker("E10 an IPv4-mapped IPv6 form of the LAN address is refused 403; the serv
   const lanServer = await httpOn(lan);
   try {
     const sandbox = await acquireWith("e10");
-    const mapped = `::ffff:${lan.split(".").map(Number).map((o) => o.toString(16)).join(":")}`;
+    // The IPv4-mapped form of the LAN address, hex groups per RFC 5952 §4:
+    // the last 32 bits are TWO 16-bit groups (`::ffff:a00:cb`), not one group
+    // per octet — `::ffff:a:0:0:cb` is a different address with the mapped
+    // prefix in the wrong place, and dials as plain IPv6 (no route in the
+    // v4-only sandbox network; the CI failure this corrects).
+    const octets = lan.split(".").map(Number);
+    const mapped = `::ffff:${(octets[0] << 8 | octets[1]).toString(16)}:${(octets[2] << 8 | octets[3]).toString(16)}`;
     const body = await proxyGet(sandbox, "egress-e10", `http://[${mapped}]:${lanServer.port}/ping`);
     expect(JSON.parse(body)).toEqual({ error: "egress: private address" });
     expect(lanServer.hits()).toBe(0);
