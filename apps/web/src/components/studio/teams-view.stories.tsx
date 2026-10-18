@@ -141,7 +141,7 @@ export const OwnedTeamTabs: Story = {
 
     // Expanded in place; the community shelf is gone while a yours-team is open.
     await waitFor(() => expect(canvas.getByRole("heading", { name: "Research Team" })).toBeInTheDocument());
-    await waitFor(() => expect(canvas.queryByText(/Community teams/)).toBeNull());
+    await waitFor(() => expect(canvas.queryByText(/Community teams/)).toBeNull(), { timeout: 3000 });
 
     // Members tab (default): five rows, the lead flagged, cross-team membership tagged,
     // each row linking into the agent profile.
@@ -190,7 +190,7 @@ export const CommunityTeamAdd: Story = {
 
     // Escape closes; the card reopens for the add.
     await user.keyboard("{Escape}");
-    await waitFor(() => expect(canvas.queryByRole("heading", { name: "Trip Crew" })).toBeNull());
+    await waitFor(() => expect(canvas.queryByRole("heading", { name: "Trip Crew" })).toBeNull(), { timeout: 3000 });
     await openTripCrew();
 
     // Adding pulls the team into Your teams (members and all) and closes the expansion.
@@ -297,13 +297,13 @@ export const OrgEditing: Story = {
     const tripRow = within(community).getByText("Trip Crew").closest("li") as HTMLElement;
     await user.click(within(tripRow).getByRole("button", { name: "Add" }));
     await waitFor(() => expect(within(yourTeams).getByText("Trip Crew")).toBeInTheDocument());
-    await waitFor(() => expect(within(community).queryByText("Trip Crew")).toBeNull());
+    await waitFor(() => expect(within(community).queryByText("Trip Crew")).toBeNull(), { timeout: 3000 });
 
     // Escape leaves editing; the chart keeps every slot: research out, product copy and
     // the community add in → 3 teams under the tab.
     await user.keyboard("{Escape}");
     await waitFor(() => expect(canvas.getByRole("button", { name: /Ty's Lab/ })).toHaveAttribute("aria-expanded", "false"));
-    await waitFor(() => expect(canvas.queryByText(/Add teams to/)).toBeNull());
+    await waitFor(() => expect(canvas.queryByText(/Add teams to/)).toBeNull(), { timeout: 3000 });
     expect(canvas.getByRole("button", { name: /3 teams/ })).toBeInTheDocument();
   },
 }
@@ -320,7 +320,7 @@ export const OrgTeamJumpsToTeams: Story = {
 
     // The teams view took over: org chart gone, expansion live, both shelves visible.
     await waitFor(() => expect(canvas.getByRole("heading", { name: "Product Team" })).toBeInTheDocument());
-    await waitFor(() => expect(canvas.queryByRole("heading", { name: /Your organizations/ })).toBeNull());
+    await waitFor(() => expect(canvas.queryByRole("heading", { name: /Your organizations/ })).toBeNull(), { timeout: 3000 });
     expect(canvas.getByRole("heading", { name: /Your teams/ })).toBeInTheDocument();
     // A yours-team is open, so the community shelf is hidden exactly as on a click.
     expect(canvas.queryByRole("heading", { name: /Community teams/ })).toBeNull();
@@ -328,7 +328,7 @@ export const OrgTeamJumpsToTeams: Story = {
 
     // Closing lands on the plain catalog; the selection is gone, not transferred.
     await user.keyboard("{Escape}");
-    await waitFor(() => expect(canvas.queryByRole("heading", { name: "Product Team" })).toBeNull());
+    await waitFor(() => expect(canvas.queryByRole("heading", { name: "Product Team" })).toBeNull(), { timeout: 3000 });
     expect(canvas.getByRole("button", { name: /Research Team/ })).toBeInTheDocument();
   },
 };

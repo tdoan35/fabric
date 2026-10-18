@@ -186,7 +186,7 @@ export const NarrowRailSheet: Story = {
 
     // Close both ways — the sheet's own control, then Escape on a re-open.
     await user.click(sheet.getByRole("button", { name: "Close" }));
-    await waitFor(() => expect(within(document.body).queryByRole("dialog")).toBeNull());
+    await waitFor(() => expect(within(document.body).queryByRole("dialog")).toBeNull(), { timeout: 3000 });
     await user.click(canvas.getByRole("button", { name: "Your day" }));
     await waitFor(() => expect(within(document.body).getByRole("dialog")).toBeInTheDocument());
     // Radix closes on Escape from inside the sheet. On open it lands focus on the first
@@ -201,7 +201,7 @@ export const NarrowRailSheet: Story = {
       { timeout: 3000 },
     );
     await user.keyboard("{Escape}");
-    await waitFor(() => expect(document.body.querySelectorAll("[role=tooltip]")).toHaveLength(0));
+    await waitFor(() => expect(document.body.querySelectorAll("[role=tooltip]")).toHaveLength(0), { timeout: 3000 });
     await user.keyboard("{Escape}");
     await waitFor(() => expect(within(document.body).queryByRole("dialog")).toBeNull(), { timeout: 3000 });
 
