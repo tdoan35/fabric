@@ -2,7 +2,7 @@
 // (agents/, projects/, runs/ under one root), the name rule, pack/unpack
 // round-trips, refused entries, atomic replace and size. Cases F1–F4 and F8
 // from the card; grants and retention live in their own files.
-import { chmod, mkdir, mkdtemp, readdir, readFile, stat, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, rename, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { Readable } from "node:stream";
@@ -237,31 +237,91 @@ test("F20 replace with an empty archive empties the folder yet keeps the folder 
 
 test("F21 a replace whose staging rename fails restores the original contents", async () => {
   const root = await tempRoot("folders-f21-");
-  const folders = localFolders(root);
   const ref: FolderRef = { kind: "run", name: "rollback" };
+
+  const calls: Array<[string, string]> = [];
+  let injected: Error | undefined;
+  const folders = localFolders(root, async (from, to) => {
+    calls.push([from, to]);
+    // The seam fails only the staging -> dir rename, after the original was
+    // moved aside: the window F21 exists for. The rollback rename (old -> dir)
+    // goes through untouched.
+    if (path.basename(from).includes(".unpack-") && to === dir) {
+      injected = Object.assign(new Error("F21: injected staging rename failure"), { code: "EIO" });
+      throw injected;
+    }
+    await rename(from, to);
+  });
 
   const dir = await folders.path(ref);
   await writeFile(path.join(dir, "old.txt"), "old");
 
-  // Deterministic rename failure: a read-only `runs/` parent denies
-  // rename(staging, dir) with EACCES — after the old dir was moved aside,
-  // exactly the window F21 exists for.
   const fresh = await tarball([{ path: "new.txt", type: "File", data: Buffer.from("new") }]);
-  const runsDir = path.join(root, "runs");
-  const originalMode = (await stat(runsDir)).mode;
-  await chmod(runsDir, 0o555); // r-x: rename(staging, dir) fails EACCES
+  const failure = await folders.unpack(ref, Readable.from([fresh]), { replace: true }).then(
+    () => undefined,
+    (error: unknown) => error
+  );
 
-  let failure: unknown;
-  try {
-    await folders.unpack(ref, Readable.from([fresh]), { replace: true });
-  } catch (error) {
-    failure = error;
-  } finally {
-    await chmod(runsDir, originalMode);
-  }
-  expect(failure, "the injected rename failure happened").toBeDefined();
+  // The failure really hit the staging rename, not an earlier step.
+  expect(failure).toBe(injected);
+  expect(calls.some(([from, to]) => path.basename(from).includes(".unpack-") && to === dir)).toBe(true);
 
-  // The old contents survived the failed swap.
+  // The old contents survived the failed swap, and no backup is left behind.
   expect(await readdir(dir)).toEqual(["old.txt"]);
   expect(await readFile(path.join(dir, "old.txt"), "utf8")).toBe("old");
+  expect((await readdir(path.join(root, "runs"))).sort()).toEqual(["rollback"]);
+});
+
+test("F21b replace creates an absent destination with a nonempty archive", async () => {
+  const root = await tempRoot("folders-f21b-");
+  const folders = localFolders(root);
+  const ref: FolderRef = { kind: "run", name: "fresh" };
+  expect(await folders.exists(ref)).toBe(false);
+
+  const archive = await tarball([{ path: "new.txt", type: "File", data: Buffer.from("new") }]);
+  await folders.unpack(ref, Readable.from([archive]), { replace: true });
+
+  const dir = path.join(root, "runs", "fresh");
+  expect(await readdir(dir)).toEqual(["new.txt"]);
+  expect(await readFile(path.join(dir, "new.txt"), "utf8")).toBe("new");
+  expect((await readdir(path.join(root, "runs"))).sort()).toEqual(["fresh"]);
+});
+
+test("F21c a failed staging rename whose rollback also fails keeps the backup and surfaces the recovery failure", async () => {
+  const root = await tempRoot("folders-f21c-");
+  const ref: FolderRef = { kind: "run", name: "stuck" };
+  const dir = path.join(root, "runs", "stuck");
+  let injected: Error | undefined;
+
+  // Both renames of interest fail: staging -> dir, and the rollback old -> dir
+  // (a concurrent destination now occupies the name). The original must not
+  // be deleted.
+  const folders = localFolders(root, async (from, to) => {
+    const fromName = path.basename(from);
+    if (to === dir && (fromName.includes(".unpack-") || fromName.includes(".old-"))) {
+      if (fromName.includes(".unpack-")) injected = new Error("F21c: ENOTEMPTY staging rename");
+      throw Object.assign(new Error("F21c: destination busy"), { code: "ENOTEMPTY" });
+    }
+    await rename(from, to);
+  });
+
+  await folders.path(ref);
+  await writeFile(path.join(dir, "old.txt"), "old");
+
+  const archive = await tarball([{ path: "new.txt", type: "File", data: Buffer.from("new") }]);
+  const failure = await folders.unpack(ref, Readable.from([archive]), { replace: true }).then(
+    () => undefined,
+    (error: unknown) => error as Error
+  );
+  expect(injected, "the staging rename failed").toBeDefined();
+  expect(failure?.message).toMatch(/not restored/);
+
+  // The originals are still on disk, under a `.old-*` sibling.
+  const siblings = await readdir(path.join(root, "runs"));
+  const backup = siblings.find((name) => name.startsWith("stuck.old-"));
+  expect(backup, "the backup is kept").toBeDefined();
+  expect(failure?.message).toContain(path.join("runs", backup!));
+  expect(await readFile(path.join(root, "runs", backup!, "old.txt"), "utf8")).toBe("old");
+  // No staging leftovers: they carry no original data.
+  expect(siblings.some((name) => name.includes(".unpack-"))).toBe(false);
 });

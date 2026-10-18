@@ -11,6 +11,14 @@ export const RUN_FOLDER_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
  * loop (or a hostile tree) from hanging the daily sweeper. */
 export const SWEEP_MAX_ENTRIES = 10_000;
 
+/** What one scan learned: the newest mtime seen, and whether it saw enough.
+ * `complete` is false when the entry cap stopped the walk with paths still
+ * unvisited — an incomplete scan cannot vouch for the run's age. */
+export interface MtimeScan {
+  newest: number;
+  complete: boolean;
+}
+
 export interface SweepOptions {
   /** The cutoff age; defaults to RUN_FOLDER_RETENTION_MS. */
   olderThanMs?: number;
@@ -18,24 +26,28 @@ export interface SweepOptions {
   now?: number;
 }
 
-/** The newest mtime anywhere under dir, parents before children, links never
- * followed and the walk bounded (SWEEP_MAX_ENTRIES visits): a directory
- * symlink — `loop -> .`, or one escaping the run tree — counts as a leaf and
- * is never descended into, so the sweep cannot hang or stat outside the tree.
- * Absent dirs come back as -1. */
-async function newestMtime(
+/** One bounded walk of dir: parents before children, links never followed
+ * (`lstat` only), a directory symlink — `loop -> .`, or one escaping the run
+ * tree — treated as a leaf and never descended into, so the sweep cannot hang
+ * or stat outside the tree. Returns -1 for an absent dir. */
+export async function scanMtime(
   dir: string,
-  onVisit?: (abs: string) => void,
-): Promise<number> {
+  onLstat?: (abs: string) => void,
+): Promise<MtimeScan> {
   let newest = -1;
   let visited = 0;
+  let complete = true;
   const stack: string[] = [dir];
-  while (stack.length > 0 && visited < SWEEP_MAX_ENTRIES) {
+  while (stack.length > 0) {
     const current = stack.pop()!;
+    if (visited >= SWEEP_MAX_ENTRIES) {
+      complete = false;
+      break;
+    }
+    onLstat?.(current);
     const info = await lstat(current).catch(() => undefined);
     if (info === undefined) continue;
     visited++;
-    onVisit?.(current);
     newest = Math.max(newest, info.mtimeMs);
     // Only real directories are walked; a symlink to one is a leaf, so the
     // scan stays inside the run tree even with `loop -> .` present.
@@ -45,16 +57,20 @@ async function newestMtime(
       }
     }
   }
-  return newest;
+  if (stack.length > 0) complete = false;
+  return { newest, complete };
 }
 
 /** Removes every `runs/*` folder whose newest file is older than the cutoff,
- * and returns the names it removed. Agent and project folders are never touched.
- * The per-folder scan takes an optional visitor for tests (every path the
- * newest-mtime walk touches, in visit order). */
+ * and returns the names it removed. Agent and project folders are never
+ * touched. A run is kept whenever the scan could not establish the age of
+ * every entry (the cap truncated the walk), so a fresh file beyond the cap
+ * never loses its folder.
+ * The per-folder scan takes an optional visitor for tests: every path the
+ * walk is about to `lstat` (the only stat the sweep ever performs). */
 export async function sweepRuns(
   folders: FolderStore,
-  opts: SweepOptions & { onVisit?: (abs: string) => void } = {},
+  opts: SweepOptions & { onLstat?: (abs: string) => void } = {},
 ): Promise<string[]> {
   const olderThanMs = opts.olderThanMs ?? RUN_FOLDER_RETENTION_MS;
   const now = opts.now ?? Date.now();
@@ -68,8 +84,8 @@ export async function sweepRuns(
 
   const removed: string[] = [];
   for (const name of names.sort()) {
-    const newest = await newestMtime(path.join(runsDir, name), opts.onVisit);
-    if (newest !== -1 && newest < cutoff) {
+    const { newest, complete } = await scanMtime(path.join(runsDir, name), opts.onLstat);
+    if (complete && newest !== -1 && newest < cutoff) {
       await folders.remove({ kind: "run", name });
       removed.push(name);
     }
