@@ -210,15 +210,27 @@ export function localFolders(root: string): FolderStore {
       const dir = dirFor(ref);
       const plans = planEntries(await readArchive(source), dir);
       if (opts?.replace === true) {
+        // The staging dir exists even for an empty archive (no plans would
+        // create it): mkdir first, and the old dir survives until the rename —
+        // a failure anywhere rolls the old contents back into place.
         const staging = `${dir}.unpack-${randomBytes(4).toString("hex")}`;
+        const old = `${dir}.old-${randomBytes(4).toString("hex")}`;
+        await mkdir(staging, { recursive: true });
         try {
           await writePlans(plans, staging);
-          await rm(dir, { recursive: true, force: true });
-          await rename(staging, dir);
+          await rename(dir, old);
+          try {
+            await rename(staging, dir);
+          } catch (error) {
+            await rename(old, dir).catch(() => undefined);
+            throw error;
+          }
         } catch (error) {
           await rm(staging, { recursive: true, force: true });
+          await rm(old, { recursive: true, force: true });
           throw error;
         }
+        await rm(old, { recursive: true, force: true });
       } else {
         await writePlans(plans, dir);
       }

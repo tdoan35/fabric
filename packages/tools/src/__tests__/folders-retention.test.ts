@@ -1,7 +1,7 @@
 // ANY-86 T10 — run-folder retention: sweepRuns removes runs/* whose newest
 // entry is older than the cutoff, on a fake clock, and never touches agent or
 // project folders. Cases F7, F22 and F23 from the cards.
-import { mkdir, mkdtemp, readdir, symlink, utimes, writeFile } from "node:fs/promises";
+import { lutimes, mkdir, mkdtemp, readdir, symlink, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { expect, test } from "vitest";
@@ -77,8 +77,10 @@ test("F22 a run folder with a loop symlink (dot -> .) sweeps without hanging, bo
   await symlink(root, path.join(linked, "outside"));
 
   await age(looped, now - 8 * DAY);
-  // `age` refuses to descend through symlinked dirs? It checks isDirectory on
-  // the dirent, which is false for a link, so timestamps above are enough.
+  // `utimes` follows the link and backdates the folder itself, not the
+  // entry: backdate the loop link with `lutimes` so every entry under
+  // looped reads stale to the sweep.
+  await lutimes(path.join(looped, "loop"), new Date(now - 8 * DAY), new Date(now - 8 * DAY));
 
   const removed = await Promise.race([
     sweepRuns(folders, { olderThanMs: 7 * DAY, now }),
@@ -89,17 +91,29 @@ test("F22 a run folder with a loop symlink (dot -> .) sweeps without hanging, bo
   expect(await folders.exists({ kind: "run", name: "looped" })).toBe(false);
   expect(await folders.exists({ kind: "run", name: "linked" })).toBe(true);
 
-  // Bounded traversal: the walk visits a small capped number of entries, never
-  // unbounded expansion through the loop.
-  const { newestMtimeProbe } = await import("../folders");
+  // Bounded, inside-the-tree traversal: a fresh run folder with the same
+  // loop, scanned with a visitor — the walk is small (the loop is a leaf,
+  // not expanded) and never leaves runs/looped2.
+  const looped2 = await folders.path({ kind: "run", name: "looped-two" });
+  await writeFile(path.join(looped2, "out.txt"), "two");
+  await symlink(".", path.join(looped2, "loop"));
   const visits: string[] = [];
-    const seen = newestMtimeProbe.track(looped, (p) => visits.push(p));
-    expect(seen).toBeGreaterThan(0);
+  await sweepRuns(folders, {
+    olderThanMs: 7 * DAY,
+    now,
+    onVisit: (abs) => {
+      if (abs.startsWith(looped2)) visits.push(abs);
+    },
+  });
+  expect(visits.length).toBeGreaterThan(0);
   expect(visits.length).toBeLessThan(1000);
-  // Every visited path stays inside the run folder.
-  for (const visited of visits) {
-    expect(visited.startsWith(looped + path.sep) || visited === looped).toBe(true);
+  const unique = [...new Set(visits)].sort();
+  expect(unique.length).toBeLessThan(10);
+  for (const visited of unique) {
+    expect(visited.startsWith(looped2 + path.sep) || visited === looped2).toBe(true);
   }
+  // The sweep visits the runs root for the scan, not the run folder itself.
+  expect(visits.filter((v) => v === path.join(root, "runs"))).toHaveLength(0);
 });
 
 test("F23 an expired normal run folder is still swept exactly as today", async () => {

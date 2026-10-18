@@ -236,35 +236,30 @@ test("F20 replace with an empty archive empties the folder yet keeps the folder 
 });
 
 test("F21 a replace whose staging rename fails restores the original contents", async () => {
-    const source = localFolders(await tempRoot("folders-f21-src-"));
   const root = await tempRoot("folders-f21-");
   const folders = localFolders(root);
   const ref: FolderRef = { kind: "run", name: "rollback" };
 
-  const src = await source.path({ kind: "agent", name: "newer" });
-  await writeFile(path.join(src, "new.txt"), "new");
-
   const dir = await folders.path(ref);
   await writeFile(path.join(dir, "old.txt"), "old");
 
-  // Sabotage the rename: a directory entry occupies the target name the
-  // staging swap wants? No — the rename target is `dir` itself; instead make
-  // the staging rename fail by holding a file open? Simplest deterministic
-  // failure: remove the staging dir between write and rename is inside the
-  // store. Inject via a packed entry whose write succeeds but whose presence
-  // makes rename fail: a symlink loop inside staging does not affect rename.
-  // The honest seam: a read-only parent? Use chmod on the root to make
-  // rename(staging, dir) fail with EACCES after rm already happened.
+  // Deterministic rename failure: a read-only `runs/` parent denies
+  // rename(staging, dir) with EACCES — after the old dir was moved aside,
+  // exactly the window F21 exists for.
   const fresh = await tarball([{ path: "new.txt", type: "File", data: Buffer.from("new") }]);
-  const originalMode = (await stat(root)).mode;
-  await chmod(root, 0o500); // r-x: rename into place fails after the rm
+  const runsDir = path.join(root, "runs");
+  const originalMode = (await stat(runsDir)).mode;
+  await chmod(runsDir, 0o555); // r-x: rename(staging, dir) fails EACCES
 
+  let failure: unknown;
   try {
     await folders.unpack(ref, Readable.from([fresh]), { replace: true });
-    // restore so the assertions can run
+  } catch (error) {
+    failure = error;
   } finally {
-    await chmod(root, originalMode);
+    await chmod(runsDir, originalMode);
   }
+  expect(failure, "the injected rename failure happened").toBeDefined();
 
   // The old contents survived the failed swap.
   expect(await readdir(dir)).toEqual(["old.txt"]);
