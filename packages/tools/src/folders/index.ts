@@ -19,4 +19,4 @@ export {
   type FolderGrants,
   type FolderMount,
 } from "./grants";
-export { RUN_FOLDER_RETENTION_MS, sweepRuns, type SweepOptions } from "./retention";
+export { RUN_FOLDER_RETENTION_MS, SWEEP_MAX_ENTRIES, sweepRuns, type SweepOptions } from "./retention";
