@@ -2,7 +2,7 @@
 // (agents/, projects/, runs/ under one root), the name rule, pack/unpack
 // round-trips, refused entries, atomic replace and size. Cases F1–F4 and F8
 // from the card; grants and retention live in their own files.
-import { mkdir, mkdtemp, readdir, readFile, stat, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readdir, readFile, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { Readable } from "node:stream";
@@ -212,4 +212,61 @@ test("F8 size sums the file bytes across nesting and is zero for an empty folder
 
   await folders.path({ kind: "run", name: "hollow" });
   expect(await folders.size({ kind: "run", name: "hollow" })).toBe(0);
+});
+
+test("F20 replace with an empty archive empties the folder yet keeps the folder itself", async () => {
+  const root = await tempRoot("folders-f20-");
+  const folders = localFolders(root);
+  const ref: FolderRef = { kind: "run", name: "wipe" };
+
+  const dir = await folders.path(ref);
+  await writeFile(path.join(dir, "keep.txt"), "keep");
+
+  // A tar with no entries at all: no plans, so the staging dir was never
+  // created and the pre-F20 replace deleted the folder, then failed the
+  // rename with ENOENT, leaving it gone (A4 probe).
+  const empty = await tarball([]);
+  await folders.unpack(ref, Readable.from([empty]), { replace: true });
+
+  expect((await stat(dir)).isDirectory()).toBe(true);
+  expect(await readdir(dir)).toEqual([]);
+  expect(await readFile(path.join(dir, "keep.txt")).catch(() => Buffer.from("gone"))).toEqual(
+    Buffer.from("gone")
+  );
+});
+
+test("F21 a replace whose staging rename fails restores the original contents", async () => {
+    const source = localFolders(await tempRoot("folders-f21-src-"));
+  const root = await tempRoot("folders-f21-");
+  const folders = localFolders(root);
+  const ref: FolderRef = { kind: "run", name: "rollback" };
+
+  const src = await source.path({ kind: "agent", name: "newer" });
+  await writeFile(path.join(src, "new.txt"), "new");
+
+  const dir = await folders.path(ref);
+  await writeFile(path.join(dir, "old.txt"), "old");
+
+  // Sabotage the rename: a directory entry occupies the target name the
+  // staging swap wants? No — the rename target is `dir` itself; instead make
+  // the staging rename fail by holding a file open? Simplest deterministic
+  // failure: remove the staging dir between write and rename is inside the
+  // store. Inject via a packed entry whose write succeeds but whose presence
+  // makes rename fail: a symlink loop inside staging does not affect rename.
+  // The honest seam: a read-only parent? Use chmod on the root to make
+  // rename(staging, dir) fail with EACCES after rm already happened.
+  const fresh = await tarball([{ path: "new.txt", type: "File", data: Buffer.from("new") }]);
+  const originalMode = (await stat(root)).mode;
+  await chmod(root, 0o500); // r-x: rename into place fails after the rm
+
+  try {
+    await folders.unpack(ref, Readable.from([fresh]), { replace: true });
+    // restore so the assertions can run
+  } finally {
+    await chmod(root, originalMode);
+  }
+
+  // The old contents survived the failed swap.
+  expect(await readdir(dir)).toEqual(["old.txt"]);
+  expect(await readFile(path.join(dir, "old.txt"), "utf8")).toBe("old");
 });

@@ -1,7 +1,7 @@
 // ANY-86 T10 — run-folder retention: sweepRuns removes runs/* whose newest
 // entry is older than the cutoff, on a fake clock, and never touches agent or
-// project folders. Case F7 from the card.
-import { mkdir, mkdtemp, readdir, utimes, writeFile } from "node:fs/promises";
+// project folders. Cases F7, F22 and F23 from the cards.
+import { mkdir, mkdtemp, readdir, symlink, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { expect, test } from "vitest";
@@ -57,4 +57,69 @@ test("F7b the default retention is seven days, and a missing runs directory swee
   const root = await mkdtemp(path.join(tmpdir(), "folders-f7b-"));
   const folders = localFolders(root);
   await expect(sweepRuns(folders, {})).resolves.toEqual([]);
+});
+
+test("F22 a run folder with a loop symlink (dot -> .) sweeps without hanging, bounded", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "folders-f22-"));
+  const folders = localFolders(root);
+  const now = Date.now();
+
+  // A run folder whose newest entry is a self-referential directory symlink:
+  // the pre-F22 scan recursed on it without bound (loop -> . expands forever).
+  const looped = await folders.path({ kind: "run", name: "looped" });
+  await writeFile(path.join(looped, "out.txt"), "looped");
+  await symlink(".", path.join(looped, "loop"));
+
+  // A symlink pointing at an external directory: the sweep must not follow it
+  // and stat the wrong (outside) tree.
+  const linked = await folders.path({ kind: "run", name: "linked" });
+  await writeFile(path.join(linked, "out.txt"), "linked");
+  await symlink(root, path.join(linked, "outside"));
+
+  await age(looped, now - 8 * DAY);
+  // `age` refuses to descend through symlinked dirs? It checks isDirectory on
+  // the dirent, which is false for a link, so timestamps above are enough.
+
+  const removed = await Promise.race([
+    sweepRuns(folders, { olderThanMs: 7 * DAY, now }),
+    new Promise<never>((_, reject) => setTimeout(() => reject(new Error("F22: sweep hung")), 5000)),
+  ]);
+  // `looped` is stale by its own entries; `linked`'s mtimes are fresh (no age call).
+  expect(removed).toEqual(["looped"]);
+  expect(await folders.exists({ kind: "run", name: "looped" })).toBe(false);
+  expect(await folders.exists({ kind: "run", name: "linked" })).toBe(true);
+
+  // Bounded traversal: the walk visits a small capped number of entries, never
+  // unbounded expansion through the loop.
+  const { newestMtimeProbe } = await import("../folders");
+  const visits: string[] = [];
+    const seen = newestMtimeProbe.track(looped, (p) => visits.push(p));
+    expect(seen).toBeGreaterThan(0);
+  expect(visits.length).toBeLessThan(1000);
+  // Every visited path stays inside the run folder.
+  for (const visited of visits) {
+    expect(visited.startsWith(looped + path.sep) || visited === looped).toBe(true);
+  }
+});
+
+test("F23 an expired normal run folder is still swept exactly as today", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "folders-f23-"));
+  const folders = localFolders(root);
+  const now = Date.now();
+
+  const doomed = await folders.path({ kind: "run", name: "doomed" });
+  await mkdir(path.join(doomed, "nested"), { recursive: true });
+  await writeFile(path.join(doomed, "nested", "deep.txt"), "deep");
+  await age(doomed, now - 8 * DAY);
+
+  const keeper = await folders.path({ kind: "run", name: "keeper" });
+  await writeFile(path.join(keeper, "out.txt"), "keeper");
+  await age(keeper, now - 6 * DAY);
+
+  const removed = await sweepRuns(folders, { olderThanMs: 7 * DAY, now });
+  expect(removed).toEqual(["doomed"]);
+  expect(await folders.exists({ kind: "run", name: "doomed" })).toBe(false);
+  expect(await folders.exists({ kind: "run", name: "keeper" })).toBe(true);
+  // The newest-wins rule across nesting still holds: the deep file decides.
+  expect((await readdir(path.join(root, "runs"))).sort()).toEqual(["keeper"]);
 });
