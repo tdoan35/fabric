@@ -77,19 +77,6 @@ async function assertFreshScreen(canvasElement: HTMLElement) {
   }, { timeout: 3000 });
 }
 
-/** Run a one-shot act through a retry. The thread's animated swaps can pop an act's
- * target out of the accessibility tree between a passing wait and the act, so the
- * query inside the act and the act itself retry together until it has landed exactly
- * once — a plain re-run could double-fire a non-idempotent act. */
-async function actOnce(act: () => Promise<void>, timeout = 10000) {
-  let done = false;
-  await waitFor(async () => {
-    if (done) return;
-    await act();
-    done = true;
-  }, { timeout });
-}
-
 /** The empty / new-thread screen, loaded directly. */
 export const NewThread: Story = {
   name: "New thread",
@@ -257,14 +244,7 @@ export const IncognitoThread: Story = {
     const canvas = within(canvasElement);
     const user = userEvent.setup();
 
-    // The switch pops in and out of the accessibility tree while the thread settles
-    // (same oscillation as W3's incognito leg): click it through retries and confirm
-    // it reads on.
-    await waitFor(async () => {
-      const switchEl = canvas.getByRole("switch", { name: "Incognito chat" });
-      if (switchEl.getAttribute("aria-checked") !== "true") await user.click(switchEl);
-      expect(switchEl).toHaveAttribute("aria-checked", "true");
-    }, { timeout: 10000 });
+    await user.click(canvas.getByRole("switch", { name: "Incognito chat" }));
 
     // The hero is veiled and pinned to Dana: no chevrons, the switcher disabled.
     await waitFor(() => {
@@ -413,24 +393,20 @@ export const W3SpecialistAndIncognito: Story = {
     if (!router) throw new Error("W3: no active story router");
     await router.navigate("/incognito");
     const incognito = within(canvasElement);
-    // The post-navigate hydration oscillates `started`, and the popLayout swap around
-    // the switch (assistant-thread's PageActions) pops it out of the accessibility tree
-    // between one query and the next — so query, click, and confirm through retries
-    // until the switch reads on.
+    await waitFor(() => expect(incognito.getByRole("switch", { name: "Incognito chat" })).toBeInTheDocument(), { timeout: 5000 });
+    await user.click(incognito.getByRole("switch", { name: "Incognito chat" }));
+    // The remount races the click: retry until the switch reads on.
     await waitFor(async () => {
       const switchEl = incognito.getByRole("switch", { name: "Incognito chat" });
       if (switchEl.getAttribute("aria-checked") !== "true") await user.click(switchEl);
       expect(switchEl).toHaveAttribute("aria-checked", "true");
-    }, { timeout: 10000 });
-    await waitFor(() => expect(incognito.getByText("Not saved to your sessions or used to shape your assistant.")).toBeVisible(), { timeout: 10000 });
-    // The rest of the leg rides the same oscillation — every query stays retried.
-    await actOnce(() => user.type(incognito.getByRole("textbox"), W_QUESTION));
-    await actOnce(() => user.click(incognito.getByRole("button", { name: "Send" })));
-    await waitFor(() => expect(canvasElement.textContent).toContain(W_REPLY_TAIL), { timeout: 10000, interval: 50 });
-    await actOnce(() => user.click(incognito.getByRole("button", { name: "Toggle Dana · incognito's profile" })));
-    await waitFor(() => {
-      const panel = incognito.getByRole("complementary", { name: "Dana's profile" });
-      expect(within(panel).getByText("Not saved")).toBeInTheDocument();
-    }, { timeout: 10000 });
+    }, { timeout: 5000 });
+    await waitFor(() => expect(incognito.getByText("Not saved to your sessions or used to shape your assistant.")).toBeVisible(), { timeout: 5000 });
+    await user.type(incognito.getByRole("textbox"), W_QUESTION);
+    await user.click(incognito.getByRole("button", { name: "Send" }));
+    await waitFor(() => expect(canvasElement.textContent).toContain(W_REPLY_TAIL), { timeout: 5000, interval: 50 });
+    await user.click(incognito.getByRole("button", { name: "Toggle Dana · incognito's profile" }));
+    const panel = incognito.getByRole("complementary", { name: "Dana's profile" });
+    expect(within(panel).getByText("Not saved")).toBeInTheDocument();
   },
 };

@@ -66,7 +66,7 @@ export const OpenCloseKeyboard: Story = {
 
     // Escape closes, and focus returns to the trigger.
     await user.keyboard("{Escape}");
-    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull(), { timeout: 3000 });
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
     expect(trigger).toHaveFocus();
     expect(screen.queryByRole("dialog")).toBeNull();
   },

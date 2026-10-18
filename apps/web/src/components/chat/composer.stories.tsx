@@ -135,7 +135,7 @@ export const ComposerBarPickers: Story = {
     expect(firstProject).toBeDefined();
     await user.click(canvas.getByRole("button", { name: "Choose project" }));
     await user.click(body.getByRole("menuitem", { name: firstProject.name }));
-    await waitFor(() => expect(document.querySelector("[data-slot=dropdown-menu-content]")).toBeNull(), { timeout: 3000 });
+    await waitFor(() => expect(document.querySelector("[data-slot=dropdown-menu-content]")).toBeNull());
     expect(canvas.getByRole("button", { name: firstProject.name })).toBeInTheDocument();
 
     // Connectors: a checkbox toggle keeps the menu open and badges the trigger.
@@ -145,7 +145,7 @@ export const ComposerBarPickers: Story = {
     await user.click(exa);
     expect(body.getByRole("menuitemcheckbox", { name: /Exa/ })).toHaveAttribute("aria-checked", "true");
     await user.keyboard("{Escape}");
-    await waitFor(() => expect(document.querySelector("[data-slot=dropdown-menu-content]")).toBeNull(), { timeout: 3000 });
+    await waitFor(() => expect(document.querySelector("[data-slot=dropdown-menu-content]")).toBeNull());
     expect(canvas.getByRole("button", { name: "Add connector1" })).toHaveTextContent("1");
   },
 };
