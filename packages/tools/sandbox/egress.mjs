@@ -39,26 +39,33 @@ const isPrivateIPv4 = (bytes) => {
 };
 
 /** Expand IPv6 text to 16 bytes, `::` compression per RFC 5952; null if
- * malformed. A zone suffix (%eth0) is dropped — never meaningful here. */
+ * malformed. A zone suffix (%eth0) is dropped — never meaningful here. The
+ * final group may be a dotted IPv4 (`::ffff:8.8.8.8`, RFC 4291 §2.2), which
+ * dns.lookup and net.isIP both emit for IPv4-mapped literals. */
 const parseIPv6 = (text) => {
   const s = text.includes("%") ? text.slice(0, text.indexOf("%")) : text;
-  const splitGroups = (part) => {
+  const groupsOf = (part) => {
     const groups = part === "" ? [] : part.split(":");
-    return groups.every((g) => /^[0-9a-f]{1,4}$/.test(g)) ? groups : null;
+    const last = groups.at(-1) ?? "";
+    if (net.isIPv4(last) && groups.length > 1) {
+      const octets = last.split(".").map(Number);
+      groups.splice(-1, 1, ((octets[0] << 8) | octets[1]).toString(16), ((octets[2] << 8) | octets[3]).toString(16));
+    }
+    return groups.every((g) => /^[0-9a-fA-F]{1,4}$/.test(g)) ? groups : null;
   };
   if (s.includes("::")) {
     if (s.indexOf("::") !== s.lastIndexOf("::")) return null;
     const [left, right] = s.split("::");
     if ((left !== "" && left.endsWith(":")) || (right !== undefined && right.startsWith(":"))) return null;
-    const head = splitGroups(left);
-    const tail = splitGroups(right ?? "");
+    const head = groupsOf(left);
+    const tail = groupsOf(right ?? "");
     if (head === null || tail === null) return null;
     if (head.length + tail.length > 7) return null;
     const missing = 8 - head.length - tail.length;
     const groups = [...head, ...Array(missing).fill("0"), ...tail];
     return groups.flatMap((g) => [Number.parseInt(g, 16) >> 8, Number.parseInt(g, 16) & 0xff]);
   }
-  const groups = splitGroups(s);
+  const groups = groupsOf(s);
   if (groups === null || groups.length !== 8) return null;
   return groups.flatMap((g) => [Number.parseInt(g, 16) >> 8, Number.parseInt(g, 16) & 0xff]);
 };
@@ -184,7 +191,7 @@ proxy.on("connect", (req, socket, head) => {
   // (`[::ffff:127.0.0.1]:8080`), so a plain split cannot carry it.
   const match = /^(?:\[(.+)\]|([^:]+)):(\d+)$/.exec(req.url ?? "");
   const host = match?.[1] ?? match?.[2] ?? "";
-  const port = match === undefined ? 80 : Number(match[3]);
+  const port = match === null ? 80 : Number(match[3]);
   const agent = agentOf(req.headers);
   if (host === "" || !Number.isFinite(port)) {
     socket.write("HTTP/1.1 400 Bad Request\r\n\r\n");
