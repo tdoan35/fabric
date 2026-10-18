@@ -186,7 +186,16 @@ docker("E10 an IPv4-mapped IPv6 form of the LAN address is refused 403; the serv
     // v4-only sandbox network; the CI failure this corrects).
     const octets = lan.split(".").map(Number);
     const mapped = `::ffff:${(octets[0] << 8 | octets[1]).toString(16)}:${(octets[2] << 8 | octets[3]).toString(16)}`;
-    const body = await proxyGet(sandbox, "egress-e10", `http://[${mapped}]:${lanServer.port}/ping`);
+    // `-w` appends the HTTP status as the final line, after the body — the
+    // refusal must be a real 403, not just refusal-shaped body text.
+    const result = await sandbox.exec(
+      `curl -sS --max-time 20 -x http://egress-e10:3128 -w '\\n%{http_code}' http://[${mapped}]:${lanServer.port}/ping`,
+      { timeoutMs: 25_000 }
+    );
+    expect(result.exitCode).toBe(0);
+    const status = (result.tail.at(-1) ?? "").trim();
+    const body = result.tail.slice(0, -1).join("").trim();
+    expect(status, body).toBe("403");
     expect(JSON.parse(body)).toEqual({ error: "egress: private address" });
     expect(lanServer.hits()).toBe(0);
   } finally {

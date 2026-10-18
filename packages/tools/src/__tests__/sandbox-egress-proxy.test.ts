@@ -17,20 +17,35 @@ let gateway: ChildProcess | undefined;
 let proxyPort = 0;
 let httpPort = 0;
 
-/** A trivial origin server: counts the requests it actually served. */
-const originOn = (): Promise<{ server: Server; port: number; hits: () => number; close: () => void }> => {
+/** A trivial origin server: counts the requests it served and — the refusal
+ * cases' real observable — the raw TCP connections it accepted. A gateway
+ * that dials a forbidden destination and only then refuses connects without
+ * sending a request, so only the connection count catches that dial. */
+const originOn = (): Promise<{
+  server: Server;
+  port: number;
+  hits: () => number;
+  connections: () => number;
+  close: () => void;
+}> => {
   let hits = 0;
+  let connections = 0;
   const server = createServer((_req, res) => {
     hits += 1;
     res.end("origin");
   });
+  server.on("connection", () => {
+    connections += 1;
+  });
   return new Promise((resolve) =>
     server.listen(0, "127.0.0.1", () => {
-      const port = (server.address() as { port: number }).port;
+      const address = server.address();
+      if (address === null || typeof address === "string") throw new Error("origin bound without a port");
       resolve({
         server,
-        port,
+        port: address.port,
         hits: () => hits,
+        connections: () => connections,
         close: () => {
           server.closeAllConnections();
           server.close();
@@ -234,6 +249,7 @@ test("P6 an IPv4-mapped IPv6 loopback literal in the absolute URI answers 403 wi
     const result = await viaProxy(`http://[::ffff:127.0.0.1]:${origin.port}/x`);
     expect(result.status).toBe(403);
     expect(JSON.parse(result.body)).toEqual({ error: "egress: private address" });
+    expect(origin.connections()).toBe(0);
     expect(origin.hits()).toBe(0);
   } finally {
     origin.close();
@@ -246,8 +262,9 @@ test("P7 the hex-mapped and IPv4-compatible loopback literals answer 403 with no
     for (const host of ["::ffff:7f00:1", "::7f00:1"]) {
       const result = await viaProxy(`http://[${host}]:${origin.port}/x`);
       expect(result.status, host).toBe(403);
-      expect(JSON.parse(result.body)).toEqual({ error: "egress: private address" });
+      expect(JSON.parse(result.body), host).toEqual({ error: "egress: private address" });
     }
+    expect(origin.connections()).toBe(0);
     expect(origin.hits()).toBe(0);
   } finally {
     origin.close();
@@ -257,11 +274,19 @@ test("P7 the hex-mapped and IPv4-compatible loopback literals answer 403 with no
 test("P8 CONNECT to an IPv4-mapped IPv6 loopback literal answers 403 and dials nothing", async () => {
   const origin = await originOn();
   try {
-    const tunnel = await viaConnect("[::ffff:127.0.0.1]", origin.port);
-    expect(tunnel.head).toContain(" 403 ");
-    expect(tunnel.head).toContain("application/json");
-    expect(JSON.parse(tunnel.body || "{}")).toEqual({ error: "egress: private address" });
-    tunnel.socket.destroy();
+    // Both spellings of the mapped loopback: the dotted tail a client writes
+    // and the hex form a URL parser normalizes to. The refusal observable is
+    // the origin's accepted TCP connections — not served requests — so a
+    // gateway that dials the destination before refusing, or misclassifies
+    // the mapped literal and tunnels it, still fails this case.
+    for (const host of ["::ffff:127.0.0.1", "::ffff:7f00:1"]) {
+      const tunnel = await viaConnect(`[${host}]`, origin.port);
+      expect(tunnel.head, host).toContain(" 403 ");
+      expect(tunnel.head, host).toContain("application/json");
+      expect(JSON.parse(tunnel.body || "{}"), host).toEqual({ error: "egress: private address" });
+      tunnel.socket.destroy();
+    }
+    expect(origin.connections()).toBe(0);
     expect(origin.hits()).toBe(0);
   } finally {
     origin.close();
@@ -284,9 +309,25 @@ test("P9 isPrivateAddress classifies mapped, compatible and NAT64 IPv4-embedded 
     "::1",
     "fd00::1",
     "fe80::1",
+    // Dotted-tail spellings (RFC 4291 §2.2 form 3) of rows above — the
+    // mapped, compatible and NAT64 dotted forms must classify like their
+    // all-hex equivalents.
+    "::ffff:127.0.0.1",
+    "::10.0.0.1",
+    "64:ff9b::10.0.0.1",
   ];
   for (const address of privateCases) expect(isPrivateAddress(address), address).toBe(true);
-  const publicCases = ["8.8.8.8", "::ffff:808:808", "2606:4700::1111"];
+  const publicCases = [
+    "8.8.8.8",
+    "::ffff:808:808",
+    "2606:4700::1111",
+    // `2606:4700::0.0.17.17` is `2606:4700::1111` in dotted-tail form, and
+    // `::1.2.3.4` / `64:ff9b::8.8.8.8` unwrap to the public 1.2.3.4 / 8.8.8.8.
+    "::ffff:8.8.8.8",
+    "::1.2.3.4",
+    "2606:4700::0.0.17.17",
+    "64:ff9b::8.8.8.8",
+  ];
   for (const address of publicCases) expect(isPrivateAddress(address), address).toBe(false);
   expect(isPrivateAddress("not-an-ip")).toBe(true);
 });
