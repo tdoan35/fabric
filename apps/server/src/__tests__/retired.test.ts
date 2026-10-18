@@ -25,15 +25,15 @@ const occurrences = (needle: string): string[] =>
   });
 
 describe("retired chat path (S14)", () => {
-  it("leaves no DANA_MODE in tracked source", () => {
+  it("X1 leaves no DANA_MODE in tracked source", () => {
     expect(occurrences("DANA_MODE")).toEqual([]);
   });
 
-  it("leaves no x-fabric-fixture header in tracked source", () => {
+  it("X1 leaves no x-fabric-fixture header in tracked source", () => {
     expect(occurrences("x-fabric-fixture")).toEqual([]);
   });
 
-  it("leaves no fixture flag on a chat request in tracked source", () => {
+  it("X1 leaves no fixture flag on a chat request in tracked source", () => {
     expect(occurrences("fixture: true")).toEqual([]);
   });
 });
