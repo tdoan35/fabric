@@ -1,11 +1,34 @@
 // ANY-86 T10 — run-folder retention: sweepRuns removes runs/* whose newest
 // entry is older than the cutoff, on a fake clock, and never touches agent or
 // project folders. Cases F7, F22 and F23 from the cards.
-import { lutimes, mkdir, mkdtemp, readdir, readFile, symlink, utimes, writeFile } from "node:fs/promises";
+import * as fsp from "node:fs/promises";
+import { chmod, lutimes, mkdir, mkdtemp, readdir, readFile, symlink, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { expect, test } from "vitest";
+import { afterEach, expect, test, vi } from "vitest";
 import { localFolders, RUN_FOLDER_RETENTION_MS, sweepRuns } from "../folders";
+import { scanMtime } from "../folders/retention";
+
+// F24b's injection seam: retention lists directories through the platform
+// `readdir` from `node:fs/promises`. While `injectReadFailure` is set, that
+// one function rejects; every other fs call is untouched.
+vi.mock("node:fs/promises", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs/promises")>();
+  const platformReaddir = Object.assign(
+    (...args: Parameters<typeof actual.readdir>): ReturnType<typeof actual.readdir> =>
+      injectReadFailure && path.resolve(String(args[0])) === path.resolve(String(injectReadFailure.path))
+        ? Promise.reject(injectReadFailure)
+        : actual.readdir(...args),
+    { withFileTypes: (actual.readdir as unknown as { withFileTypes: unknown }).withFileTypes },
+  );
+  return { ...actual, readdir: platformReaddir };
+});
+
+/** When set, the platform `readdir` fails with this error — F24b's EIO. */
+let injectReadFailure: NodeJS.ErrnoException | undefined;
+afterEach(() => {
+  injectReadFailure = undefined;
+});
 
 const DAY = 24 * 60 * 60 * 1000;
 
@@ -145,6 +168,119 @@ test("F22b the entry cap is exercised, and a run whose scan it truncates is kept
   // The fresh file is still there: the originals were not deleted.
   expect(await readFile(path.join(capped, "entry-00000.txt"), "utf8")).toBe("x");
   expect(await readFile(path.join(capped, "entry-00001.txt"), "utf8")).toBe("x");
+});
+
+test("F24a scanMtime never reads a failed directory enumeration as an empty listing: the scan is incomplete", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "folders-f24a-"));
+  const dir = path.join(root, "run");
+  await mkdir(dir);
+  await writeFile(path.join(dir, "stale.txt"), "stale");
+  const now = Date.now();
+  await utimes(dir, new Date(now - 8 * DAY), new Date(now - 8 * DAY));
+
+  // The run root was already read (as the sweep's runs listing would); the
+  // enumeration of the run's own entries fails.
+  const { newest, complete } = await scanMtime(dir, undefined, async () => {
+    throw Object.assign(new Error("F24a: injected EIO"), { code: "EIO", syscall: "readdir", path: dir });
+  });
+
+  // The stale root's own mtime was seen, but the children it could not list
+  // might hold a fresh file: an incomplete scan may never vouch for the age.
+  expect(newest).toBeLessThan(now - 7 * DAY);
+  expect(complete).toBe(false);
+});
+
+test("F24b a stale run whose platform readdir fails with EIO is retained: the sweep never treats the failure as empty", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "folders-f24b-"));
+  const folders = localFolders(root);
+  const now = Date.now();
+
+  // Stale by mtime, but holding a fresh file: read as an empty listing, the
+  // scan would look complete and the run would be deleted with its contents.
+  const keep = await folders.path({ kind: "run", name: "keep" });
+  await writeFile(path.join(keep, "fresh.txt"), "fresh");
+  await fsp.utimes(path.join(keep, "fresh.txt"), new Date(now), new Date(now));
+  await utimes(keep, new Date(now - 8 * DAY), new Date(now - 8 * DAY));
+
+  // Fail only the enumeration of the run's own directory, exactly as the
+  // reviewer injected it: the runs listing still succeeds, so the sweep
+  // reaches the run and must not read its failed readdir as empty.
+  const injected = Object.assign(new Error("F24b: injected EIO"), {
+    code: "EIO",
+    syscall: "readdir",
+    path: keep,
+  });
+  injectReadFailure = injected;
+  let removed: string[] = [];
+  let thrown: unknown;
+  try {
+    removed = await sweepRuns(folders, { olderThanMs: 7 * DAY, now });
+  } catch (error) {
+    thrown = error;
+  }
+
+  // Either remedy is acceptable: the run is kept, or the error propagates.
+  expect(removed).toEqual([]);
+  expect(await folders.exists({ kind: "run", name: "keep" })).toBe(true);
+  expect(await readFile(path.join(keep, "fresh.txt"), "utf8")).toBe("fresh");
+  if (thrown !== undefined) expect((thrown as NodeJS.ErrnoException).code).toBe("EIO");
+});
+
+test("F24c a stale run whose directory read fails with a real EACCES is retained, and permissions are restored afterwards", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "folders-f24c-"));
+  const folders = localFolders(root);
+  const now = Date.now();
+
+  // Stale by every mtime the sweep can see, but `sub` holds a fresh file the
+  // failed enumeration would hide.
+  const keep = await folders.path({ kind: "run", name: "locked" });
+  const sub = path.join(keep, "sub");
+  await mkdir(sub);
+  await writeFile(path.join(keep, "stale.txt"), "stale");
+  await writeFile(path.join(sub, "fresh.txt"), "fresh");
+  await age(keep, now - 8 * DAY);
+  await fsp.utimes(path.join(sub, "fresh.txt"), new Date(now), new Date(now));
+
+  // Make `sub` unreadable for the sweep: a real EACCES, the reviewer's second
+  // probe. The permissions come back after the failed read — the sweep's next
+  // act on this run is its `remove`, so the restore rides there, and the
+  // deletion an empty-listing read produces actually lands.
+  await chmod(sub, 0o300);
+  let unreadable = false;
+  try {
+    await readdir(sub);
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code !== "EACCES" && code !== "EPERM") throw error;
+    unreadable = true;
+  }
+
+  const realRemove = folders.remove.bind(folders);
+  folders.remove = async (ref) => {
+    await chmod(sub, 0o700);
+    return realRemove(ref);
+  };
+
+  let removed: string[] = [];
+  let thrown: unknown;
+  try {
+    removed = await sweepRuns(folders, { olderThanMs: 7 * DAY, now });
+  } catch (error) {
+    thrown = error;
+  } finally {
+    // The restore rides `remove` too; if the bug deleted the run anyway, the
+    // directory is gone and there is nothing to restore.
+    await chmod(sub, 0o700).catch(() => {});
+  }
+  if (!unreadable) return;
+
+  // The failed enumeration did not look like an empty listing: kept.
+  expect(removed).toEqual([]);
+  expect(await folders.exists({ kind: "run", name: "locked" })).toBe(true);
+  expect(await readFile(path.join(sub, "fresh.txt"), "utf8")).toBe("fresh");
+  if (thrown !== undefined) {
+    expect(["EACCES", "EPERM"]).toContain((thrown as NodeJS.ErrnoException).code);
+  }
 });
 
 test("F23 an expired normal run folder is still swept exactly as today", async () => {
