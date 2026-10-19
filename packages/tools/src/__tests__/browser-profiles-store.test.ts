@@ -202,6 +202,18 @@ function storeFailingTransactionN(store: RuntimeStore, n: number): RuntimeStore 
   return wrapped;
 }
 
+/** The one blob the row's version names (its suffix is the writer's uuid). */
+async function blobFor(root: string, user: string, version: number): Promise<string> {
+  const entries = await readdir(path.join(root, "profiles"));
+  const names = entries.filter(
+    (name) => name.startsWith(`${user}.v${version}.`) && name.endsWith(".enc")
+  );
+  if (names.length !== 1) {
+    throw new Error(`expected one ${user}.v${version} blob, found ${JSON.stringify(names)}`);
+  }
+  return path.join(root, "profiles", names[0]);
+}
+
 describeDrivers("tools browser profiles (ANY-90 T12)", (h) => {
   const temps: string[] = [];
   const keep = (dir: string): string => {
@@ -258,7 +270,7 @@ describeDrivers("tools browser profiles (ANY-90 T12)", (h) => {
     expect(landed.get("Cookies")).toEqual(expected.get("Cookies"));
     expect(landed.get("Local State")).toEqual(expected.get("Local State"));
     // The blob is the encrypted versioned file in the folder store.
-    const enc = await readFile(path.join(root, "profiles", "owner.v1.enc"));
+    const enc = await readFile(await blobFor(root, "owner", 1));
     expect(enc.length).toBeGreaterThan(0);
   });
 
@@ -271,7 +283,7 @@ describeDrivers("tools browser profiles (ANY-90 T12)", (h) => {
     const owner = await profiles.checkout("owner", { holder: "scout" });
     await profiles.saveFrom(owner.lease, sandbox, fixture.dir);
 
-    const raw = await readFile(path.join(root, "profiles", "owner.v1.enc"));
+    const raw = await readFile(await blobFor(root, "owner", 1));
     expect(raw.includes(Buffer.from(fixture.cookieValue, "utf8"))).toBe(false);
     expect(raw.includes(Buffer.from("SQLite format", "utf8"))).toBe(false);
 
@@ -288,9 +300,8 @@ describeDrivers("tools browser profiles (ANY-90 T12)", (h) => {
     // Swapping two users' blobs breaks the AAD binding on both.
     const alice = await profiles.checkout("alice", { holder: "scout" });
     await profiles.saveFrom(alice.lease, sandbox, fixture.dir);
-    const profilesDir = path.join(root, "profiles");
-    const ownerEnc = path.join(profilesDir, "owner.v1.enc");
-    const aliceEnc = path.join(profilesDir, "alice.v1.enc");
+    const ownerEnc = await blobFor(root, "owner", 1);
+    const aliceEnc = await blobFor(root, "alice", 1);
     const ownerBytes = await readFile(ownerEnc);
     await writeFile(ownerEnc, await readFile(aliceEnc));
     await writeFile(aliceEnc, ownerBytes);
@@ -374,16 +385,20 @@ describeDrivers("tools browser profiles (ANY-90 T12)", (h) => {
 
     // The written-but-uncommitted v2 file is the orphan; it is still there...
     const profilesDir = path.join(root, "profiles");
-    expect((await readdir(profilesDir)).filter((name) => name.startsWith("owner."))).toEqual([
-      "owner.v1.enc",
-      "owner.v2.enc",
-    ]);
+    const orphan = (await readdir(profilesDir)).filter(
+      (name) => name.startsWith("owner.") && !name.startsWith("owner.v1.")
+    );
+    expect(orphan).toHaveLength(1);
+    expect(orphan[0]).toMatch(/^owner\.v2\.[0-9a-f-]+\.enc$/);
 
-    // ...and the next successful save overwrites it and clears every stray.
+    // ...and the next successful save writes its own v2 file and clears
+    // every stray: exactly the row's version remains.
     await profiles.saveFrom(lease.lease, sandbox, fixture.dir);
     const later = await profiles.checkout("owner", { holder: "scout" });
     expect(later.version).toBe(2);
-    expect(await readdir(profilesDir)).toEqual(["owner.v2.enc"]);
+    const left = await readdir(profilesDir);
+    expect(left).toHaveLength(1);
+    expect(left[0]).toMatch(/^owner\.v2\.[0-9a-f-]+\.enc$/);
     const after = keep(await tempRoot("bprofile-crash-after-"));
     await profiles.loadInto(later.lease, sandbox, after);
     expect(await readFile(path.join(after, "Local State"))).toEqual(Buffer.from(newState));

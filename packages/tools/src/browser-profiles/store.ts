@@ -1,14 +1,19 @@
 // The browser-profile store (ANY-90 T12): one encrypted Chromium profile per
 // user over the package-owned `browser_profiles` table, a one-job lease per
 // profile, and load/save that stream through a sandbox's archive seam. The
-// blob lives under the folder store's root at `profiles/<user>.v<version>.enc`
-// — a gzip tar run through the card's own AES-256-GCM helper (./crypto).
-// Plaintext never touches disk there: save pipes the sandbox tar through the
-// exclusions, gzip and cipher straight into the file; load reverses the pipe
-// into `sandbox.putArchive`. A save writes `v<version+1>` first and bumps the
-// row second, so a crash mid-save leaves the last good profile standing and
-// the next successful save sweeps the orphan.
+// blob lives under the folder store's root at
+// `profiles/<user>.v<version>.<unique>.enc` — a gzip tar run through the
+// card's own AES-256-GCM helper (./crypto). Plaintext never touches disk
+// there: save pipes the sandbox tar through the exclusions, gzip and cipher
+// straight into the file; load reverses the pipe into `sandbox.putArchive`
+// (the row's version names the blob; the suffix is never part of that name).
+// A save writes its own uniquely named blob first and bumps the row second, so
+// a crash mid-save leaves the last good profile standing and the next
+// successful save sweeps the orphan. The unique name keeps two writers apart:
+// a writer whose lease expired mid-write cannot overwrite its successor's blob,
+// and its failure cleanup deletes only the file it wrote (ANY-123).
 import { createReadStream, createWriteStream } from "node:fs";
+import { randomUUID } from "node:crypto";
 import { mkdir, readdir, rm } from "node:fs/promises";
 import path from "node:path";
 import { Readable, Transform } from "node:stream";
@@ -137,8 +142,19 @@ export function browserProfiles(options: BrowserProfilesOptions): BrowserProfile
   const maxBytes = options.maxBytes ?? PROFILE_MAX_BYTES;
   const profilesDir = path.join(options.folders.root, "profiles");
 
-  const encPath = (user: string, version: number): string =>
-    path.join(profilesDir, `${user}.v${version}.enc`);
+  /** A save's own blob: the row's next version plus a unique suffix, so no
+   * two writers ever share a path. */
+  const newBlobPath = (user: string, version: number): string =>
+    path.join(profilesDir, `${user}.v${version}.${randomUUID()}.enc`);
+
+  /** The blob the row's version names: any file with that version, whatever
+   * the suffix its writer chose. */
+  const findBlob = async (user: string, version: number): Promise<string | undefined> => {
+    const prefix = `${user}.v${version}.`;
+    const entries = await readdir(profilesDir).catch((): string[] => []);
+    const name = entries.find((entry) => entry.startsWith(prefix) && entry.endsWith(".enc"));
+    return name === undefined ? undefined : path.join(profilesDir, name);
+  };
 
   const readRow = async (tx: Tx, user: string): Promise<ProfileRow | undefined> => {
     const rows = await tx.query(
@@ -274,19 +290,25 @@ export function browserProfiles(options: BrowserProfilesOptions): BrowserProfile
         const row = await readRow(tx, user);
         const at = now();
         const expires = new Date(at.getTime() + ttlMs);
-        const live =
-          row !== undefined &&
-          row.lease_holder !== null &&
-          new Date(row.lease_expires_at ?? 0).getTime() > at.getTime();
-        if (live && row.lease_holder !== holder) {
-          throw new Error(`profile in use by ${row.lease_holder}`);
-        }
         if (row !== undefined) {
-          await tx.query(
+          // The update is the arbiter, not the read: two transactions can both
+          // read the row free, and the conditional where makes the second one
+          // match nothing (a refusal), instead of overwriting the first holder.
+          // The same holder (refreshing its own lease) and an expired lease
+          // still match.
+          const taken = await tx.query(
             `update browser_profiles set lease_holder = $3, lease_expires_at = $4, updated_at = $5
-             where workspace_id = $1 and user_id = $2`,
+             where workspace_id = $1 and user_id = $2
+               and (lease_holder is null or lease_holder = $3
+                    or lease_expires_at is null or lease_expires_at <= $5)
+             returning version, lease_holder, lease_expires_at`,
             [workspaceId, user, holder, expires, at]
           );
+          if (taken.length === 0) {
+            // Someone else took the live lease between our read and our write.
+            const current = await readRow(tx, user);
+            throw new Error(`profile in use by ${current?.lease_holder ?? "someone else"}`);
+          }
           return { lease: { user, holder, expiresAt: expires }, version: row.version };
         }
         await tx.query(
@@ -338,7 +360,13 @@ export function browserProfiles(options: BrowserProfilesOptions): BrowserProfile
         await sandbox.putArchive(dir, emptyTar());
         return;
       }
-      const source = createReadStream(encPath(lease.user, row.version));
+      const blob = await findBlob(lease.user, row.version);
+      if (blob === undefined) {
+        throw new Error(
+          `browser profile: version ${row.version} of ${JSON.stringify(lease.user)} has no blob`
+        );
+      }
+      const source = createReadStream(blob);
       const plain = decryptProfileStream(
         masterKey,
         profileAad(workspaceId, lease.user, row.version),
@@ -357,7 +385,9 @@ export function browserProfiles(options: BrowserProfilesOptions): BrowserProfile
       const row = await requireLiveLease(lease);
       const version = row.version + 1;
       await mkdir(profilesDir, { recursive: true });
-      const target = encPath(lease.user, version);
+      // A unique name per save: a slow writer whose lease expired can neither
+      // overwrite its successor's blob nor delete it in a failure cleanup.
+      const target = newBlobPath(lease.user, version);
       let size: number;
       try {
         size = await writeEncrypted(sandbox.getArchive(dir), target, lease, version);
@@ -382,7 +412,8 @@ export function browserProfiles(options: BrowserProfilesOptions): BrowserProfile
       void bumped;
 
       // Commit landed: the new blob is truth, every other blob of this user
-      // (the previous version, and any orphan a crashed save left) goes.
+      // (the previous version, and any orphan a crashed save left) goes. The
+      // sweep keeps exactly the row's version: this save's own file.
       const keep = path.basename(target);
       const entries = await readdir(profilesDir).catch((): string[] => []);
       for (const name of entries) {
