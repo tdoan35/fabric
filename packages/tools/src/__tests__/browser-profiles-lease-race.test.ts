@@ -201,9 +201,8 @@ function sleep(ms: number): Promise<void> {
  * re-checks its `where` against the row at that moment (Postgres's
  * EvalPlanQual), so a checkout whose read saw a free row refuses when its
  * write lands second. That is the interleaving PGlite's single serialized
- * connection hides. Reads wait until both racers have read the free row; each
- * transaction stages writes that land in the order they were issued, not when
- * the transaction ends.
+ * connection hides. Reads wait until both racers have read the free row, so
+ * both take the read-then-write path the race lives in.
  */
 function racingStore(): RuntimeStore & {
   seed(row: Record<string, unknown>): void;
@@ -293,7 +292,6 @@ function racingStore(): RuntimeStore & {
     return [];
   };
 
-  const writes: Array<{ text: string; params: readonly unknown[] }> = [];
   const wrapped: RuntimeStore & { seed(row: Record<string, unknown>): void } = {
     seed(row) {
       table.set(key(row.workspace_id, row.user_id), {
@@ -328,11 +326,10 @@ function racingStore(): RuntimeStore & {
           if (text.startsWith("insert")) {
             return execute(text, params);
           }
-          // An update checks its `where` now (Postgres's re-check) and stages
-          // its rows for commit.
-          const rows = execute(text, params);
-          writes.push({ text, params });
-          return rows;
+          // An update checks its `where` now (Postgres's re-check): the row
+          // the other racer's committed write left behind, not the free one
+          // this checkout read.
+          return execute(text, params);
         },
         onCommit: async () => undefined,
       });
