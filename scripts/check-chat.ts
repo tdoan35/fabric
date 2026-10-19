@@ -221,6 +221,6 @@ if (live) {
   ok(copiesOf(`echo: ${second}`, lastSeq) === 1, "exactly one copy of the second reply in the log");
 }
 
-console.log(`\ncheck:chat PASSED in ${((Date.now() - startedAll) / 1000).toFixed(1)}s · MODEL_PORT=${modelPort} · session ${session.sessionId}`);
+console.log(`\nX3 check:chat PASSED in ${((Date.now() - startedAll) / 1000).toFixed(1)}s · MODEL_PORT=${modelPort} · session ${session.sessionId}`);
 stopAll();
 process.exit(0);
