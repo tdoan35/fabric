@@ -2,7 +2,7 @@
 // slate-950 → slate-900 → black base, the static radial blobs, and two drifting layers (web: 6 s
 // `aurora` keyframes, the second reversed at 7.5 s). Same hues, positions and alphas; radii are
 // scaled from the web's desktop pixels to the phone's viewport. Decorative, behind every screen.
-import { useEffect, useRef } from "react";
+import { useEffect, useState } from "react";
 import { AccessibilityInfo, Animated, Easing, StyleSheet, View, useWindowDimensions } from "react-native";
 import Svg, { Defs, Ellipse, LinearGradient, RadialGradient, Rect, Stop } from "react-native-svg";
 
@@ -45,7 +45,7 @@ function Blobs({ id, blobs, width, height, w }: { id: string; blobs: Blob[]; wid
 
 /** One drifting layer: twice the viewport wide, sliding back and forth like background-position 0% → 100%. */
 function Drift({ id, blobs, width, height, duration, reverse }: { id: string; blobs: Blob[]; width: number; height: number; duration: number; reverse?: boolean }) {
-  const t = useRef(new Animated.Value(0)).current;
+  const [t] = useState(() => new Animated.Value(0));
   useEffect(() => {
     let loop: Animated.CompositeAnimation | undefined;
     void AccessibilityInfo.isReduceMotionEnabled().then((reduced) => {
