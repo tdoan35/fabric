@@ -1,11 +1,11 @@
-import { useCallback, useEffect, useState } from "react";
-import { Image, RefreshControl, ScrollView, StyleSheet, Text } from "react-native";
+import { useCallback, useState } from "react";
+import { useFocusEffect } from "expo-router";
+import { RefreshControl, ScrollView, StyleSheet, Text } from "react-native";
 import { RunSchema } from "@fabric/contracts";
 import { z } from "zod";
 
 import { Card, Row, Screen } from "@/components/ui";
 import { apiBase, httpApi } from "@/lib/api";
-import { avatar } from "@/lib/avatar";
 import { theme } from "@/lib/theme";
 import { useStreamStatus } from "@/lib/app-stream";
 import { usePoll } from "@/lib/use-poll";
@@ -46,9 +46,11 @@ export default function DebugScreen() {
     }
   }, []);
 
-  useEffect(() => {
-    void runSchemaCheck();
-  }, [runSchemaCheck]);
+  useFocusEffect(
+    useCallback(() => {
+      void runSchemaCheck();
+    }, [runSchemaCheck]),
+  );
 
   return (
     <Screen>
