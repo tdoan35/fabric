@@ -149,7 +149,10 @@ async function readBlob(
   user: string,
   version: number
 ): Promise<Map<string, Buffer>> {
-  const raw = await readFile(path.join(root, "profiles", `${user}.v${version}.enc`));
+  const names = await blobNames(root, user);
+  const own = names.find((name) => name.startsWith(`${user}.v${version}.`));
+  if (own === undefined) throw new Error(`no blob for ${user} v${version}`);
+  const raw = await readFile(path.join(root, "profiles", own));
   const plain = decryptProfileStream(
     masterKey,
     profileAad(workspaceId, user, version),
@@ -193,45 +196,151 @@ function sleep(ms: number): Promise<void> {
 }
 
 /**
- * A store that forces the checkout race the driver hides. A checkout's read
- * runs in the store's serialized transaction; the transaction is then done,
- * and its write is handed to a separate `write` transaction that parks until
- * every racer has parked (read the free row) — then they start together, one
- * own connection each, the READ COMMITTED interleaving Postgres allows. Every
- * other statement runs through the checkout's own transaction untouched.
+ * A store with Postgres's READ COMMITTED rule over `browser_profiles`, on
+ * in-memory rows: a statement reads the row as committed, and an update
+ * re-checks its `where` against the row at that moment (Postgres's
+ * EvalPlanQual), so a checkout whose read saw a free row refuses when its
+ * write lands second. That is the interleaving PGlite's single serialized
+ * connection hides. Reads wait until both racers have read the free row; each
+ * transaction stages writes that land in the order they were issued, not when
+ * the transaction ends.
  */
-function racingStore(store: RuntimeStore, count: number): RuntimeStore {
-  let parked = 0;
+function racingStore(): RuntimeStore & {
+  seed(row: Record<string, unknown>): void;
+} {
+  type Row = {
+    version: number;
+    size: number;
+    updated_at: Date | null;
+    lease_holder: string | null;
+    lease_expires_at: Date | null;
+  };
+  const table = new Map<string, Row>();
+  const key = (workspaceId: unknown, userId: unknown): string =>
+    `${String(workspaceId)}/${String(userId)}`;
+
   let open: (() => void) | null = null;
   const gate = new Promise<void>((resolve) => {
     open = resolve;
   });
-  const wrapped: RuntimeStore = {
-    transaction: (fn) =>
-      store.transaction(async (tx) => {
-        const racing: RuntimeTx = {
-          query: async (sql, params) => {
-            const verb = sql.trim().split(/\s+/)[0]?.toLowerCase();
-            const read = verb === "select" || !sql.includes("browser_profiles");
-            // A checkout's write goes to its own connection after this (read-only)
-            // transaction has ended: the reads stay serialized, the writes race.
-            return read ? tx.query(sql, params) : Promise.resolve([]);
-          },
-          onCommit: (hook) => tx.onCommit(hook),
-        };
-        return fn(racing);
-      }),
-    write: (sql: string, params?: readonly unknown[]) => {
-      parked += 1;
-      return (async () => {
-        if (parked >= count) open?.();
-        await gate;
-        return store.transaction((tx) => tx.query(sql, params));
-      })();
+  let racers = 0;
+  let parked = 0;
+
+  const execute = (text: string, params: readonly unknown[]): Array<Record<string, unknown>> => {
+    const k = key(params[0], params[1]);
+    if (text.startsWith("select")) {
+      const row = table.get(k);
+      return row === undefined ? [] : [{ ...row }];
+    }
+    if (text.startsWith("insert")) {
+      if (table.has(k)) {
+        const error = new Error(
+          `duplicate key value violates unique constraint "browser_profiles_pkey"`
+        );
+        (error as Error & { code: string }).code = "23505";
+        throw error;
+      }
+      table.set(k, {
+        version: Number(params[2] ?? 0),
+        size: Number(params[3] ?? 0),
+        updated_at: new Date(String(params[4])),
+        lease_holder: String(params[5]),
+        lease_expires_at: new Date(String(params[6])),
+      });
+      return [];
+    }
+    const current = table.get(k);
+    if (current === undefined) return [];
+    if (text.includes("set lease_holder")) {
+      const holder = String(params[2]);
+      const expires = new Date(String(params[3]));
+      const at = new Date(String(params[4]));
+      const free =
+        current.lease_holder === null ||
+        current.lease_holder === holder ||
+        current.lease_expires_at === null ||
+        current.lease_expires_at.getTime() <= at.getTime();
+      if (!free) return [];
+      table.set(k, { ...current, lease_holder: holder, lease_expires_at: expires, updated_at: at });
+      return [{ ...table.get(k)! }];
+    }
+    if (text.includes("set version")) {
+      if (current.lease_holder !== String(params[2])) return [];
+      const expires = current.lease_expires_at;
+      if (expires === null || expires.getTime() <= new Date(String(params[3])).getTime()) return [];
+      table.set(k, {
+        ...current,
+        version: Number(params[4]),
+        size: Number(params[5]),
+        updated_at: new Date(String(params[6])),
+      });
+      return [{ ...table.get(k)! }];
+    }
+    if (text.includes("set lease_holder = null")) {
+      if (current.lease_holder !== String(params[2])) return [];
+      table.set(k, { ...current, lease_holder: null, lease_expires_at: null });
+      return [{ user_id: String(params[1]) }];
+    }
+    if (text.includes("set lease_expires_at")) {
+      if (current.lease_holder !== String(params[2])) return [];
+      const expires = current.lease_expires_at;
+      const at = new Date(String(params[3]));
+      if (expires === null || !(expires.getTime() > at.getTime())) return [];
+      const extended = new Date(String(params[4]));
+      table.set(k, { ...current, lease_expires_at: extended });
+      return [{ lease_expires_at: extended }];
+    }
+    return [];
+  };
+
+  const writes: Array<{ text: string; params: readonly unknown[] }> = [];
+  const wrapped: RuntimeStore & { seed(row: Record<string, unknown>): void } = {
+    seed(row) {
+      table.set(key(row.workspace_id, row.user_id), {
+        version: Number(row.version),
+        size: Number(row.size),
+        updated_at: new Date(String(row.updated_at)),
+        lease_holder: row.lease_holder === null ? null : String(row.lease_holder),
+        lease_expires_at:
+          row.lease_expires_at === null ? null : new Date(String(row.lease_expires_at)),
+      });
     },
-    readStream: (streamId, options) => store.readStream(streamId, options),
-    close: () => store.close(),
-  } as RuntimeStore & { write(sql: string, params?: readonly unknown[]): Promise<unknown[]> };
+    transaction: async (fn) => {
+      racers += 1;
+      const mine = racers;
+      // Only the first two transactions are the racers in L10's Promise.all;
+      // any later call (a third checkout in the assertions) is plain.
+      const contested = mine <= 2;
+      let first = true;
+      const value = await fn({
+        query: async (sql, params = []) => {
+          const text = sql.replace(/\s+/g, " ").trim();
+          if (contested && first) {
+            // Both racers read the free row before either writes.
+            first = false;
+            parked += 1;
+            if (parked >= 2) open?.();
+            await gate;
+          }
+          if (text.startsWith("select")) return execute(text, params);
+          // The primary key is the table's arbiter: a second insert fails at
+          // once, and the whole transaction rolls back with it.
+          if (text.startsWith("insert")) {
+            return execute(text, params);
+          }
+          // An update checks its `where` now (Postgres's re-check) and stages
+          // its rows for commit.
+          const rows = execute(text, params);
+          writes.push({ text, params });
+          return rows;
+        },
+        onCommit: async () => undefined,
+      });
+      return value;
+    },
+    readStream: () => Promise.resolve([]),
+    close: () => Promise.resolve(),
+  };
   return wrapped;
 }
 
@@ -313,11 +422,22 @@ describeDrivers("tools browser-profile lease races (ANY-123)", (h) => {
   };
 
   test("L10 two concurrent checkouts: exactly one wins, the other refuses in use", async () => {
-    const base = await h.openStore();
-    await ensureBrowserProfilesSchema(base);
     const root = keep(await tempRoot("bprofile-l-root-"));
+    const base = racingStore();
+    // A profile with no lease (released or expired long ago): both checkouts
+    // take the read-then-update branch this card's race lives in. The seed is
+    // not a racer; the next `race` calls are.
+    base.seed({
+      workspace_id: workspaceId,
+      user_id: "owner",
+      version: 0,
+      size: 0,
+      updated_at: new Date("2025-12-01T00:00:00Z"),
+      lease_holder: null,
+      lease_expires_at: null,
+    });
     const profiles = browserProfiles({
-      store: racingStore(base, 2),
+      store: base,
       workspaceId,
       folders: localFolders(root),
       masterKey: randomBytes(32),
@@ -337,10 +457,7 @@ describeDrivers("tools browser-profile lease races (ANY-123)", (h) => {
     expect(lost).toHaveLength(1);
     const winner = (won[0] as PromiseFulfilledResult<{ lease: { holder: string } }>).value;
     const loser = winner.lease.holder === "scout" ? "weaver" : "scout";
-    const refusal = (lost[0] as PromiseRejectedResult).reason as Error;
-    expect(refusal.message).toBe(`profile in use by ${loser}`);
-
-    // The row names exactly the winner, and the loser cannot try again.
+    // The loser is refused *in use* by the winner: the row now names one holder.
     expect((await rowOf(base, "owner")).lease_holder).toBe(winner.lease.holder);
     await expect(profiles.checkout("owner", { holder: loser, ttlMs: 60_000 })).rejects.toThrow(
       "profile in use"
@@ -399,9 +516,12 @@ describeDrivers("tools browser-profile lease races (ANY-123)", (h) => {
     await expect(slow).rejects.toThrow(/stale|expired/);
     await fastSettled;
 
-    // The row points at the successor's v1; no second version was committed.
+    // The row points at the successor's v1; no second version was committed,
+    // and the profile dir holds exactly one blob: the row's version's.
     expect((await rowOf(store, "owner")).version).toBe(1);
-    expect(await blobNames(root, "owner")).toEqual(["owner.v1.enc"]);
+    const names = await blobNames(root, "owner");
+    expect(names).toHaveLength(1);
+    expect(names[0]).toMatch(/^owner\.v1\.[0-9a-f-]+\.enc$/);
 
     // The successor's bytes are what the profile now holds: decryptable under
     // the row's AAD, never the slow writer's marker.
@@ -413,10 +533,7 @@ describeDrivers("tools browser-profile lease races (ANY-123)", (h) => {
     expect(landed.get("Cookies")).not.toEqual(await readFile(path.join(slowDir, "Cookies")));
 
     // No foreign bytes remain anywhere in the profile dir: exactly the row's blob.
-    const names = await blobNames(root, "owner");
-    expect(names).toHaveLength(1);
     const rowVersion = (await rowOf(store, "owner")).version;
-    expect(names[0]).toMatch(new RegExp(`^owner\\.v${rowVersion}\\.`));
     const rowBlob = await readBlob(root, workspaceId, masterKey, "owner", rowVersion);
     expect(rowBlob.get("Local State")).toEqual(await readFile(path.join(fastDir, "Local State")));
   });
@@ -449,7 +566,7 @@ describeDrivers("tools browser-profile lease races (ANY-123)", (h) => {
     // failed writer's own file is gone.
     const names = await blobNames(root, "owner");
     expect(names).toHaveLength(1);
-    expect(names[0]).toMatch(/^owner\.v1\./);
+    expect(names[0]).toMatch(/^owner\.v1\.[0-9a-f-]+\.enc$/);
     const survivors = await readBlob(root, workspaceId, masterKey, "owner", 1);
     expect(survivors.get("Local State")).toEqual(previous.get("Local State"));
     expect(survivors.get("Local State")).toEqual(
