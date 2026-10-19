@@ -25,26 +25,80 @@ const HTTP_PORT = Number(process.env.FABRIC_EGRESS_HTTP_PORT ?? 80);
 const BROKER_HOST = process.env.FABRIC_BROKER_HOST ?? "host.docker.internal";
 const BROKER_PORT = Number(process.env.FABRIC_BROKER_PORT ?? 0);
 
-/** The private-address classes of T18, for IPv4 and IPv6 text form. */
+/** The T18 private classes for IPv4 bytes: unspecified, loopback, private
+ * (RFC 1918), CGNAT, link-local (incl. the metadata address). */
+const isPrivateIPv4 = (bytes) => {
+  const [a, b] = bytes;
+  if (a === 0) return true; // unspecified
+  if (a === 127 || a === 10) return true; // loopback, private
+  if (a === 172 && b >= 16 && b <= 31) return true; // private
+  if (a === 192 && b === 168) return true; // private
+  if (a === 100 && b >= 64 && b <= 127) return true; // CGNAT
+  if (a === 169 && b === 254) return true; // link-local (incl. metadata)
+  return false;
+};
+
+/** Expand IPv6 text to 16 bytes, `::` compression per RFC 5952; null if
+ * malformed. A zone suffix (%eth0) is dropped — never meaningful here. The
+ * final group may be a dotted IPv4 (RFC 4291 §2.2 form 3: `::ffff:8.8.8.8`,
+ * `2606:4700::0.0.17.17`), which dns.lookup and net.isIP both emit for
+ * IPv4-mapped literals — including when the tail holds nothing else, so the
+ * dotted quad is expanded wherever it may legally appear: as the last group
+ * of the `::` tail or of the full form, never in the head (a dotted group
+ * before `::` is malformed). */
+const parseIPv6 = (text) => {
+  const s = text.includes("%") ? text.slice(0, text.indexOf("%")) : text;
+  const groupsOf = (part, dottedTailOk) => {
+    const groups = part === "" ? [] : part.split(":");
+    const last = groups.at(-1) ?? "";
+    if (dottedTailOk && net.isIPv4(last)) {
+      const octets = last.split(".").map(Number);
+      groups.splice(-1, 1, ((octets[0] << 8) | octets[1]).toString(16), ((octets[2] << 8) | octets[3]).toString(16));
+    }
+    return groups.every((g) => /^[0-9a-fA-F]{1,4}$/.test(g)) ? groups : null;
+  };
+  if (s.includes("::")) {
+    if (s.indexOf("::") !== s.lastIndexOf("::")) return null;
+    const [left, right] = s.split("::");
+    if ((left !== "" && left.endsWith(":")) || (right !== undefined && right.startsWith(":"))) return null;
+    const head = groupsOf(left, false);
+    const tail = groupsOf(right ?? "", true);
+    if (head === null || tail === null) return null;
+    if (head.length + tail.length > 7) return null;
+    const missing = 8 - head.length - tail.length;
+    const groups = [...head, ...Array(missing).fill("0"), ...tail];
+    return groups.flatMap((g) => [Number.parseInt(g, 16) >> 8, Number.parseInt(g, 16) & 0xff]);
+  }
+  const groups = groupsOf(s, true);
+  if (groups === null || groups.length !== 8) return null;
+  return groups.flatMap((g) => [Number.parseInt(g, 16) >> 8, Number.parseInt(g, 16) & 0xff]);
+};
+
+/** ::ffff:0:0/96 (mapped), ::/96 (compatible) and 64:ff9b::/96 (NAT64) all
+ * carry an IPv4 in the last 32 bits — unwrap and apply the IPv4 classes. */
+const ipv4Embedded = (bytes) => {
+  const head = bytes.slice(0, 6);
+  const nat64 = head[0] === 0 && head[1] === 0x64 && head[2] === 0xff && head[3] === 0x9b && head[4] === 0 && head[5] === 0;
+  const mappedOrCompatible = head.every((b) => b === 0) && bytes[6] === 0;
+  return mappedOrCompatible || nat64 ? bytes.slice(-4) : null;
+};
+
+/** The private-address classes of T18, IPv4 and IPv6, any text form. IPv4
+ * embedded in IPv6 (mapped, compatible, NAT64) is unwrapped and checked as
+ * IPv4, so `::ffff:10.0.0.1` and its hex form `::ffff:a00:1` classify alike.
+ * Unparseable input fails closed. */
 export function isPrivateAddress(ip) {
   if (typeof ip !== "string") return true;
-  const s = ip.toLowerCase().replace(/^::ffff:/, "");
-  if (s === "::" || s === "::1") return true; // unspecified, loopback
-  const v4 = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(s);
-  if (v4 !== null) {
-    const a = Number(v4[1]);
-    const b = Number(v4[2]);
-    if (a === 0) return true; // unspecified
-    if (a === 127 || a === 10) return true; // loopback, private
-    if (a === 172 && b >= 16 && b <= 31) return true; // private
-    if (a === 192 && b === 168) return true; // private
-    if (a === 100 && b >= 64 && b <= 127) return true; // CGNAT
-    if (a === 169 && b === 254) return true; // link-local (incl. metadata)
-    return false;
-  }
-  if (s.includes(":")) {
-    if (s.startsWith("fc") || s.startsWith("fd")) return true; // fc00::/7 unique-local
-    if (/^fe[89ab]/.test(s)) return true; // fe80::/10 link-local
+  if (net.isIP(ip) === 4) return isPrivateIPv4(ip.split(".").map(Number));
+  if (net.isIP(ip) === 6) {
+    const bytes = parseIPv6(ip);
+    if (bytes === null) return true;
+    if (bytes[0] === 0xfe && (bytes[1] & 0xc0) === 0x80) return true; // fe80::/10
+    if ((bytes[0] & 0xfe) === 0xfc) return true; // fc00::/7 unique-local
+    if (bytes.every((b) => b === 0)) return true; // ::/128 unspecified
+    if (bytes[0] === 0 && bytes[1] === 0 && bytes.every((b, i) => i < 2 || b === (i === 15 ? 1 : 0))) return true; // ::1/128
+    const embedded = ipv4Embedded(bytes);
+    if (embedded !== null) return isPrivateIPv4(embedded);
     return false;
   }
   return true; // unparseable: fail closed
@@ -137,9 +191,11 @@ const proxy = http.createServer((req, res) => {
 
 // CONNECT: tunnel to the checked address.
 proxy.on("connect", (req, socket, head) => {
-  const [rawHost, rawPort] = (req.url ?? "").split(":");
-  const port = Number(rawPort ?? 80);
-  const host = (rawHost ?? "").replace(/^\[|\]$/g, "");
+  // Bracket-aware host:port — an IPv6 literal has colons of its own
+  // (`[::ffff:127.0.0.1]:8080`), so a plain split cannot carry it.
+  const match = /^(?:\[(.+)\]|([^:]+)):(\d+)$/.exec(req.url ?? "");
+  const host = match?.[1] ?? match?.[2] ?? "";
+  const port = match === null ? 80 : Number(match[3]);
   const agent = agentOf(req.headers);
   if (host === "" || !Number.isFinite(port)) {
     socket.write("HTTP/1.1 400 Bad Request\r\n\r\n");
