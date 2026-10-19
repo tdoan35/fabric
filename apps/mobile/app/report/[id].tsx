@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useState, type ReactNode } from "react";
-import { Stack, useLocalSearchParams } from "expo-router";
+import { useCallback, useState, type ReactNode } from "react";
+import { Stack, useFocusEffect, useLocalSearchParams } from "expo-router";
 import { Image, RefreshControl, ScrollView, StyleSheet, Text, View } from "react-native";
 import type { Report, Run } from "@fabric/contracts";
 
@@ -47,9 +47,11 @@ export default function ReportScreen() {
     }
   }, [reportId]);
 
-  useEffect(() => {
-    void load();
-  }, [load]);
+  useFocusEffect(
+    useCallback(() => {
+      void load();
+    }, [load]),
+  );
 
   const report = data?.report;
   const recorded = data?.run?.recorded === true || report?.kind === "real";
