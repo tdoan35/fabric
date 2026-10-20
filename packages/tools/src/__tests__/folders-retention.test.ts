@@ -1,6 +1,7 @@
 // ANY-86 T10 — run-folder retention: sweepRuns removes runs/* whose newest
 // entry is older than the cutoff, on a fake clock, and never touches agent or
 // project folders. Cases F7, F22–F25 from the cards.
+import type { Stats } from "node:fs";
 import * as fsp from "node:fs/promises";
 import { chmod, lutimes, mkdir, mkdtemp, readdir, readFile, symlink, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -12,25 +13,49 @@ import { localFolders, RUN_FOLDER_RETENTION_MS, sweepRuns } from "../folders";
 // every case in it can then be checked red, case by case, on the exact
 // implementation it predates.
 
-// F24b's injection seam: retention lists directories through the platform
-// `readdir` from `node:fs/promises`. While `injectReadFailure` is set, that
-// one function rejects; every other fs call is untouched.
+// F24b's injection seam and F22's recording seam: retention talks to the
+// platform `readdir`/`stat`/`lstat` from `node:fs/promises` — which the
+// module mock intercepts at every source version, unlike the head-only
+// `onLstat` visitor. While `injectReadFailure` is set, that one readdir
+// rejects (F24b's EIO); while `observed.armed`, every stat/lstat/readdir
+// lands its resolved first argument in `observed.paths` (F22's escape
+// probe). Everything delegates untouched.
 vi.mock("node:fs/promises", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("node:fs/promises")>();
+  const actual = await importOriginal<typeof fsp>();
+  const record = (arg0: unknown): void => {
+    if (observed.armed) observed.paths.push(path.resolve(String(arg0)));
+  };
   const platformReaddir = Object.assign(
-    (...args: Parameters<typeof actual.readdir>): ReturnType<typeof actual.readdir> =>
-      injectReadFailure && path.resolve(String(args[0])) === path.resolve(String(injectReadFailure.path))
+    (...args: Parameters<typeof actual.readdir>): ReturnType<typeof actual.readdir> => {
+      record(args[0]);
+      return injectReadFailure && path.resolve(String(args[0])) === path.resolve(String(injectReadFailure.path))
         ? Promise.reject(injectReadFailure)
-        : actual.readdir(...args),
+        : actual.readdir(...args);
+    },
     { withFileTypes: (actual.readdir as unknown as { withFileTypes: unknown }).withFileTypes },
   );
-  return { ...actual, readdir: platformReaddir };
+  return {
+    ...actual,
+    readdir: platformReaddir,
+    stat: (arg0: string): Promise<Stats> => {
+      record(arg0);
+      return actual.stat(arg0);
+    },
+    lstat: (arg0: string): Promise<Stats> => {
+      record(arg0);
+      return actual.lstat(arg0);
+    },
+  };
 });
 
 /** When set, the platform `readdir` fails with this error — F24b's EIO. */
 let injectReadFailure: NodeJS.ErrnoException | undefined;
+/** While armed, every platform stat/lstat/readdir lands here — F22's probe. */
+const observed = { armed: false, paths: [] as string[] };
 afterEach(() => {
   injectReadFailure = undefined;
+  observed.armed = false;
+  observed.paths = [];
 });
 
 const DAY = 24 * 60 * 60 * 1000;
@@ -112,12 +137,21 @@ test("F22 a run folder with a loop symlink (dot -> .) sweeps without hanging, bo
   await lutimes(path.join(linked, "outside"), new Date(now - 8 * DAY), new Date(now - 8 * DAY));
 
   // The only stat the sweep performs is `lstat` on paths it targets. Record
-  // them all: an escaping scan would target paths under `outside`.
+  // them all: an escaping scan would target paths under `outside`. The head
+  // `onLstat` visitor is inert against pre-fix sources, so the module mock's
+  // recorder is armed for the sweep too — it sees the platform stat/readdir
+  // calls at every source version.
   const stats: string[] = [];
-  const removed = await Promise.race([
-    sweepRuns(folders, { olderThanMs: 7 * DAY, now, onLstat: (abs) => stats.push(abs) }),
-    new Promise<never>((_, reject) => setTimeout(() => reject(new Error("F22: sweep hung")), 5000)),
-  ]);
+  let removed: string[];
+  try {
+    observed.armed = true;
+    removed = await Promise.race([
+      sweepRuns(folders, { olderThanMs: 7 * DAY, now, onLstat: (abs) => stats.push(abs) }),
+      new Promise<never>((_, reject) => setTimeout(() => reject(new Error("F22: sweep hung")), 5000)),
+    ]);
+  } finally {
+    observed.armed = false;
+  }
 
   // Both stale runs go: the loop did not expand forever, the external tree
   // was not consulted (its fresh file did not rescue `linked`).
@@ -138,6 +172,22 @@ test("F22 a run folder with a loop symlink (dot -> .) sweeps without hanging, bo
   }
   // The walk is bounded (a loop is a leaf, not an expansion).
   expect(stats.length).toBeLessThan(100);
+
+  // Containment over everything the sweep made the platform fs touch: the
+  // runs root (its one listing) and the two run trees, nothing else. A
+  // pre-F22 scan readdirs/stats through `outside` — the kernel resolves the
+  // link, so the walk consults the external tree and its fresh file rescues
+  // `linked`; the recorded offender names the escape.
+  const runsRoot = path.join(folders.root, "runs");
+  for (const observedPath of observed.paths) {
+    const insideRuns =
+      observedPath === runsRoot ||
+      observedPath === looped ||
+      observedPath.startsWith(looped + path.sep) ||
+      observedPath === linked ||
+      observedPath.startsWith(linked + path.sep);
+    expect(insideRuns, `F22: fs call escaped the run trees: ${observedPath}`).toBe(true);
+  }
 });
 
 test("F22b the entry cap is exercised, and a run whose scan it truncates is kept even when a fresh file sits beyond it", async () => {

@@ -3,12 +3,50 @@
 // round-trips, refused entries, atomic replace and size. Cases F1–F4 and F8
 // from the card; grants and retention live in their own files.
 import { mkdir, mkdtemp, readdir, readFile, rename, stat, writeFile } from "node:fs/promises";
+import type * as fsp from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { Readable } from "node:stream";
 import { Header, Pack, ReadEntry } from "tar";
-import { expect, test } from "vitest";
+import { afterEach, expect, test, vi } from "vitest";
 import { localFolders, type FolderRef } from "../folders";
+
+// F21's injection seam: `replace` renames through the platform `rename` from
+// `node:fs/promises`, at every source version — the `localFolders`
+// constructor seam exists only post-fix, so an injection routed through it
+// never fires against the pre-fix code this file must also load red. While
+// `f21Rename.armed` the wrapper fails every staging rename
+// (`<name>.unpack-<rand>` -> the folder) with a stashed error; every other
+// rename — including the head rollback `<name>.old-<rand>` -> the folder —
+// passes through untouched.
+vi.mock("node:fs/promises", async (importOriginal) => {
+  const actual = await importOriginal<typeof fsp>();
+  return {
+    ...actual,
+    rename: async (from: string, to: string): Promise<void> => {
+      if (f21Rename.armed && path.basename(from).includes(".unpack-")) {
+        f21Rename.calls.push([from, to]);
+        f21Rename.error = Object.assign(new Error("F21: injected staging rename failure"), {
+          code: "EIO",
+        });
+        throw f21Rename.error;
+      }
+      await actual.rename(from, to);
+    },
+  };
+});
+
+/** F21's injection state, read lazily by the mock wrapper above. */
+const f21Rename = {
+  armed: false,
+  calls: [] as Array<[string, string]>,
+  error: undefined as Error | undefined,
+};
+afterEach(() => {
+  f21Rename.armed = false;
+  f21Rename.calls = [];
+  f21Rename.error = undefined;
+});
 
 const NAME_RULE = "^[a-z][a-z0-9-]{0,39}$";
 
@@ -237,34 +275,28 @@ test("F20 replace with an empty archive empties the folder yet keeps the folder 
 
 test("F21 a replace whose staging rename fails restores the original contents", async () => {
   const root = await tempRoot("folders-f21-");
+  const folders = localFolders(root);
   const ref: FolderRef = { kind: "run", name: "rollback" };
-
-  const calls: Array<[string, string]> = [];
-  let injected: Error | undefined;
-  const folders = localFolders(root, async (from, to) => {
-    calls.push([from, to]);
-    // The seam fails only the staging -> dir rename, after the original was
-    // moved aside: the window F21 exists for. The rollback rename (old -> dir)
-    // goes through untouched.
-    if (path.basename(from).includes(".unpack-") && to === dir) {
-      injected = Object.assign(new Error("F21: injected staging rename failure"), { code: "EIO" });
-      throw injected;
-    }
-    await rename(from, to);
-  });
 
   const dir = await folders.path(ref);
   await writeFile(path.join(dir, "old.txt"), "old");
 
   const fresh = await tarball([{ path: "new.txt", type: "File", data: Buffer.from("new") }]);
-  const failure = await folders.unpack(ref, Readable.from([fresh]), { replace: true }).then(
-    () => undefined,
-    (error: unknown) => error
-  );
+  let failure: unknown;
+  try {
+    f21Rename.armed = true;
+    failure = await folders.unpack(ref, Readable.from([fresh]), { replace: true }).then(
+      () => undefined,
+      (error: unknown) => error
+    );
+  } finally {
+    f21Rename.armed = false;
+  }
 
-  // The failure really hit the staging rename, not an earlier step.
-  expect(failure).toBe(injected);
-  expect(calls.some(([from, to]) => path.basename(from).includes(".unpack-") && to === dir)).toBe(true);
+  // The failure really hit the staging rename, not an earlier step: it is the
+  // injected error itself, and the wrapper recorded the staging -> dir rename.
+  expect(failure).toBe(f21Rename.error);
+  expect(f21Rename.calls.length, "the staging rename was attempted").toBeGreaterThan(0);
 
   // The old contents survived the failed swap, and no backup is left behind.
   expect(await readdir(dir)).toEqual(["old.txt"]);
