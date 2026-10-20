@@ -228,8 +228,11 @@ void queueOptions;
         release();
 
         // Both loops settle; A parks on the wake. Nothing but A's job wakes B
-        // now, so a B that claimed before the re-LISTEN shows up late here.
-        await sleep(300);
+        // now — beta's own NOTIFY was lost inside the held gap — so a B that
+        // claimed before the re-LISTEN is first woken by A's commit, one gap
+        // later. This sleep is that skip state's floor; it must sit well
+        // past the bounds below.
+        await sleep(600);
         const alphaTx = nowTx();
         const alpha = await writer.enqueue(alphaTx, { type: "alpha", key: "alpha:z6b", workspaceId: "ws-z6b" });
         const alphaCommitAt = Date.now();
@@ -238,8 +241,20 @@ void queueOptions;
         const [alphaLease, betaLease] = await Promise.all([alphaLoop, betaLoop]);
         expect(alphaLease?.jobId).toBe(alpha.id);
         expect(betaLease?.jobId).toBe(beta.id);
-        expect(claimedAt.beta! - betaCommitAt).toBeLessThanOrEqual(100);
-        expect(claimedAt.alpha! - alphaCommitAt).toBeLessThanOrEqual(100);
+        // Wake latencies, not round-trip precision: beta's path is commit +
+        // get + re-LISTEN + claim through CI's shared Postgres (113 ms on the
+        // loaded runner where the old 100 ms bound flaked — 5693f32's 40 ms
+        // did the same), alpha's is NOTIFY + claim, so both take this
+        // feature's wake tolerance (Z4's 250 ms) with headroom. What still
+        // fails here, and is the point: a wait that skips the shared
+        // reconnect cannot see beta before A's commit wakes it — at least
+        // the 600 ms gap above (313–396 ms at a 300 ms gap when Z6b was
+        // red) — and a reintroduced 200 ms poll (27202fb's interval) adds
+        // its tick wait to the round trip, past this bound for most of a
+        // tick's phase under CI's round-trip times; Z2's p95-of-20
+        // measurement fails a poll outright.
+        expect(claimedAt.beta! - betaCommitAt).toBeLessThanOrEqual(250);
+        expect(claimedAt.alpha! - alphaCommitAt).toBeLessThanOrEqual(250);
         expect(relistens).toBe(1); // one shared reconnect, serialized per instance
         expect(await listenerPids(admin)).toHaveLength(2); // reader and writer
       });
