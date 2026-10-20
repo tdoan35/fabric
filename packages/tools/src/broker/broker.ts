@@ -241,19 +241,27 @@ export async function handleBrokerRequest(
     return refuse(deps, res, identified, "method not allowed");
   }
 
-  // 5. path — the final URL is built first and its canonical pathname is
-  // what the rule authorizes, so the check and the forwarded request are
-  // the same path: `..` segments and encoded slashes are refused, and the
-  // WHATWG parse (backslash as separator, `..` resolution) happens here
-  // once, before matching, never again in fetch.
+  // 5. path — the RAW path is validated first, before any URL parsing can
+  // rewrite it: a backslash (read as `/` by the WHATWG parser), `%2F`
+  // smuggling or a `..` segment is refused outright. Only then is the final
+  // URL built, and its canonical pathname is what the rule authorizes and
+  // what gets forwarded — so the check and the request are the same path,
+  // never one the parser resolved behind the check's back.
+  const decodedPath = normalizePath(rawPath);
+  if (decodedPath === null) {
+    return refuse(deps, res, identified, "path not allowed");
+  }
   let target: URL;
   try {
     target = new URL(`${rule.upstream.replace(/\/+$/, "")}${rawPath}${query}`);
   } catch {
     return refuse(deps, res, identified, "path not allowed");
   }
-  const decodedPath = normalizePath(target.pathname);
-  if (decodedPath === null || !pathAllowed(rule.paths, decodedPath)) {
+  const canonicalPath = normalizePath(target.pathname);
+  if (canonicalPath === null || canonicalPath !== decodedPath) {
+    return refuse(deps, res, identified, "path not allowed");
+  }
+  if (!pathAllowed(rule.paths, decodedPath)) {
     return refuse(deps, res, identified, "path not allowed");
   }
 
