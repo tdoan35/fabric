@@ -1,13 +1,16 @@
 // ANY-86 T10 — run-folder retention: sweepRuns removes runs/* whose newest
 // entry is older than the cutoff, on a fake clock, and never touches agent or
-// project folders. Cases F7, F22 and F23 from the cards.
+// project folders. Cases F7, F22–F25 from the cards.
 import * as fsp from "node:fs/promises";
 import { chmod, lutimes, mkdir, mkdtemp, readdir, readFile, symlink, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, expect, test, vi } from "vitest";
 import { localFolders, RUN_FOLDER_RETENTION_MS, sweepRuns } from "../folders";
-import { scanMtime } from "../folders/retention";
+// scanMtime is imported dynamically inside F24a so this file also loads
+// against pre-fix sources (where ../folders/retention exports no scanMtime):
+// every case in it can then be checked red, case by case, on the exact
+// implementation it predates.
 
 // F24b's injection seam: retention lists directories through the platform
 // `readdir` from `node:fs/promises`. While `injectReadFailure` is set, that
@@ -172,6 +175,7 @@ test("F22b the entry cap is exercised, and a run whose scan it truncates is kept
 
 test("F24a scanMtime never reads a failed directory enumeration as an empty listing: the scan is incomplete", async () => {
   const root = await mkdtemp(path.join(tmpdir(), "folders-f24a-"));
+  const { scanMtime } = await import("../folders/retention");
   const dir = path.join(root, "run");
   await mkdir(dir);
   await writeFile(path.join(dir, "stale.txt"), "stale");
@@ -303,4 +307,51 @@ test("F23 an expired normal run folder is still swept exactly as today", async (
   expect(await folders.exists({ kind: "run", name: "keeper" })).toBe(true);
   // The newest-wins rule across nesting still holds: the deep file decides.
   expect((await readdir(path.join(root, "runs"))).sort()).toEqual(["keeper"]);
+});
+
+test("F25 a failed-rollback backup (`<run>.old-<rand>`) is skipped, preserved, and never aborts the sweep of later expired runs", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "folders-f25-"));
+  const folders = localFolders(root);
+  const now = Date.now();
+  const runsDir = path.join(root, "runs");
+
+  // What a failed replace leaves beside its folder (local.ts): the rollback
+  // backup `<name>.old-<rand>` — the only copy of the contents once the
+  // restore rename cannot land — and a `<name>.unpack-<rand>` staging
+  // sibling if the process died mid-swap. Aged past the cutoff.
+  const backup = path.join(runsDir, "stuck.old-9af3c1d2");
+  await mkdir(backup, { recursive: true });
+  await writeFile(path.join(backup, "old.txt"), "old");
+  const staging = path.join(runsDir, "stuck.unpack-1b2c3d4e");
+  await mkdir(staging, { recursive: true });
+  await writeFile(path.join(staging, "new.txt"), "new");
+  await age(backup, now - 8 * DAY);
+  await age(staging, now - 8 * DAY);
+
+  // Expired runs sorting both before and after the artifacts: a sweep that
+  // trips over the dotted name never reaches the later one.
+  const early = await folders.path({ kind: "run", name: "alpha" });
+  await writeFile(path.join(early, "out.txt"), "early");
+  const later = await folders.path({ kind: "run", name: "z-later" });
+  await writeFile(path.join(later, "out.txt"), "later");
+  await age(early, now - 8 * DAY);
+  await age(later, now - 8 * DAY);
+
+  let thrown: unknown;
+  const removed = await sweepRuns(folders, { olderThanMs: 7 * DAY, now }).catch((error: unknown) => {
+    thrown = error;
+    return [] as string[];
+  });
+
+  // Pre-fix the sweep handed the dotted name to folders.remove, died on its
+  // FolderNameError, and stranded every expired run after it.
+  expect(thrown).toBeUndefined();
+  expect(removed).toEqual(["alpha", "z-later"]);
+  expect(await folders.exists({ kind: "run", name: "alpha" })).toBe(false);
+  expect(await folders.exists({ kind: "run", name: "z-later" })).toBe(false);
+
+  // The recovery data itself is untouched: skipped, never swept.
+  expect(await readFile(path.join(backup, "old.txt"), "utf8")).toBe("old");
+  expect(await readFile(path.join(staging, "new.txt"), "utf8")).toBe("new");
+  expect((await readdir(runsDir)).sort()).toEqual(["stuck.old-9af3c1d2", "stuck.unpack-1b2c3d4e"]);
 });
