@@ -1,6 +1,6 @@
 // ANY-86 T10 — run-folder retention: sweepRuns removes runs/* whose newest
 // entry is older than the cutoff, on a fake clock, and never touches agent or
-// project folders. Cases F7, F22–F25 from the cards.
+// project folders. Cases F7, F22–F27 from the cards.
 import type { Stats } from "node:fs";
 import * as fsp from "node:fs/promises";
 import { chmod, lutimes, mkdir, mkdtemp, readdir, readFile, symlink, utimes, writeFile } from "node:fs/promises";
@@ -19,7 +19,8 @@ import { localFolders, RUN_FOLDER_RETENTION_MS, sweepRuns } from "../folders";
 // `onLstat` visitor. While `injectReadFailure` is set, that one readdir
 // rejects (F24b's EIO); while `observed.armed`, every stat/lstat/readdir
 // lands its resolved first argument in `observed.paths` (F22's escape
-// probe). Everything delegates untouched.
+// probe). While `injectLstatFailure` matches a path, its lstat rejects with
+// the returned error (F26/F27). Everything else delegates untouched.
 vi.mock("node:fs/promises", async (importOriginal) => {
   const actual = await importOriginal<typeof fsp>();
   const record = (arg0: unknown): void => {
@@ -43,17 +44,22 @@ vi.mock("node:fs/promises", async (importOriginal) => {
     },
     lstat: (arg0: string): Promise<Stats> => {
       record(arg0);
-      return actual.lstat(arg0);
+      const failure = injectLstatFailure?.(path.resolve(String(arg0)));
+      return failure ? Promise.reject(failure) : actual.lstat(arg0);
     },
   };
 });
 
 /** When set, the platform `readdir` fails with this error — F24b's EIO. */
 let injectReadFailure: NodeJS.ErrnoException | undefined;
+/** When set, the platform `lstat` of any path it returns an error for fails
+ * with that error — F26's and F27's injection. */
+let injectLstatFailure: ((abs: string) => NodeJS.ErrnoException | undefined) | undefined;
 /** While armed, every platform stat/lstat/readdir lands here — F22's probe. */
 const observed = { armed: false, paths: [] as string[] };
 afterEach(() => {
   injectReadFailure = undefined;
+  injectLstatFailure = undefined;
   observed.armed = false;
   observed.paths = [];
 });
@@ -404,4 +410,71 @@ test("F25 a failed-rollback backup (`<run>.old-<rand>`) is skipped, preserved, a
   expect(await readFile(path.join(backup, "old.txt"), "utf8")).toBe("old");
   expect(await readFile(path.join(staging, "new.txt"), "utf8")).toBe("new");
   expect((await readdir(runsDir)).sort()).toEqual(["stuck.old-9af3c1d2", "stuck.unpack-1b2c3d4e"]);
+});
+
+test("F26 every lstat attempt counts against SWEEP_MAX_ENTRIES — failed ones too — and a failed lstat leaves the scan incomplete", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "folders-f26-"));
+  const { scanMtime, SWEEP_MAX_ENTRIES } = await import("../folders/retention");
+  const dir = path.join(root, "run");
+  await mkdir(dir);
+  const now = Date.now();
+  await utimes(dir, new Date(now - 8 * DAY), new Date(now - 8 * DAY));
+
+  // More children than the cap, every one of whose lstat fails (the
+  // reviewer's real-EACCES probe made 10,051 attempts against the 10,000
+  // cap). The listing is served by the scan's enumeration seam, so no files
+  // need creating; only the run root's own lstat succeeds.
+  const names = Array.from({ length: SWEEP_MAX_ENTRIES + 50 }, (_, i) => `entry-${i}.txt`);
+  injectLstatFailure = (abs) =>
+    abs.startsWith(dir + path.sep)
+      ? Object.assign(new Error("F26: injected EACCES"), { code: "EACCES", syscall: "lstat", path: abs })
+      : undefined;
+  const attempts: string[] = [];
+  const { complete } = await scanMtime(dir, (abs) => attempts.push(abs), async () => names);
+
+  // Bounded: failures are attempts too, so the walk never exceeds the cap.
+  expect(attempts.length).toBeGreaterThan(1);
+  expect(attempts.length).toBeLessThanOrEqual(SWEEP_MAX_ENTRIES);
+  // The children's ages were never established: the scan cannot vouch.
+  expect(complete).toBe(false);
+});
+
+test("F27 a fresh file whose lstat fails (injected EIO) among stale ones keeps its run", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "folders-f27-"));
+  const folders = localFolders(root);
+  const now = Date.now();
+
+  const keep = await folders.path({ kind: "run", name: "keep" });
+  await writeFile(path.join(keep, "old-a.txt"), "old");
+  await writeFile(path.join(keep, "old-b.txt"), "old");
+  await writeFile(path.join(keep, "fresh.txt"), "fresh");
+  await age(keep, now - 8 * DAY);
+  const fresh = path.join(keep, "fresh.txt");
+  await fsp.utimes(fresh, new Date(now), new Date(now));
+
+  // Only the fresh file's lstat fails: every mtime the scan can see is stale,
+  // but the one it cannot see would rescue the run.
+  const injected = Object.assign(new Error("F27: injected EIO"), { code: "EIO", syscall: "lstat", path: fresh });
+  let fired = 0;
+  injectLstatFailure = (abs) => {
+    if (abs !== path.resolve(fresh)) return undefined;
+    fired++;
+    return injected;
+  };
+  let removed: string[] = [];
+  let thrown: unknown;
+  try {
+    removed = await sweepRuns(folders, { olderThanMs: 7 * DAY, now });
+  } catch (error) {
+    thrown = error;
+  } finally {
+    injectLstatFailure = undefined;
+  }
+
+  // The injection was live, and the run survived it with its contents.
+  expect(fired).toBeGreaterThan(0);
+  expect(removed).toEqual([]);
+  expect(await folders.exists({ kind: "run", name: "keep" })).toBe(true);
+  expect(await readFile(fresh, "utf8")).toBe("fresh");
+  if (thrown !== undefined) expect((thrown as NodeJS.ErrnoException).code).toBe("EIO");
 });
