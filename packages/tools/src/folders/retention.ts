@@ -1,6 +1,7 @@
 // Run-folder retention (ANY-44 D2, T10): runs are scratch space — kept N days,
 // then swept. Agents and projects persist; only runs/* are ever removed.
 import { readdir, lstat, rm } from "node:fs/promises";
+import type { Stats } from "node:fs";
 import path from "node:path";
 import type { FolderStore } from "./folders";
 
@@ -22,8 +23,8 @@ const REPLACE_ARTIFACT = /^[a-z][a-z0-9-]{0,39}\.(?:old|unpack)-[0-9a-f]+$/;
 
 /** What one scan learned: the newest mtime seen, and whether it saw enough.
  * `complete` is false when the entry cap stopped the walk with paths still
- * unvisited, or when an enumeration failed — an incomplete scan cannot vouch
- * for the run's age, so the run is kept. */
+ * unvisited, or when an enumeration or an entry's `lstat` failed — an
+ * incomplete scan cannot vouch for the run's age, so the run is kept. */
 export interface MtimeScan {
   newest: number;
   complete: boolean;
@@ -39,9 +40,11 @@ export interface SweepOptions {
 /** One bounded walk of dir: parents before children, links never followed
  * (`lstat` only), a directory symlink — `loop -> .`, or one escaping the run
  * tree — treated as a leaf and never descended into, so the sweep cannot hang
- * or stat outside the tree. Returns -1 for an absent dir. A failed directory
- * enumeration stops the walk and marks it incomplete: the entries that would
- * have been listed may hold the run's newest file, so the run must be kept. */
+ * or stat outside the tree. Every `lstat` attempt, failed or not, counts
+ * against SWEEP_MAX_ENTRIES. Returns -1 for an absent dir. A failed directory
+ * enumeration or a failed `lstat` stops the walk and marks it incomplete: the
+ * entries it could not see may hold the run's newest file, so the run must be
+ * kept. */
 export async function scanMtime(
   dir: string,
   onLstat?: (abs: string) => void,
@@ -57,10 +60,19 @@ export async function scanMtime(
       complete = false;
       break;
     }
-    onLstat?.(current);
-    const info = await lstat(current).catch(() => undefined);
-    if (info === undefined) continue;
+    // Every attempt counts against the cap, a failed one included.
     visited++;
+    onLstat?.(current);
+    let info: Stats;
+    try {
+      info = await lstat(current);
+    } catch (error) {
+      // An absent run dir is reported as such (newest -1); any other failed
+      // lstat leaves an entry of unknown age, so the scan cannot vouch.
+      if (current === dir && (error as NodeJS.ErrnoException)?.code === "ENOENT") break;
+      complete = false;
+      break;
+    }
     newest = Math.max(newest, info.mtimeMs);
     // Only real directories are walked; a symlink to one is a leaf, so the
     // scan stays inside the run tree even with `loop -> .` present.
@@ -83,10 +95,10 @@ export async function scanMtime(
 /** Removes every `runs/*` folder whose newest file is older than the cutoff,
  * and returns the names it removed. Agent and project folders are never
  * touched. A run is kept whenever the scan could not establish the age of
- * every entry (the cap truncated the walk, or an enumeration failed), so a
- * fresh file the scan could not see never loses its folder. A failed
- * replace's backup/staging siblings (`.old-…`, `.unpack-…`) are skipped and
- * preserved: recovery data, never swept.
+ * every entry (the cap truncated the walk, or an enumeration or an lstat
+ * failed), so a fresh file the scan could not see never loses its folder.
+ * A failed replace's backup/staging siblings (`.old-…`, `.unpack-…`) are
+ * skipped and preserved: recovery data, never swept.
  * The per-folder scan takes an optional visitor for tests: every path the
  * walk is about to `lstat` (the only stat the sweep ever performs). */
 export async function sweepRuns(
