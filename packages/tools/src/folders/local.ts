@@ -161,7 +161,11 @@ async function listTree(dir: string, rel = "", out: string[] = []): Promise<stri
 }
 
 /** The local-disk backend: plain directories under one root. */
-export function localFolders(root: string): FolderStore {
+export function localFolders(
+  root: string,
+  /** Rename seam for tests: swaps a replace in place. */
+  renameFn: (from: string, to: string) => Promise<void> = rename,
+): FolderStore {
   const base = path.resolve(root);
   const dirFor = (ref: FolderRef): string => path.join(base, KIND_DIRS[ref.kind], ref.name);
 
@@ -210,15 +214,52 @@ export function localFolders(root: string): FolderStore {
       const dir = dirFor(ref);
       const plans = planEntries(await readArchive(source), dir);
       if (opts?.replace === true) {
+        // The staging dir exists even for an empty archive (no plans would
+        // create it), so `replace` legitimately empties the folder.
         const staging = `${dir}.unpack-${randomBytes(4).toString("hex")}`;
+        const old = `${dir}.old-${randomBytes(4).toString("hex")}`;
+        let oldMoved = false;
+        let done = false;
         try {
+          await mkdir(staging, { recursive: true });
           await writePlans(plans, staging);
-          await rm(dir, { recursive: true, force: true });
-          await rename(staging, dir);
-        } catch (error) {
-          await rm(staging, { recursive: true, force: true });
-          throw error;
+          // A destination that does not exist yet is simply created; a
+          // failed move of a real one is fatal, leaving it in place.
+          try {
+            await renameFn(dir, old);
+            oldMoved = true;
+          } catch (error) {
+            if ((error as NodeJS.ErrnoException)?.code !== "ENOENT") throw error;
+          }
+          await renameFn(staging, dir);
+          done = true;
+        } finally {
+          if (!done) {
+            // Failure: put the old contents back. The rollback rename only
+            // succeeds into an absent `dir`; if something else now holds the
+            // name, the backup is the only copy and must stay.
+            let restored = !oldMoved;
+            if (oldMoved) {
+              try {
+                await renameFn(old, dir);
+                restored = true;
+              } catch {
+                restored = false;
+              }
+            }
+            // Staging never holds original data either way.
+            await rm(staging, { recursive: true, force: true }).catch(() => undefined);
+            if (restored) {
+              await rm(old, { recursive: true, force: true }).catch(() => undefined);
+            } else {
+              throw new Error(
+                `folders: replace of ${ref.kind}/${ref.name} failed and its original contents were not restored; ` +
+                  `they are kept at ${JSON.stringify(old)}`
+              );
+            }
+          }
         }
+        if (done && oldMoved) await rm(old, { recursive: true, force: true }).catch(() => undefined);
       } else {
         await writePlans(plans, dir);
       }
