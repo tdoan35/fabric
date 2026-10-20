@@ -11,6 +11,15 @@ export const RUN_FOLDER_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
  * loop (or a hostile tree) from hanging the daily sweeper. */
 export const SWEEP_MAX_ENTRIES = 10_000;
 
+/** What a failed replace leaves beside the folder it was swapping (local.ts):
+ * the rollback backup `<name>.old-<rand>` — the only copy of the contents
+ * once the restore rename cannot land — and the staging dir
+ * `<name>.unpack-<rand>` when the process died mid-swap. The sweep skips
+ * both: they are recovery data, not run folders, and their dotted names are
+ * not passable to `remove` (the FolderNameError would abort the sweep and
+ * strand every later expired run). */
+const REPLACE_ARTIFACT = /^[a-z][a-z0-9-]{0,39}\.(?:old|unpack)-[0-9a-f]+$/;
+
 /** What one scan learned: the newest mtime seen, and whether it saw enough.
  * `complete` is false when the entry cap stopped the walk with paths still
  * unvisited, or when an enumeration failed — an incomplete scan cannot vouch
@@ -75,7 +84,9 @@ export async function scanMtime(
  * and returns the names it removed. Agent and project folders are never
  * touched. A run is kept whenever the scan could not establish the age of
  * every entry (the cap truncated the walk, or an enumeration failed), so a
- * fresh file the scan could not see never loses its folder.
+ * fresh file the scan could not see never loses its folder. A failed
+ * replace's backup/staging siblings (`.old-…`, `.unpack-…`) are skipped and
+ * preserved: recovery data, never swept.
  * The per-folder scan takes an optional visitor for tests: every path the
  * walk is about to `lstat` (the only stat the sweep ever performs). */
 export async function sweepRuns(
@@ -96,6 +107,7 @@ export async function sweepRuns(
 
   const removed: string[] = [];
   for (const name of names.sort()) {
+    if (REPLACE_ARTIFACT.test(name)) continue; // recovery data: never scanned, never swept
     const { newest, complete } = await scanMtime(path.join(runsDir, name), opts.onLstat);
     if (complete && newest !== -1 && newest < cutoff) {
       await folders.remove({ kind: "run", name });
