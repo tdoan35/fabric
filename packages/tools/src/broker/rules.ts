@@ -22,9 +22,12 @@ export type CredentialRule = {
 };
 
 /** Decoded path for matching, or null when the raw path is not acceptable:
- * `%2F` smuggling, undecodable escapes, or `..` segments. */
+ * `%2F` smuggling, backslash paths (the forwarded URL's WHATWG parser reads
+ * `\\` as `/`, so the check and the request would see different paths),
+ * undecodable escapes, or `..` segments. */
 export function normalizePath(rawPath: string): string | null {
   if (/%2f/i.test(rawPath)) return null;
+  if (rawPath.includes("\\")) return null;
   for (const segment of rawPath.split("/")) {
     let decoded = segment;
     try {

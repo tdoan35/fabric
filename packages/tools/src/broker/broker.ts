@@ -241,9 +241,27 @@ export async function handleBrokerRequest(
     return refuse(deps, res, identified, "method not allowed");
   }
 
-  // 5. path (normalised first: .. segments and encoded slashes are refused)
+  // 5. path — the RAW path is validated first, before any URL parsing can
+  // rewrite it: a backslash (read as `/` by the WHATWG parser), `%2F`
+  // smuggling or a `..` segment is refused outright. Only then is the final
+  // URL built, and its canonical pathname is what the rule authorizes and
+  // what gets forwarded — so the check and the request are the same path,
+  // never one the parser resolved behind the check's back.
   const decodedPath = normalizePath(rawPath);
-  if (decodedPath === null || !pathAllowed(rule.paths, decodedPath)) {
+  if (decodedPath === null) {
+    return refuse(deps, res, identified, "path not allowed");
+  }
+  let target: URL;
+  try {
+    target = new URL(`${rule.upstream.replace(/\/+$/, "")}${rawPath}${query}`);
+  } catch {
+    return refuse(deps, res, identified, "path not allowed");
+  }
+  const canonicalPath = normalizePath(target.pathname);
+  if (canonicalPath === null || canonicalPath !== decodedPath) {
+    return refuse(deps, res, identified, "path not allowed");
+  }
+  if (!pathAllowed(rule.paths, decodedPath)) {
     return refuse(deps, res, identified, "path not allowed");
   }
 
@@ -330,8 +348,8 @@ export async function handleBrokerRequest(
     credential = credentialHeader(rule.auth, secret);
   }
 
-  // forward
-  const target = `${rule.upstream.replace(/\/+$/, "")}${rawPath}${query}`;
+  // forward — the exact canonical URL authorized above
+  const targetString = target.toString();
   // Readable.toWeb returns a web stream structurally identical to undici's
   // body type; the DOM-less typings cannot unify them.
   const init: RequestInit = {
@@ -343,7 +361,7 @@ export async function handleBrokerRequest(
 
   let upstream: Response;
   try {
-    upstream = await fetch(target, init);
+    upstream = await fetch(targetString, init);
   } catch {
     deps.onUse({ ...identified, status: 502, allowed: true, reason: "upstream unreachable" });
     res.writeHead(502, { "content-type": "application/json" });
@@ -372,7 +390,7 @@ export async function handleBrokerRequest(
     if (location !== null) {
       let sameHost = false;
       try {
-        sameHost = new URL(location, target).host === new URL(target).host;
+        sameHost = new URL(location, targetString).host === target.host;
       } catch {
         sameHost = false;
       }
